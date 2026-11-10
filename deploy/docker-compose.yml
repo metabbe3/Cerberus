@@ -1,0 +1,20 @@
+# Cerberus engine standalone. From the repo root:
+#   CERBERUS_ADMIN_TOKEN=smoke docker compose -f deploy/docker-compose.yml up
+# The audit DB lives in the named volume, so decisions survive restarts.
+services:
+  cerberus:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "8089:8089"
+    environment:
+      CERBERUS_ADDR: ":8089"
+      CERBERUS_ADMIN_TOKEN: ${CERBERUS_ADMIN_TOKEN:?set CERBERUS_ADMIN_TOKEN}
+      CERBERUS_LOG_LEVEL: info
+    volumes:
+      - ../data:/data
+      - cerberus-db:/var/lib/cerberus
+
+volumes:
+  cerberus-db:

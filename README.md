@@ -5,7 +5,18 @@
 > dashboard, tanpa recompile.
 
 ## Status
-IN PROGRESS — Phase 1 (core engine) sedang dibangun. Owner: Nicholas. Dibangun oleh Hermes Agent.
+**Phase 1 implemented** — core engine live: `POST /v1/decide/{llm,tool}` dengan cache + masking + audit SQLite + SSE + hot-reload data. Owner: Nicholas. Dibangun oleh Hermes Agent.
+
+## Quickstart
+
+```sh
+make build
+export CERBERUS_ADMIN_TOKEN=change-me
+./bin/cerberus                       # :8089 — panduan lengkap: docs/GUIDE.md
+
+curl -s -X POST localhost:8089/v1/decide/tool -H 'Content-Type: application/json' \
+  -d '{"key_id":"k-glob","tool_call":"kubernetes_get_pods","args":{"cmd":"kubectl get pods"}}'
+```
 
 - Arah & fase: [docs/ROADMAP.md](docs/ROADMAP.md)
 - Aturan kode (Go/Rego/TS): [docs/CONVENTIONS.md](docs/CONVENTIONS.md)
