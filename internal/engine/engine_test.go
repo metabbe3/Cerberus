@@ -8,6 +8,7 @@ import (
 
 	"github.com/metabbe3/cerberus/internal/audit"
 	"github.com/metabbe3/cerberus/internal/policy"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -184,6 +185,31 @@ func TestDecide_InternalFailureNotCached(t *testing.T) {
 	}
 	if d := e.Decide(context.Background(), in); d.Cached {
 		t.Fatal("second call Cached=true: transient internal.timeout deny was cached for the epoch")
+	}
+}
+
+func TestDecide_UnknownStageBoundedMetricLabel(t *testing.T) {
+	e := newTestEngine(t, &recSink{}, Options{})
+	e.Decide(context.Background(), Input{Stage: "6ba7b810-9dad-11d1-80b4-00c04fd430c8", KeyID: "k-glob"})
+
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(decisionsTotal)
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, mf := range mfs {
+		for _, m := range mf.GetMetric() {
+			for _, lp := range m.GetLabel() {
+				if lp.GetName() == "stage" {
+					switch lp.GetValue() {
+					case "llm", "tool", "other":
+					default:
+						t.Fatalf("cerberus_decisions_total has unbounded stage label %q; want llm|tool|other", lp.GetValue())
+					}
+				}
+			}
+		}
 	}
 }
 

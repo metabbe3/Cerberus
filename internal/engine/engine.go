@@ -129,7 +129,7 @@ func (e *Engine) Decide(ctx context.Context, in Input) Decision {
 	}
 
 	d.LatencyUS = time.Since(start).Microseconds()
-	decisionsTotal.WithLabelValues(in.Stage, d.Decision, d.RuleID).Inc()
+	decisionsTotal.WithLabelValues(metricStage(in.Stage), d.Decision, d.RuleID).Inc()
 	policyEpoch.Set(float64(snap.Epoch))
 	e.sink.Emit(audit.Event{
 		Time:      time.Now(),
@@ -190,6 +190,18 @@ func (e *Engine) eval(ctx context.Context, snap *policy.Snapshot, in Input) Deci
 // denyInternal is the fail-closed answer for every internal failure mode.
 func denyInternal(snap *policy.Snapshot, ruleID, reason string) Decision {
 	return Decision{Decision: "deny", RuleID: ruleID, Reason: reason, Epoch: snap.Epoch}
+}
+
+// metricStage collapses the client-supplied stage onto a bounded label set so
+// an unauthenticated caller can never mint a new cerberus_decisions_total
+// time series (label cardinality = memory on an unauthenticated endpoint).
+func metricStage(stage string) string {
+	switch stage {
+	case "llm", "tool":
+		return stage
+	default:
+		return "other"
+	}
 }
 
 // subject picks the audit subject: model for llm, tool_call for tool,
