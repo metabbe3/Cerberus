@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -130,6 +131,20 @@ func TestDecide_Singleflight(t *testing.T) {
 	e := newTestEngine(t, &recSink{}, Options{})
 	in := toolInput("k-glob", "kubernetes_get_pods", nil)
 
+	// Park the leader inside its eval. While parked the LRU is still empty, so
+	// any caller that runs its own eval during the park provably missed the
+	// cache mid-flight — a delta of 1 is then impossible without singleflight,
+	// no matter how the scheduler interleaves the goroutines.
+	var evals atomic.Int64
+	parked := make(chan struct{})
+	release := make(chan struct{})
+	e.evalHook = func() {
+		if evals.Add(1) == 1 {
+			close(parked)
+			<-release
+		}
+	}
+
 	before := testutil.ToFloat64(cacheMissesTotal)
 	const n = 100
 	start := make(chan struct{})
@@ -143,6 +158,23 @@ func TestDecide_Singleflight(t *testing.T) {
 		}()
 	}
 	close(start)
+	<-parked // leader inside eval, cache still empty
+
+	// Release as soon as a second eval is observed (proof a caller missed
+	// while the leader was parked), or — only reachable with singleflight,
+	// where the other callers sit parked in the flight and nothing observable
+	// happens — after a grace period. Fails safe either way.
+	deadline := time.After(100 * time.Millisecond)
+releaseFlight:
+	for evals.Load() < 2 {
+		select {
+		case <-deadline:
+			break releaseFlight
+		default:
+			time.Sleep(50 * time.Microsecond)
+		}
+	}
+	close(release)
 	wg.Wait()
 
 	if delta := testutil.ToFloat64(cacheMissesTotal) - before; delta != 1 {

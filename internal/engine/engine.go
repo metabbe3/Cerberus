@@ -55,6 +55,9 @@ type Engine struct {
 	opts  Options
 	cache *lru.Cache[string, Decision]
 	sf    singleflight.Group
+	// evalHook, when non-nil, runs at the top of every eval. Test seam for
+	// pinning leader/waiter interleavings; nil in production.
+	evalHook func()
 }
 
 // New builds an Engine over store. sink may be nil (events are discarded).
@@ -153,6 +156,9 @@ func (e *Engine) eval(ctx context.Context, snap *policy.Snapshot, in Input) Deci
 	evalCtx, cancel := context.WithTimeout(ctx, e.opts.EvalTimeout)
 	defer cancel()
 
+	if e.evalHook != nil {
+		e.evalHook()
+	}
 	t0 := time.Now()
 	rs, err := snap.Query.Eval(evalCtx, rego.EvalInput(regoInput(in)))
 	evalDuration.Observe(time.Since(t0).Seconds())
