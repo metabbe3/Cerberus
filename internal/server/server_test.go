@@ -32,9 +32,26 @@ type harness struct {
 	ts       *httptest.Server
 	store    *policy.Store
 	auditLog *audit.Logger
+	policies string // policy dir the store compiles from (may be a scratch copy)
 }
 
 func newHarness(t *testing.T) *harness {
+	t.Helper()
+	return newHarnessIn(t, policyDir)
+}
+
+// newHarnessCopy wires the server over a scratch copy of the repo policy tree,
+// so a test can corrupt the Rego on disk without touching the checkout.
+func newHarnessCopy(t *testing.T) *harness {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.CopyFS(dir, os.DirFS(policyDir)); err != nil {
+		t.Fatalf("copy policy tree: %v", err)
+	}
+	return newHarnessIn(t, dir)
+}
+
+func newHarnessIn(t *testing.T, dir string) *harness {
 	t.Helper()
 	ctx := context.Background()
 
@@ -46,7 +63,7 @@ func newHarness(t *testing.T) *harness {
 	if err := os.WriteFile(dataPath, raw, 0o600); err != nil { // #nosec G703 -- path built from t.TempDir()
 		t.Fatalf("write data: %v", err)
 	}
-	store, err := policy.NewStore(ctx, policyDir, dataPath)
+	store, err := policy.NewStore(ctx, dir, dataPath)
 	if err != nil {
 		t.Fatalf("policy.NewStore: %v", err)
 	}
@@ -64,7 +81,7 @@ func newHarness(t *testing.T) *harness {
 		t.Fatalf("engine.New: %v", err)
 	}
 
-	h := &harness{store: store, auditLog: al}
+	h := &harness{store: store, auditLog: al, policies: dir}
 	h.ts = httptest.NewServer(New(Deps{
 		Engine: eng, Store: store, Audit: al,
 		AdminToken: adminToken, Version: "test",
@@ -290,17 +307,59 @@ func TestAdmin_PutData_ReloadsEpoch(t *testing.T) {
 func TestAdmin_PutData_InvalidKeeps422(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	resp := h.do(t, http.MethodPut, "/v1/admin/data", "application/json", `{"bogus":1}`, true)
+	// Two rejection shapes: a well-formed document with an unknown top-level
+	// key, and a syntactically broken one. Both must 422 with an error body.
+	for _, body := range []string{`{"bogus":1}`, `{"agents":`} {
+		resp := h.do(t, http.MethodPut, "/v1/admin/data", "application/json", body, true)
+		if resp.StatusCode != http.StatusUnprocessableEntity {
+			t.Fatalf("PUT %s: status = %d, want 422", body, resp.StatusCode)
+		}
+		got := decodeJSON[map[string]any](t, resp.Body)
+		if _, ok := got["error"]; !ok {
+			t.Fatalf("PUT %s: 422 body missing \"error\": %v", body, got)
+		}
+	}
+	resp := h.do(t, http.MethodGet, "/v1/admin/data", "", "", true)
+	if got := resp.Header.Get("X-Cerberus-Epoch"); got != "1" {
+		t.Fatalf("epoch after failed PUT = %q, want 1 (old snapshot stays live)", got)
+	}
+	// The failed PUTs must not have disturbed the live document: a decide
+	// still evaluates against the old data.
+	resp = h.do(t, http.MethodPost, "/v1/decide", "application/json", decideAllowBody, false)
+	d := decodeJSON[engine.Decision](t, resp.Body)
+	if d.Decision != "allow" || d.RuleID != "ai.tool.allow" {
+		t.Fatalf("decide after failed PUT = %s/%s, want allow/ai.tool.allow (old data live)", d.Decision, d.RuleID)
+	}
+}
+
+func TestAdmin_Reload_BrokenRegoKeeps422(t *testing.T) {
+	t.Parallel()
+	h := newHarnessCopy(t)
+
+	// An unterminated rule body fails to compile; reload must 422 and keep
+	// the old snapshot live.
+	broken := filepath.Join(h.policies, "gateway", "broken.rego")
+	if err := os.WriteFile(broken, []byte("package gateway.broken\n\nallow if {\n"), 0o600); err != nil {
+		t.Fatalf("write broken rego: %v", err)
+	}
+	resp := h.do(t, http.MethodPost, "/v1/admin/reload", "", "", true)
 	if resp.StatusCode != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422", resp.StatusCode)
+		t.Fatalf("reload status = %d, want 422", resp.StatusCode)
 	}
 	body := decodeJSON[map[string]any](t, resp.Body)
 	if _, ok := body["error"]; !ok {
 		t.Fatalf("422 body missing \"error\": %v", body)
 	}
+
 	resp = h.do(t, http.MethodGet, "/v1/admin/data", "", "", true)
 	if got := resp.Header.Get("X-Cerberus-Epoch"); got != "1" {
-		t.Fatalf("epoch after failed PUT = %q, want 1 (old snapshot stays live)", got)
+		t.Fatalf("epoch after failed reload = %q, want 1", got)
+	}
+	// The pre-reload snapshot still answers decisions.
+	resp = h.do(t, http.MethodPost, "/v1/decide", "application/json", decideAllowBody, false)
+	d := decodeJSON[engine.Decision](t, resp.Body)
+	if d.Decision != "allow" || d.RuleID != "ai.tool.allow" {
+		t.Fatalf("decide after failed reload = %s/%s, want allow/ai.tool.allow (old snapshot live)", d.Decision, d.RuleID)
 	}
 }
 
