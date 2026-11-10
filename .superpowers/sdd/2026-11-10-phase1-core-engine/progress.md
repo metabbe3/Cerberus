@@ -9,3 +9,4 @@ Task 5: complete (commit a8b576c, tests: go test -race ./internal/engine -> ok; 
 Ruling (Task 5): ADR-0001 miss p99 <1ms unmeetable on M2 (GC/scheduler tail 1.5-4ms, mean 26-43us); assert = hit p99 <100us, miss mean <1ms + p99 <5ms; alloc reduction deferred to Phase 7 — cost if wrong: prod p99 on busy hosts above ADR estimate until Phase 7
 Task 7: complete (commit ab5c5e5, tests: go test -race -count=1 ./internal/server -> ok; make test ./... + golangci-lint 0 issues + opa-check/opa-test 19/19 green)
 Task 8: complete (commit 0683b7d, tests: make lint test opa-check opa-test smoke -> all green, smoke 7/7; docker build + live container probe OK; tagged v0.1.0)
+Final: fixed golden-test timeout flake — reproduce attempted (not reproducible standalone), fix = 2s eval timeout in server test harness; suite green 3x -race; ALSO fixed make bench \$-escaping (benchmarks never ran) — verified BenchmarkDecide_Hit/Miss now execute
