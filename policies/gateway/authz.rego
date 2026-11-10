@@ -1,117 +1,86 @@
 package gateway.authz
 
-# GateOwl — authz policy v0.1 (design draft)
-# Evaluasi DUA入口: input.stage == "llm" (pre-call) | input.stage == "tool" (pre-exec).
-#
-# PRINSIP (owner):
-# - Governance per-key & per-team INDEPENDEN: key di data.agents dipolisi key_id saja.
-# - Polisi yang DIPANGGIL (tool_calls), bukan yang diiklankan (input.tools).
-# - bypass_* = fail-open utk yang belum terdaftar (onboarding); setelah false = fail-closed.
+# Cerberus core gate. Owns: key gate, stage dispatch, default deny.
+# Per-stage verdicts live in policies/stages/<stage>.rego and are dispatched
+# through data.stages.<stage>.decision — the engine evaluates exactly
+# data.gateway.authz.decision (see ADR-0002).
 
 import rego.v1
 
-default decision := {"decision": "deny", "reason": "no decision produced", "rule_id": "internal.default"}
+default decision := {"decision": "deny", "rule_id": "internal.default", "reason": "no decision produced"}
 
-# ---------- helper: agent lookup ----------
-agent := data.agents[input.key_id] if data.agents[input.key_id]
+# ---------- helpers (consumed by stage packages via data.gateway.authz.*) ----------
 
-key_registered := true if { agent }
+agent := data.agents[input.key_id]
 
-# ---------- helper: glob matching ----------
-# prefix-glob: "kubernetes*" ; substring: "delete" (case-insensitive)
-call_matches_pattern(pattern, tool_name) if {
+team := data.teams[agent.team_id]
+
+# Glob semantics: trailing "*" = case-insensitive prefix; otherwise
+# case-insensitive substring.
+call_matches_pattern(pattern, name) if {
 	endswith(pattern, "*")
 	prefix := trim_suffix(pattern, "*")
-	startswith(lower(tool_name), lower(prefix))
+	startswith(lower(name), lower(prefix))
 }
 
-call_matches_pattern(pattern, tool_name) if {
+call_matches_pattern(pattern, name) if {
 	not endswith(pattern, "*")
-	contains(lower(tool_name), lower(pattern))
+	contains(lower(name), lower(pattern))
 }
 
-tool_call_allowed(tool_name) if {
-	pattern := agent.allowed_tool_calls[_]
-	call_matches_pattern(pattern, tool_name)
+# ---------- stage dispatch ----------
+
+known_stages := {"llm", "tool"}
+
+stage_decision := data.stages.ai.decision if {
+	input.stage in known_stages
 }
 
-tool_call_allowed(_) if {
-	not agent.allowed_tool_calls
-	not agent.restricted_tool_calls
-}
-
-tool_call_denied(tool_name) if {
-	pattern := agent.restricted_tool_calls[_]
-	call_matches_pattern(pattern, tool_name)
-}
-
-# ---------- STAGE: tool (pre-exec) ----------
-decision := {
-	"decision": "allow",
-	"rule_id": "agent.toolcall.allow",
-	"reason": sprintf("tool call %s allowed for %s", [input.tool_call, agent.name]),
-} if {
-	input.stage == "tool"
-	key_registered
-	not tool_call_denied(input.tool_call)
-	# kalau ada allowed_tool_calls → harus match; kalau tidak ada → bebas kecuali denied
-	tool_call_allowed(input.tool_call)
-}
-
-decision := {
+stage_decision := {
 	"decision": "deny",
-	"rule_id": "agent.toolcall.restricted",
-	"reason": sprintf("tool call %s is restricted for %s", [input.tool_call, agent.name]),
+	"rule_id": "internal.unknown_stage",
+	"reason": sprintf("unknown stage %q", [object.get(input, "stage", "")]),
 } if {
-	input.stage == "tool"
-	key_registered
-	tool_call_denied(input.tool_call)
+	not stage_is_known
 }
 
-# key tidak terdaftar
-decision := {
-	"decision": "allow",
-	"rule_id": "config.bypass_unknown_keys",
-	"reason": "key not registered; bypass_unknown_keys=true (fail-open onboarding)",
-} if {
-	input.stage == "tool"
-	not key_registered
+# Helper form: `not input.stage in known_stages` would not fire when the stage
+# key is missing entirely (a `not x in y` expression over an undefined x is
+# itself undefined, not true).
+stage_is_known if {
+	input.stage in known_stages
+}
+
+# ---------- core decision ----------
+#
+# Gate order: key gate → stage verdict. A registered key is governed by its own
+# entry alone (data/prod.json: "policed by key_id alone"): its team never blocks
+# the request — team-level lists apply only when the team is registered. The
+# config.bypass_unknown_teams / config.unknown_team_closed rule IDs stay
+# reserved for a future "require team registration" mode.
+
+decision := allow_bypass_keys if {
+	not agent
 	data.config.bypass_unknown_keys == true
 }
 
-decision := {
+decision := deny_unknown_key if {
+	not agent
+	not data.config.bypass_unknown_keys
+}
+
+decision := stage_decision if {
+	agent
+}
+
+allow_bypass_keys := {
+	"decision": "allow",
+	"rule_id": "config.bypass_unknown_keys",
+	"reason": "key not registered; bypass_unknown_keys=true (fail-open onboarding)",
+}
+
+deny_unknown_key := {
 	"decision": "deny",
 	"rule_id": "config.unknown_key_closed",
 	"reason": "key not registered and bypass_unknown_keys=false (fail-closed)",
-} if {
-	input.stage == "tool"
-	not key_registered
-	data.config.bypass_unknown_keys != true
-}
-
-# ---------- STAGE: llm (pre-call) ----------
-decision := {
-	"decision": "allow",
-	"rule_id": "agent.llm.allow",
-	"reason": sprintf("model %s allowed for %s", [input.model, agent.name]),
-} if {
-	input.stage == "llm"
-	key_registered
-	input.model in agent.allowed_models
-	not blocked_prompt
-}
-
-blocked_prompt if {
-	some p in data.blocked_patterns
-	contains(lower(input.prompt), lower(p))
-}
-
-decision := {
-	"decision": "deny",
-	"rule_id": "agent.llm.blocked_pattern",
-	"reason": "prompt contains blocked pattern",
-} if {
-	input.stage == "llm"
-	key_registered
-	blocked_prompt
 }

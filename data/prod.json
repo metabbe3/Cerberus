@@ -24,5 +24,7 @@
     }
   },
 
-  "blocked_patterns": []
+  "blocked_patterns": [],
+
+  "domains": {}
 }

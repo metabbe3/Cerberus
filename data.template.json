@@ -37,6 +37,17 @@
       "risk_tier": "medium",
       "log_level": "full"
     },
+    "EXAMPLE_key_id_glob_agent": {
+      "name": "EXAMPLE_glob_agent",
+      "description": "TEMPLATE — glob-style tool lists: allowed_tool_calls / restricted_tool_calls use glob matching (trailing * = case-insensitive prefix, otherwise case-insensitive substring) and may coexist with the exact-match allowed_tools / restricted_tools family; restricted always wins over allowed. allowed_models gates the llm stage alongside the team's list.",
+      "team_id": "EXAMPLE_team_id_from_litellm",
+      "allowed_models": ["SMART-MODEL", "FAST-MODEL"],
+      "allowed_tool_calls": ["kubernetes*"],
+      "restricted_tool_calls": ["delete"],
+      "budget_limit": 50,
+      "risk_tier": "medium",
+      "log_level": "full"
+    },
     "EXAMPLE_key_id_tool_argument_constraints_agent": {
       "name": "EXAMPLE_constrained_tool_agent",
       "description": "TEMPLATE — demonstrates all 4 tool_argument_constraints forms (checked post-call, against the tool_calls the model actually invoked — see README 'Tool call argument constraints'). Copy whichever form(s) you need for your real tool's arguments and delete the rest; any argument NOT listed here is left completely unconstrained (e.g. a free-text 'description' field is usually just omitted).",
@@ -60,5 +71,7 @@
   "blocked_patterns": [
     "ignore previous instructions",
     "jailbreak"
-  ]
+  ],
+
+  "domains": {}
 }

@@ -1,0 +1,50 @@
+{
+  "_comment": "Fixture data for opa tests (policies/**/*_test.rego) and Go tests (internal/policy, internal/engine). Loaded via 'with data as data.testdata' in Rego tests and passed explicitly as the data document in Go tests. Not a production config.",
+
+  "config": {
+    "bypass_unknown_teams": true,
+    "bypass_unknown_keys": true
+  },
+
+  "teams": {
+    "t1": {
+      "name": "team-one",
+      "allowed_models": ["m1"],
+      "allowed_tools": ["read"]
+    }
+  },
+
+  "agents": {
+    "k-glob": {
+      "name": "glob-agent",
+      "team_id": "t1",
+      "allowed_tool_calls": ["kubernetes*"],
+      "restricted_tool_calls": ["delete"],
+      "allowed_models": ["m1"],
+      "budget_limit": 50,
+      "masking": [
+        {"pattern": "sk-[A-Za-z0-9]+", "transform": "redact", "scope": "args"},
+        {"pattern": "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+", "transform": "mask", "scope": "args"}
+      ]
+    },
+    "k-exact": {
+      "name": "exact-agent",
+      "team_id": "nope",
+      "allowed_tools": ["bash"],
+      "tool_argument_constraints": {
+        "bash": {
+          "cmd": {"type": "regex_allow", "patterns": ["^ls( .*)?$"]},
+          "timeout": {"type": "range", "min": 1, "max": 60},
+          "env": ["prod", "dev"]
+        }
+      }
+    },
+    "k-open": {
+      "name": "open-agent"
+    }
+  },
+
+  "blocked_patterns": ["jailbreak"],
+
+  "domains": {}
+}
