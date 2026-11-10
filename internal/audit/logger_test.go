@@ -10,6 +10,32 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
+// The hot path constraint (ADR-0001) says Engine.Decide must take no mutex.
+// Emit sits on that path, so it must not acquire Logger.mu: with the lock held
+// here, Emit must still return. Before the lock-free fix it serialized on mu
+// behind the ring write and subscriber fan-out.
+func TestLogger_EmitTakesNoMutex(t *testing.T) {
+	t.Parallel()
+	l, err := Open(context.Background(), filepath.Join(t.TempDir(), "audit.db"), Options{})
+	if err != nil {
+		t.Fatalf("audit: Open: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+
+	l.mu.Lock() // simulate a slow Recent/Subscribe holding the lock
+	defer l.mu.Unlock() // LIFO: releases before the deferred Close on failure
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		l.Emit(Event{Stage: "llm", Decision: "allow"})
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("audit: Emit blocked on Logger.mu; hot path must not take the mutex")
+	}
+}
+
 func TestLogger_EmitFlushQuery(t *testing.T) {
 	t.Parallel()
 	db := filepath.Join(t.TempDir(), "audit.db")
@@ -100,8 +126,19 @@ func TestLogger_RingRecent(t *testing.T) {
 	for i := range 5 {
 		l.Emit(Event{Reason: fmt.Sprintf("r%d", i)})
 	}
-	got := l.Recent(10)
 	want := []string{"r4", "r3", "r2"}
+	// The writer goroutine fills the ring, so Recent catches up asynchronously.
+	var got []Event
+	for deadline := time.Now().Add(time.Second); ; {
+		got = l.Recent(10)
+		if len(got) == len(want) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("audit: Recent(10) len = %d, want %d", len(got), len(want))
+		}
+		time.Sleep(time.Millisecond)
+	}
 	if len(got) != len(want) {
 		t.Fatalf("audit: Recent(10) len = %d, want %d (%v)", len(got), len(want), got)
 	}

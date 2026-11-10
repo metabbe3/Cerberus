@@ -28,8 +28,9 @@ type Options struct {
 
 const subBuffer = 64 // per-subscriber buffer; slow subscriber drops events
 
-// Logger batches Events to SQLite on one background goroutine and serves the
-// in-memory ring and subscriber fan-out from the Emit path.
+// Logger batches Events to SQLite on one background goroutine; that writer
+// also maintains the in-memory ring and subscriber fan-out, so Emit stays
+// lock-free (hot-path constraint, ADR-0001).
 type Logger struct {
 	db   *sql.DB
 	opts Options
@@ -80,14 +81,27 @@ func Open(ctx context.Context, dbPath string, opts Options) (*Logger, error) {
 	return l, nil
 }
 
-// Emit hands ev to the batcher without blocking: it updates the ring and
-// subscriber fan-out synchronously, then tries a non-blocking channel send.
-// When the channel is full the event is dropped and Dropped increments.
+// Emit hands ev to the writer without blocking and without taking Logger.mu:
+// only a non-blocking channel send happens here. The writer goroutine updates
+// the ring and fans out to subscribers, so decisions on the Engine.Decide hot
+// path never serialize behind Recent, Subscribe or a slow SSE fan-out. When
+// the channel is full the event is dropped and Dropped increments.
 func (l *Logger) Emit(ev Event) {
 	if ev.Time.IsZero() {
 		ev.Time = time.Now()
 	}
 
+	select {
+	case l.ch <- ev:
+	default:
+		Dropped.Inc()
+	}
+}
+
+// publish records ev in the ring and delivers it to every subscriber. Called
+// only from the writer goroutine. The mu round-trip is fine here: this is the
+// single writer, off the request path.
+func (l *Logger) publish(ev Event) {
 	l.mu.Lock()
 	l.ring.add(ev)
 	for _, ch := range l.subs {
@@ -97,12 +111,6 @@ func (l *Logger) Emit(ev Event) {
 		}
 	}
 	l.mu.Unlock()
-
-	select {
-	case l.ch <- ev:
-	default:
-		Dropped.Inc()
-	}
 }
 
 // Recent returns up to n events from the ring buffer, newest first.
@@ -163,10 +171,11 @@ func (l *Logger) Close() error {
 	return l.db.Close()
 }
 
-// run is the single writer: it accumulates a batch, flushing on size or on
-// the FlushEvery tick, and drains-and-flushes on stop. It deliberately
-// ignores the caller's ctx: a cancelled ctx would fail the final insert and
-// lose the pending batch on every graceful shutdown.
+// run is the single writer: it publishes each event to the ring and
+// subscribers, accumulates a batch, flushing on size or on the FlushEvery
+// tick, and drains-and-flushes on stop. It deliberately ignores the caller's
+// ctx: a cancelled ctx would fail the final insert and lose the pending batch
+// on every graceful shutdown.
 func (l *Logger) run(context.Context) {
 	defer close(l.done)
 	batch := make([]Event, 0, l.opts.BatchSize)
@@ -189,6 +198,7 @@ func (l *Logger) run(context.Context) {
 			for {
 				select {
 				case ev := <-l.ch:
+					l.publish(ev)
 					batch = append(batch, ev)
 				default:
 					flush()
@@ -198,6 +208,7 @@ func (l *Logger) run(context.Context) {
 		case <-ticker.C:
 			flush()
 		case ev := <-l.ch:
+			l.publish(ev)
 			batch = append(batch, ev)
 			if len(batch) >= l.opts.BatchSize {
 				flush()
