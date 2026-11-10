@@ -46,8 +46,9 @@ type Logger struct {
 }
 
 // Open creates (or reopens) the SQLite database at dbPath, enables WAL, and
-// starts the single writer goroutine. The goroutine stops on ctx cancellation
-// or Close, whichever comes first.
+// starts the single writer goroutine. The goroutine stops only via Close: ctx
+// (a signal context) is accepted for signature compatibility but ignored, so
+// SIGTERM shutdown still flushes pending events.
 func Open(ctx context.Context, dbPath string, opts Options) (*Logger, error) {
 	if opts.ChanSize <= 0 {
 		opts.ChanSize = 4096
@@ -163,15 +164,18 @@ func (l *Logger) Close() error {
 }
 
 // run is the single writer: it accumulates a batch, flushing on size or on
-// the FlushEvery tick, and drains-and-flushes on stop or ctx cancellation.
-func (l *Logger) run(ctx context.Context) {
+// the FlushEvery tick, and drains-and-flushes on stop. It deliberately
+// ignores the caller's ctx: a cancelled ctx would fail the final insert and
+// lose the pending batch on every graceful shutdown.
+func (l *Logger) run(context.Context) {
 	defer close(l.done)
 	batch := make([]Event, 0, l.opts.BatchSize)
 	flush := func() {
 		if len(batch) == 0 {
 			return
 		}
-		if err := insertBatch(ctx, l.db, batch); err != nil {
+		// Background, not the caller's ctx: shutdown must still persist.
+		if err := insertBatch(context.Background(), l.db, batch); err != nil {
 			slog.Error("audit: batch insert", "error", err)
 		}
 		batch = batch[:0]
@@ -191,9 +195,6 @@ func (l *Logger) run(ctx context.Context) {
 					return
 				}
 			}
-		case <-ctx.Done():
-			flush()
-			return
 		case <-ticker.C:
 			flush()
 		case ev := <-l.ch:

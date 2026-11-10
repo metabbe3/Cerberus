@@ -138,6 +138,41 @@ func TestLogger_SubscribeReceives(t *testing.T) {
 	}
 }
 
+// A cancelled context (SIGTERM) must not lose audit events: the writer stops
+// only via Close and flushes with a live context.
+func TestLogger_CancelledContextKeepsEvents(t *testing.T) {
+	t.Parallel()
+	db := filepath.Join(t.TempDir(), "audit.db")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancelled before Open, like a ctx already hit by SIGTERM
+
+	l, err := Open(ctx, db, Options{})
+	if err != nil {
+		t.Fatalf("audit: Open: %v", err)
+	}
+	const n = 300
+	for i := range n {
+		l.Emit(Event{Stage: "llm", KeyID: fmt.Sprintf("k%d", i), Decision: "allow"})
+	}
+	if err := l.Close(); err != nil {
+		t.Fatalf("audit: Close: %v", err)
+	}
+
+	l2, err := Open(context.Background(), db, Options{})
+	if err != nil {
+		t.Fatalf("audit: reopen: %v", err)
+	}
+	defer func() { _ = l2.Close() }()
+
+	evs, err := l2.Query(context.Background(), Filter{Limit: n})
+	if err != nil {
+		t.Fatalf("audit: Query: %v", err)
+	}
+	if len(evs) != n {
+		t.Fatalf("audit: Query len = %d, want %d; cancelled ctx lost events", len(evs), n)
+	}
+}
+
 func TestLogger_QueryFilters(t *testing.T) {
 	t.Parallel()
 	db := filepath.Join(t.TempDir(), "audit.db")
