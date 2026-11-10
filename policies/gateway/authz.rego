@@ -69,14 +69,18 @@ decision := stage_decision if {
 decision := allow_bypass_keys if {
 	stage_is_known
 	not agent
-	data.config.bypass_unknown_keys == true
+	bypass_keys_enabled
 }
 
+# Anything but a literal boolean true fails closed: "true", 1, null or a
+# missing flag must never match neither rule (→ internal.default) nor bypass.
 decision := deny_unknown_key if {
 	stage_is_known
 	not agent
-	not data.config.bypass_unknown_keys
+	not bypass_keys_enabled
 }
+
+bypass_keys_enabled if data.config.bypass_unknown_keys == true
 
 decision := stage_decision if {
 	stage_is_known

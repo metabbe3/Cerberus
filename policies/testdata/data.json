@@ -11,6 +11,17 @@
       "name": "team-one",
       "allowed_models": ["m1"],
       "allowed_tools": ["read"]
+    },
+    "t2": {
+      "name": "team-two",
+      "restricted_tool_calls": ["kubectl_apply"],
+      "restricted_tools": ["drop_table"]
+    },
+    "t3": {
+      "name": "team-three",
+      "allowed_models": ["m1"],
+      "allowed_tools": ["read"],
+      "budget_limit": 100
     }
   },
 
@@ -41,6 +52,27 @@
     },
     "k-open": {
       "name": "open-agent"
+    },
+    "k-case": {
+      "name": "case-agent",
+      "allowed_tool_calls": ["shell*"],
+      "tool_argument_constraints": {
+        "shell_run": {
+          "cmd": {"type": "regex_allow", "patterns": ["^ls$"]}
+        }
+      }
+    },
+    "k-exact-deny": {
+      "name": "exact-deny-agent",
+      "restricted_tools": ["execute_shell"]
+    },
+    "k-team2": {
+      "name": "team-two-agent",
+      "team_id": "t2"
+    },
+    "k-teamlist": {
+      "name": "team-list-agent",
+      "team_id": "t3"
     }
   },
 

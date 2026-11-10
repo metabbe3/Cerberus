@@ -85,6 +85,42 @@ test_registered_key_dispatches_to_stage if {
 	out.rule_id == "ai.tool.allow"
 }
 
+# Bypass flags must be booleans: a non-boolean ("true", 1) fails closed with the
+# closed rule_id instead of matching neither key-gate rule (→ internal.default).
+decide_flag(inp, flag) := out if {
+	out := decision with input as inp
+		with data.config as object.union(data.testdata.config, {"bypass_unknown_keys": flag})
+		with data.teams as data.testdata.teams
+		with data.agents as data.testdata.agents
+		with data.blocked_patterns as data.testdata.blocked_patterns
+		with data.domains as data.testdata.domains
+}
+
+test_bypass_flag_string_true_fails_closed if {
+	out := decide_flag({"stage": "tool", "key_id": "new-agent"}, "true")
+	out.decision == "deny"
+	out.rule_id == "config.unknown_key_closed"
+}
+
+test_bypass_flag_number_fails_closed if {
+	out := decide_flag({"stage": "tool", "key_id": "new-agent"}, 1)
+	out.rule_id == "config.unknown_key_closed"
+}
+
+test_bypass_flag_missing_fails_closed if {
+	out := decision with input as {"stage": "tool", "key_id": "new-agent"}
+		with data.config as {}
+		with data.agents as data.testdata.agents
+	out.rule_id == "config.unknown_key_closed"
+}
+
+# internal.default: a known stage whose stage package yields nothing (here: the
+# stage rules are mocked away) still answers the core default deny.
+test_internal_default_when_stage_yields_nothing if {
+	out := decide({"stage": "tool", "key_id": "k-open", "tool_call": "x"}) with data.stages.ai as {}
+	out.rule_id == "internal.default"
+}
+
 test_registered_key_llm_dispatch if {
 	out := decide({"stage": "llm", "key_id": "k-open", "model": "any-model"})
 	out.decision == "allow"
