@@ -245,6 +245,56 @@ func TestDecide_UnknownStageBoundedMetricLabel(t *testing.T) {
 	}
 }
 
+func TestPolicyEpoch_TracksReloadWithoutTraffic(t *testing.T) {
+	e := newTestEngine(t, &recSink{}, Options{})
+	if got := testutil.ToFloat64(policyEpoch); got != 1 {
+		t.Fatalf("policy epoch = %v, want 1", got)
+	}
+	snap, err := e.store.Reload(context.Background())
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if got := testutil.ToFloat64(policyEpoch); got != float64(snap.Epoch) {
+		t.Fatalf("policy epoch = %v after reload to epoch %d; gauge went stale with no decide traffic", got, snap.Epoch)
+	}
+}
+
+func TestPolicyEpoch_NeverMovesBackwards(t *testing.T) {
+	ctx := context.Background()
+	e := newTestEngine(t, &recSink{}, Options{})
+	in1 := toolInput("k-glob", "kubernetes_get_pods", nil)
+	in2 := toolInput("k-glob", "kubernetes_get_pods", map[string]any{"park": "probe"})
+
+	// Park request A inside its epoch-1 eval, reload to epoch 2, let a full
+	// epoch-2 request B finish, then release A: if the gauge is set from a
+	// request's own snapshot, A's epilogue drags it back to 1.
+	parked := make(chan struct{})
+	release := make(chan struct{})
+	var evals atomic.Int64
+	e.evalHook = func() {
+		if evals.Add(1) == 1 {
+			close(parked)
+			<-release
+		}
+	}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); e.Decide(ctx, in1) }()
+	<-parked
+
+	snap, err := e.store.Reload(ctx)
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	e.Decide(ctx, in2) // epoch-2 traffic: the gauge must land on 2 and stay there
+	close(release)
+	wg.Wait()
+
+	if got := testutil.ToFloat64(policyEpoch); got != float64(snap.Epoch) {
+		t.Fatalf("policy epoch = %v, want %d (gauge moved backwards to a finished request's old snapshot)", got, snap.Epoch)
+	}
+}
+
 func TestDecide_EmitsAudit(t *testing.T) {
 	sink := &recSink{}
 	e := newTestEngine(t, sink, Options{})

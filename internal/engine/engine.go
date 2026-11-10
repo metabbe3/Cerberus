@@ -81,6 +81,10 @@ func New(store *policy.Store, sink Sink, opts Options) (*Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("engine: lru: %w", err)
 	}
+	// The gauge lives at the swap, not in Decide: a reload with no traffic
+	// must still move it, and an old in-flight request must never drag it
+	// backwards.
+	store.OnSwap(func(snap *policy.Snapshot) { policyEpoch.Set(float64(snap.Epoch)) })
 	policyEpoch.Set(float64(store.Current().Epoch))
 	return &Engine{store: store, sink: sink, opts: opts, cache: cache}, nil
 }
@@ -133,7 +137,6 @@ func (e *Engine) Decide(ctx context.Context, in Input) Decision {
 
 	d.LatencyUS = time.Since(start).Microseconds()
 	decisionsTotal.WithLabelValues(metricStage(in.Stage), d.Decision, d.RuleID).Inc()
-	policyEpoch.Set(float64(snap.Epoch))
 	e.sink.Emit(audit.Event{
 		Time:      time.Now(),
 		Stage:     in.Stage,

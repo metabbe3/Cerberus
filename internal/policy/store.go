@@ -17,7 +17,15 @@ type Store struct {
 	policyDir string
 	dataPath  string
 	mu        sync.Mutex
+	// onSwap, when non-nil, runs after each successful swap. Callers set it
+	// once before serving traffic (the engine keeps cerberus_policy_epoch
+	// live through it); read only under mu, so no race with Reload.
+	onSwap func(*Snapshot)
 }
+
+// OnSwap registers f to run after each successful snapshot swap (Reload,
+// ReplaceData). Call before serving traffic.
+func (s *Store) OnSwap(f func(*Snapshot)) { s.onSwap = f }
 
 // NewStore builds the first Snapshot (epoch 1) from policyDir and dataPath.
 func NewStore(ctx context.Context, policyDir, dataPath string) (*Store, error) {
@@ -47,6 +55,9 @@ func (s *Store) Reload(ctx context.Context) (*Snapshot, error) {
 		return nil, err
 	}
 	s.ptr.Store(snap)
+	if s.onSwap != nil {
+		s.onSwap(snap)
+	}
 	return snap, nil
 }
 
@@ -65,6 +76,9 @@ func (s *Store) ReplaceData(ctx context.Context, dataJSON []byte) (*Snapshot, er
 		return nil, err
 	}
 	s.ptr.Store(snap)
+	if s.onSwap != nil {
+		s.onSwap(snap)
+	}
 	return snap, nil
 }
 
