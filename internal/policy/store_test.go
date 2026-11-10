@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // newTestStore builds a Store over the repo policies with the fixture data
@@ -82,6 +83,22 @@ func TestStore_ReloadDoesNotBlockCurrent(t *testing.T) {
 	if got := s.Current().Epoch; got != 11 {
 		t.Fatalf("final epoch = %d, want 11", got)
 	}
+
+	// Non-blocking proof: with the reload lock held (a reload parked
+	// mid-compile), Current must still return promptly. A Current that took
+	// s.mu would deadlock here until the lock is released.
+	s.mu.Lock()
+	got := make(chan *Snapshot, 1)
+	go func() { got <- s.Current() }()
+	select {
+	case snap := <-got:
+		if snap == nil {
+			t.Error("Current() = nil while reload lock held")
+		}
+	case <-time.After(time.Second):
+		t.Error("Current() blocked while the reload lock was held")
+	}
+	s.mu.Unlock()
 }
 
 func TestStore_ReplaceData_FsyncsDataAndDir(t *testing.T) {

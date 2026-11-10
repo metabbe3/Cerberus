@@ -255,8 +255,15 @@ func TestLogger_QueryFilters(t *testing.T) {
 	if len(evs) != 2 {
 		t.Fatalf("audit: Query(Since) len = %d, want 2", len(evs))
 	}
-	if evs[0].Time != now.Truncate(time.Second) && evs[0].Time.Sub(now) > time.Second {
-		t.Logf("audit: Query(Since) newest event time = %v, emitted at %v", evs[0].Time, now)
+	// Exactly the mid and now events, newest first, times round-tripped
+	// (stored at the DB's precision — compare within a millisecond).
+	for i, want := range []time.Time{now, mid} {
+		if d := evs[i].Time.Sub(want); d > time.Millisecond || d < -time.Millisecond {
+			t.Fatalf("audit: Query(Since)[%d].Time = %v, want %v", i, evs[i].Time, want)
+		}
+		if evs[i].KeyID != "k2" {
+			t.Fatalf("audit: Query(Since)[%d].KeyID = %q, want k2 (the old k1 event is before Since)", i, evs[i].KeyID)
+		}
 	}
 
 	// Default limit applies when unset.

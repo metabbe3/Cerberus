@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -45,7 +46,9 @@ func reportP99(b *testing.B, latencies []float64) {
 func collect(b *testing.B, fn func()) []float64 {
 	var mu sync.Mutex
 	latencies := make([]float64, 0, b.N)
-	b.SetParallelism(1) // goroutines = GOMAXPROCS (8 on the bench target)
+	// RunParallel spawns p × GOMAXPROCS goroutines; pin the total near the
+	// ADR-0001 target of 8 so p99 is comparable across machines.
+	b.SetParallelism(max(1, 8/runtime.GOMAXPROCS(0)))
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		local := make([]float64, 0, 1024)
