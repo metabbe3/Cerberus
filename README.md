@@ -36,14 +36,15 @@ DESIGN (spec review) — belum implementasi. Owner: Nicholas. Dibangun oleh Herm
 ## Layout (rencana)
 
 ```
-gateowl/
-  policies/gateway/authz.rego   # package gateway.authz
-  data/prod.json                # kebijakan (dashboard-managed)
-  cmd/gateowl/                  # server (HTTP+gRPC, hot-reload, audit SQLite)
-  internal/...                  # engine, store, sse
-  sdk/{go,python,ts}/
-  dashboard/                    # Next.js + shadcn
-  docs/adr/                     # ADR per keputusan arsitektur
+Cerberus/                        # MONOREPO — engine + Owl dashboard + SDK (satu versi)
+  cmd/cerberus/                  # engine binary (HTTP :8089 + gRPC :8090)
+  internal/                      # engine, masking (port GoAgent), cache LRU, audit, sse
+  policies/                      # gateway/authz.rego + stages/{ai,docker,http,k8s}.rego
+  data/                          # kebijakan JSON (dashboard-managed, hot-reload)
+  owl/                           # DASHBOARD "Owl" 🦉 (Next.js + shadcn) — SSE decision stream
+  sdk/{go,python,ts}/            # SDK multi-bahasa (publish pip/npm dari sini)
+  deploy/                        # Dockerfile, docker-compose, docker-socket-proxy example
+  docs/adr/                      # ADR per keputusan arsitektur
 ```
 
 ## Data schema (lihat data/prod.json & data.template.json)
