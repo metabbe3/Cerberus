@@ -24,7 +24,7 @@ type validationResponse struct {
 }
 
 // getData returns the live data document with its epoch in a header.
-func (s *server) getData(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) getData(w http.ResponseWriter, _ *http.Request) {
 	snap := s.deps.Store.Current()
 	if snap == nil {
 		writeErr(w, http.StatusServiceUnavailable, "not ready")
@@ -36,7 +36,7 @@ func (s *server) getData(w http.ResponseWriter, _ *http.Request) {
 
 // putData validates and installs a new data document (epoch +1). Any
 // validation or compile failure answers 422 and leaves the old snapshot live.
-func (s *server) putData(w http.ResponseWriter, r *http.Request) {
+func (s *Server) putData(w http.ResponseWriter, r *http.Request) {
 	body, ok := readBody(w, r)
 	if !ok {
 		return
@@ -50,7 +50,7 @@ func (s *server) putData(w http.ResponseWriter, r *http.Request) {
 }
 
 // reload recompiles from disk (epoch +1); same 422 contract as putData.
-func (s *server) reload(w http.ResponseWriter, r *http.Request) {
+func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 	snap, err := s.deps.Store.Reload(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusUnprocessableEntity, err.Error())
@@ -61,7 +61,7 @@ func (s *server) reload(w http.ResponseWriter, r *http.Request) {
 
 // validatePolicy parses one submitted module and compiles it together with
 // the modules currently on disk, without touching the live snapshot.
-func (s *server) validatePolicy(w http.ResponseWriter, r *http.Request) {
+func (s *Server) validatePolicy(w http.ResponseWriter, r *http.Request) {
 	body, ok := readBody(w, r)
 	if !ok {
 		return
@@ -124,7 +124,7 @@ func regoFilter(_ string, info os.FileInfo, _ int) bool {
 
 // queryAudit runs Audit.Query with the filter params from the URL:
 // key_id, stage, decision, rule_id, since (RFC3339), limit.
-func (s *server) queryAudit(w http.ResponseWriter, r *http.Request) {
+func (s *Server) queryAudit(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := audit.Filter{
 		KeyID:    q.Get("key_id"),

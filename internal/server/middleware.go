@@ -44,7 +44,7 @@ func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 // withMiddleware wraps every request: panic recovery, request-id +
 // X-Cerberus-Version headers, 1 MiB body limit, JSON content-type on
 // body-carrying POST/PUT, and one structured access-log line.
-func (s *server) withMiddleware(next http.Handler) http.Handler {
+func (s *Server) withMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
@@ -93,7 +93,7 @@ func isJSONContentType(h string) bool {
 
 // admin guards the admin routes with the bearer token, compared in constant
 // time. An empty configured token rejects everything.
-func (s *server) admin(next http.HandlerFunc) http.HandlerFunc {
+func (s *Server) admin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if s.deps.AdminToken == "" || !ok ||

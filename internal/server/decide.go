@@ -11,7 +11,7 @@ import (
 // /v1/decide/llm and /v1/decide/tool, which force the stage regardless of the
 // body. The engine maps every failure mode to a deny, so the only client
 // errors here are transport-level: 400 invalid json, 413, 415.
-func (s *server) decide(stage string) http.HandlerFunc {
+func (s *Server) decide(stage string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, ok := readBody(w, r)
 		if !ok {

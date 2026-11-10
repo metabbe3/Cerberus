@@ -5,6 +5,7 @@
 package server
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 
@@ -24,15 +25,24 @@ type Deps struct {
 	Version    string
 }
 
-type server struct {
+// Server is the full Cerberus HTTP handler; it also exposes ShutdownStreams
+// for http.Server.RegisterOnShutdown (graceful shutdown must end SSE streams).
+type Server struct {
 	deps Deps
 	log  *slog.Logger
+
+	handler       http.Handler
+	streamsCtx    context.Context    // cancelled by ShutdownStreams
+	streamsCancel context.CancelFunc // registered on http.Server via main
 }
 
 // New builds the full handler: routes + middleware. One ServeMux, Go 1.22
-// method patterns (CONVENTIONS.md "HTTP").
-func New(d Deps) http.Handler {
-	s := &server{deps: d, log: slog.Default()}
+// method patterns (CONVENTIONS.md "HTTP"). Register the returned Server's
+// ShutdownStreams with http.Server.RegisterOnShutdown so a graceful shutdown
+// ends SSE streams instead of draining on them.
+func New(d Deps) *Server {
+	s := &Server{deps: d, log: slog.Default()}
+	s.streamsCtx, s.streamsCancel = context.WithCancel(context.Background())
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
@@ -50,17 +60,29 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /v1/audit", s.admin(s.queryAudit))
 	mux.HandleFunc("GET /v1/events", s.admin(s.events))
 
-	return s.withMiddleware(mux)
+	s.handler = s.withMiddleware(mux)
+	return s
 }
 
+// ServeHTTP serves the routed, middleware-wrapped handler.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.handler.ServeHTTP(w, r)
+}
+
+// ShutdownStreams ends every live /v1/events stream. Register it with
+// http.Server.RegisterOnShutdown: SSE handlers otherwise end only on client
+// disconnect or audit-logger close (which main runs after Shutdown), so one
+// parked dashboard holds graceful shutdown out to its full drain deadline.
+func (s *Server) ShutdownStreams() { s.streamsCancel() }
+
 // healthz is an unconditional liveness answer.
-func (s *server) healthz(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte("ok"))
 }
 
 // readyz reads 200 once a policy snapshot is live, 503 before that.
-func (s *server) readyz(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) readyz(w http.ResponseWriter, _ *http.Request) {
 	if s.deps.Store == nil || s.deps.Store.Current() == nil {
 		writeErr(w, http.StatusServiceUnavailable, "not ready")
 		return

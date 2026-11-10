@@ -66,11 +66,16 @@ func run() error {
 
 	watchHUP(store, log)
 
+	api := server.New(server.Deps{Engine: eng, Store: store, Audit: auditLog, AdminToken: cfg.AdminToken, Version: version})
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           server.New(server.Deps{Engine: eng, Store: store, Audit: auditLog, AdminToken: cfg.AdminToken, Version: version}),
+		Handler:           api,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	// End SSE streams when shutdown begins; the events handler otherwise ends
+	// only on client disconnect or audit close (below), and Shutdown would wait
+	// out its full deadline on any parked dashboard.
+	srv.RegisterOnShutdown(api.ShutdownStreams)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.ListenAndServe() }()
 	log.Info("cerberus listening",

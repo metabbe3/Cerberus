@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,6 +31,7 @@ const (
 // flushing audit DB, and exposes an httptest server.
 type harness struct {
 	ts       *httptest.Server
+	api      *Server
 	store    *policy.Store
 	auditLog *audit.Logger
 	policies string // policy dir the store compiles from (may be a scratch copy)
@@ -82,10 +84,11 @@ func newHarnessIn(t *testing.T, dir string) *harness {
 	}
 
 	h := &harness{store: store, auditLog: al, policies: dir}
-	h.ts = httptest.NewServer(New(Deps{
+	h.api = New(Deps{
 		Engine: eng, Store: store, Audit: al,
 		AdminToken: adminToken, Version: "test",
-	}))
+	})
+	h.ts = httptest.NewServer(h.api)
 	t.Cleanup(func() { h.ts.Close(); _ = al.Close() }) // server first, then logger
 	return h
 }
@@ -501,6 +504,53 @@ func TestEvents_SSEStreamsDecision(t *testing.T) {
 		case <-timer.C:
 			t.Fatal("no decision frame within 2s")
 		}
+	}
+}
+
+// TestEvents_ShutdownEndsStream: a parked /v1/events client must not hold
+// http.Server.Shutdown out to its drain deadline (one dashboard = a 10s stall
+// per rolling-deploy pod). Wiring mirrors main: RegisterOnShutdown(ShutdownStreams).
+func TestEvents_ShutdownEndsStream(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+
+	srv := &http.Server{Handler: h.api, ReadHeaderTimeout: 5 * time.Second}
+	srv.RegisterOnShutdown(h.api.ShutdownStreams)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	// One dashboard client parked on /v1/events, never disconnecting.
+	req, err := http.NewRequest(http.MethodGet, "http://"+ln.Addr().String()+"/v1/events", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	// Let the handler reach its subscribe, then shut down: it must finish
+	// clean and fast, not wait on the stream.
+	time.Sleep(200 * time.Millisecond)
+	shutdownErr := make(chan error, 1)
+	go func() { shutdownErr <- srv.Shutdown(context.Background()) }()
+	select {
+	case err := <-shutdownErr:
+		if err != nil {
+			t.Fatalf("Shutdown with an open SSE stream: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Shutdown still draining after 3s; the SSE stream blocks graceful shutdown")
 	}
 }
 

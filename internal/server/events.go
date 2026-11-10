@@ -14,10 +14,11 @@ import (
 const pingEvery = 15 * time.Second
 
 // events streams decisions as SSE: a replay of the last 50 ring events
-// (oldest first), then every live event until the client disconnects or the
-// audit logger closes. Frames are `event: decision` + one JSON data line;
-// a `: ping` comment keeps intermediaries from idling the connection out.
-func (s *server) events(w http.ResponseWriter, r *http.Request) {
+// (oldest first), then every live event until the client disconnects, the
+// server shuts down (ShutdownStreams), or the audit logger closes. Frames are
+// `event: decision` + one JSON data line; a `: ping` comment keeps
+// intermediaries from idling the connection out.
+func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Audit == nil {
 		writeErr(w, http.StatusServiceUnavailable, "audit unavailable")
 		return
@@ -47,6 +48,8 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-s.streamsCtx.Done():
 			return
 		case <-ping.C:
 			if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
