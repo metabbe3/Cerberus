@@ -53,23 +53,33 @@ stage_is_known if {
 
 # ---------- core decision ----------
 #
-# Gate order: key gate → stage verdict. A registered key is governed by its own
+# Gate order: stage gate → key gate. An unknown stage fails closed whatever the
+# key — a typo'd or not-yet-implemented stage must never ride the key gates
+# (in particular config.bypass_unknown_keys). A known stage is then gated by
+# the key gate → stage verdict. A registered key is governed by its own
 # entry alone (data/prod.json: "policed by key_id alone"): its team never blocks
 # the request — team-level lists apply only when the team is registered. The
 # config.bypass_unknown_teams / config.unknown_team_closed rule IDs stay
 # reserved for a future "require team registration" mode.
 
+decision := stage_decision if {
+	not stage_is_known
+}
+
 decision := allow_bypass_keys if {
+	stage_is_known
 	not agent
 	data.config.bypass_unknown_keys == true
 }
 
 decision := deny_unknown_key if {
+	stage_is_known
 	not agent
 	not data.config.bypass_unknown_keys
 }
 
 decision := stage_decision if {
+	stage_is_known
 	agent
 }
 

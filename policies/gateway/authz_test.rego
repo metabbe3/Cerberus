@@ -43,6 +43,21 @@ test_missing_stage_denied if {
 	out.rule_id == "internal.unknown_stage"
 }
 
+# The stage gate precedes the key gate: an unknown stage fails closed even for
+# an unregistered key when bypass_unknown_keys=true (no typo'd stage slips
+# through the onboarding bypass).
+test_unknown_stage_unregistered_key_bypass_denies if {
+	out := decide({"stage": "tol", "key_id": "new-agent"})
+	out.decision == "deny"
+	out.rule_id == "internal.unknown_stage"
+}
+
+test_missing_stage_unregistered_key_bypass_denies if {
+	out := decide({"key_id": "new-agent"})
+	out.decision == "deny"
+	out.rule_id == "internal.unknown_stage"
+}
+
 test_missing_key_bypass_true_allows if {
 	out := decide({"stage": "tool"})
 	out.decision == "allow"
