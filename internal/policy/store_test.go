@@ -84,6 +84,44 @@ func TestStore_ReloadDoesNotBlockCurrent(t *testing.T) {
 	}
 }
 
+func TestStore_ReplaceData_FsyncsDataAndDir(t *testing.T) {
+	// Power loss within the dirty-writeback window after ReplaceData must not
+	// leave dataPath empty/truncated: the temp file is fsynced before close and
+	// the parent directory after rename. In-process we can only assert the
+	// durability calls happen on the right paths.
+	s, dataPath := newTestStore(t)
+	var fileSyncs, dirSyncs int
+	var syncedFile, syncedDir string
+	origFile, origDir := syncFile, syncDir
+	syncFile = func(f *os.File) error {
+		fileSyncs++
+		syncedFile = f.Name()
+		return origFile(f)
+	}
+	syncDir = func(dir string) error {
+		dirSyncs++
+		syncedDir = dir
+		return origDir(dir)
+	}
+	t.Cleanup(func() { syncFile, syncDir = origFile, origDir })
+
+	if _, err := s.ReplaceData(context.Background(), loadTestData(t)); err != nil {
+		t.Fatalf("ReplaceData: %v", err)
+	}
+	if fileSyncs != 1 {
+		t.Fatalf("data file fsyncs = %d, want 1 (crash would leave it dirty)", fileSyncs)
+	}
+	if !strings.HasPrefix(filepath.Base(syncedFile), "."+filepath.Base(dataPath)) {
+		t.Fatalf("fsynced wrong file: %q", syncedFile)
+	}
+	if dirSyncs != 1 {
+		t.Fatalf("parent dir fsyncs = %d, want 1 (crash would lose the rename)", dirSyncs)
+	}
+	if syncedDir != filepath.Dir(dataPath) {
+		t.Fatalf("fsynced dir = %q, want %q", syncedDir, filepath.Dir(dataPath))
+	}
+}
+
 func TestStore_ReplaceData_WritesFileAtomically(t *testing.T) {
 	s, dataPath := newTestStore(t)
 	newData := bytes.Replace(loadTestData(t), []byte(`"glob-agent"`), []byte(`"glob-agent-2"`), 1)

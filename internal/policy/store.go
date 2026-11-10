@@ -82,16 +82,38 @@ func (s *Store) ReplaceData(ctx context.Context, dataJSON []byte) (*Snapshot, er
 	return snap, nil
 }
 
+// syncFile and syncDir are vars for test injection; the real ones fsync.
+var syncFile = func(f *os.File) error { return f.Sync() }
+
+// syncDir fsyncs dir so a rename into it survives a crash (on XFS, or ext4
+// without auto_da_alloc, rename is not durable until the directory is synced).
+var syncDir = func(dir string) error {
+	d, err := os.Open(dir) // #nosec G304 -- dir comes from the configured data path
+	if err != nil {
+		return err
+	}
+	defer func() { _ = d.Close() }()
+	return d.Sync()
+}
+
 // writeAtomic writes b to path via a temp file in the same directory plus
-// rename, so concurrent readers never observe a partial file.
+// rename, so concurrent readers never observe a partial file. The temp file is
+// fsynced before close and the directory after rename, so the write survives
+// power loss: without the file fsync the file can land empty/truncated, and
+// without the dir fsync the rename itself can be lost.
 func writeAtomic(path string, b []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("policy: write data %s: %w", path, err)
 	}
 	name := tmp.Name()
 	defer func() { _ = os.Remove(name) }() // no-op once renamed
 	if _, err := tmp.Write(b); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("policy: write data %s: %w", path, err)
+	}
+	if err := syncFile(tmp); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("policy: write data %s: %w", path, err)
 	}
@@ -103,6 +125,9 @@ func writeAtomic(path string, b []byte) error {
 	}
 	if err := os.Rename(name, path); err != nil {
 		return fmt.Errorf("policy: write data %s: %w", path, err)
+	}
+	if err := syncDir(dir); err != nil {
+		return fmt.Errorf("policy: sync dir %s: %w", dir, err)
 	}
 	return nil
 }
