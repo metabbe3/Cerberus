@@ -1,0 +1,64 @@
+{
+  "_comment": "TEMPLATE for OPA gateway authorization data (package gateway.authz, see policies/gateway/authz.rego). Copy this file per environment — e.g. data.staging.json, data.prod.json — fill in real team_id/key_id values, then load it into the ConfigMap key 'gateway' per README.md. Only fields actually read by authz.rego are included below; nothing here is decorative.",
+
+  "config": {
+    "bypass_unknown_teams": true,
+    "bypass_unknown_keys": true,
+    "_comment": "Fail-open while onboarding a new environment. Flip both to false once every team and key below is registered — see README 'Configuration Flags'."
+  },
+
+  "teams": {
+    "EXAMPLE_team_id_from_litellm": {
+      "name": "example-team",
+      "allowed_models": ["SMART-MODEL", "FAST-MODEL"],
+      "allowed_tools": ["read_file", "search"],
+      "budget_limit": 100
+    }
+  },
+
+  "agents": {
+    "EXAMPLE_key_id_allowlist_agent": {
+      "name": "EXAMPLE_readonly_agent",
+      "description": "TEMPLATE — allow-list style. Object key must be the real LiteLLM key_id (GET /key/info, token_id column — never the raw sk-... secret).",
+      "team_id": "EXAMPLE_team_id_from_litellm",
+      "allowed_models": ["FAST-MODEL"],
+      "allowed_tools": ["read_file", "search"],
+      "budget_limit": 50,
+      "risk_tier": "low",
+      "log_level": "full"
+    },
+    "EXAMPLE_key_id_denylist_agent": {
+      "name": "EXAMPLE_broad_agent",
+      "description": "TEMPLATE — deny-list style: no allowed_tools means all tools pass except restricted_tools. Use for agents that need broad access minus specific dangerous actions.",
+      "team_id": "EXAMPLE_team_id_from_litellm",
+      "allowed_models": ["SMART-MODEL", "FAST-MODEL"],
+      "restricted_tools": ["execute_shell", "kubectl_delete", "kubectl_apply"],
+      "budget_limit": 50,
+      "risk_tier": "medium",
+      "log_level": "full"
+    },
+    "EXAMPLE_key_id_tool_argument_constraints_agent": {
+      "name": "EXAMPLE_constrained_tool_agent",
+      "description": "TEMPLATE — demonstrates all 4 tool_argument_constraints forms (checked post-call, against the tool_calls the model actually invoked — see README 'Tool call argument constraints'). Copy whichever form(s) you need for your real tool's arguments and delete the rest; any argument NOT listed here is left completely unconstrained (e.g. a free-text 'description' field is usually just omitted).",
+      "team_id": "EXAMPLE_team_id_from_litellm",
+      "allowed_models": ["SMART-MODEL"],
+      "allowed_tools": ["bash"],
+      "tool_argument_constraints": {
+        "bash": {
+          "example_arg_bare_array_allowlist": ["value-a", "value-b"],
+          "example_arg_explicit_allowlist": {"type": "allowlist", "values": ["value-a", "value-b"]},
+          "example_arg_regex_allow": {"type": "regex_allow", "patterns": ["^curl -s http://localhost:8080/generate-kms-report -X POST -F \"month=(0[1-9]|1[0-2])\" -F \"year=20[0-9]{2}\" 2>&1$"]},
+          "example_arg_range": {"type": "range", "min": 1000, "max": 300000}
+        }
+      },
+      "budget_limit": 50,
+      "risk_tier": "high",
+      "log_level": "full"
+    }
+  },
+
+  "blocked_patterns": [
+    "ignore previous instructions",
+    "jailbreak"
+  ]
+}
