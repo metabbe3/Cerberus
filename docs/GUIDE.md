@@ -8,11 +8,18 @@ just `make build` and a token.
 
 ```sh
 make build                                            # → bin/cerberus
-export CERBERUS_ADMIN_TOKEN=change-me                 # required; admin API auth
-CERBERUS_DATA_FILE=data/prod.json ./bin/cerberus      # listens on :8089
+export CERBERUS_ADMIN_TOKEN=change-me                 # required; admin API auth (env only)
+cp policies/testdata/data.json /tmp/cerberus-demo.json  # demo keys: k-glob, k-exact, k-open
+CERBERUS_DATA_FILE=/tmp/cerberus-demo.json ./bin/cerberus   # listens on :8089
 ```
 
-Env vars (a `-flag` of the same lower-kebab name overrides):
+The curl examples below use the demo keys from that fixture (copied so admin
+`PUT`s don't rewrite a tracked file). For real use point `CERBERUS_DATA_FILE`
+at `data/prod.json` (or your own copy of `data.template.json`) and use your
+LiteLLM `key_id`s.
+
+Env vars (a `-flag` of the same lower-kebab name overrides; the admin token
+has **no** flag — a secret on argv is visible in `ps`):
 
 | Env | Default | Meaning |
 |---|---|---|
@@ -107,24 +114,31 @@ def guard(key_id: str, tool_call: str, args: dict) -> dict:
 `data/prod.json` — hot-reloadable without recompile (see
 [data.template.json](../data.template.json)):
 
-- `config.bypass_unknown_keys` / `bypass_unknown_teams` — fail-open for
-  onboarding (`true` → unknown keys allowed with rule `config.bypass_unknown_keys`);
-  set `false` in production → deny `config.unknown_key_closed`.
+- `config.bypass_unknown_keys` — fail-open for onboarding (`true` → unknown
+  keys allowed with rule `config.bypass_unknown_keys`); set `false` in
+  production → deny `config.unknown_key_closed`. Must be a JSON boolean:
+  anything but literal `true` (e.g. `"true"`, `1`) fails closed.
+  `bypass_unknown_teams` is reserved: a registered key is governed by its own
+  entry even when its team is not registered.
 - `teams[id]`: `name`, `allowed_models[]`, `allowed_tools[]` (exact,
-  case-sensitive), `budget_limit`.
+  case-sensitive), `restricted_tool_calls[]` (glob) / `restricted_tools[]`
+  (exact), `budget_limit` — team lists and limit apply on top of the agent's
+  when the agent's `team_id` is registered; the tightest budget wins.
 - `agents[key_id]`: `name`, `team_id` (optional; a registered key with an
   unregistered team is governed by key only), `allowed_tool_calls[]` /
   `restricted_tool_calls[]` (glob: ending `*` = case-insensitive prefix,
   otherwise substring), `allowed_tools[]` / `restricted_tools[]` (exact),
   `tool_argument_constraints[tool][arg]` (bare array, `{type:"allowlist"}`,
-  `{type:"regex_allow","patterns"[]}`, `{type:"range","min","max"}`),
+  `{type:"regex_allow","patterns"[]}`, `{type:"range","min","max"}`; the tool
+  name is matched case-insensitively),
   `budget_limit`, `masking[{pattern, transform: redact|mask|hash, scope}]`.
   `restricted` always wins over `allowed`.
 - `blocked_patterns[]`: substrings denied at the llm stage.
 
 Masking transforms (exact): `redact` → `[REDACTED]`; `mask` → first 2 + last 2
 chars kept, middle `*`; `hash` → `sha256:<16 hex>`. Strings anywhere in `args`
-are transformed; non-strings pass through.
+are transformed — object keys included; non-strings pass through. A pattern
+that matches the empty string (e.g. `\d*`) is rejected at load.
 
 ## Admin API
 
@@ -132,8 +146,10 @@ Bearer `Authorization: Bearer $CERBERUS_ADMIN_TOKEN` on all of these:
 
 - `GET /v1/admin/data` — live data document (`X-Cerberus-Epoch` header).
 - `PUT /v1/admin/data` — install new data (epoch +1, written atomically to
-  disk); invalid JSON/Rego → `422`, old snapshot stays live.
-- `POST /v1/admin/reload` — recompile policies + data from disk (epoch +1).
+  disk with fsync); invalid JSON/Rego → `422`, a server-side write failure
+  (permissions, disk full) → `500`; either way the old snapshot stays live.
+- `POST /v1/admin/reload` — recompile policies + data from disk (epoch +1);
+  same `422`/`500` contract.
 - `POST /v1/admin/policy/validate` — `{"rego": "..."}` → `{ok, errors[]}`
   without touching the live snapshot.
 - `GET /v1/audit?key_id&stage&rule_id&since&limit` — query decisions.
@@ -145,11 +161,17 @@ Example for the future `docker` stage:
 
 1. `policies/stages/docker.rego` — package `stages.docker`, expose `decision`
    returning exactly `{decision, rule_id, reason}` (no `default`; core denies).
-2. One dispatch line in the core gate (`policies/` core file):
-   `decision := stages.docker.decision if input.stage == "docker"`.
+   Read optional input fields through `object.get` so a missing field still
+   yields a stage `rule_id` instead of falling to `internal.default`.
+2. Two edits in `policies/gateway/authz.rego`: add the stage to
+   `known_stages` (an unlisted stage is denied `internal.unknown_stage`
+   before anything else runs), and add its dispatch rule next to the AI one:
+   `stage_decision := data.stages.docker.decision if input.stage == "docker"`.
 3. `policies/stages/docker_test.rego` + a `domains.docker` section in the data
    document. The HTTP route `POST /v1/decide/docker` follows the existing
-   `s.decide("docker")` pattern in `internal/server`.
+   `s.decide("docker")` pattern in `internal/server`; `metricStage` in
+   `internal/engine` folds unknown stage labels to `other`, so add the stage
+   there too if it should get its own metric series.
 
 ## Ops
 
@@ -163,4 +185,6 @@ Example for the future `docker` stage:
   it is a plain SQLite file in WAL mode; batched writes land at most 200ms late.
 - **Docker**: `docker build -f deploy/Dockerfile -t cerberus:dev .` then
   `CERBERUS_ADMIN_TOKEN=… docker compose -f deploy/docker-compose.yml up`
-  (data/ mounted at `/data`, audit DB in the `cerberus-db` volume).
+  (data/ mounted at `/data`, audit DB in the `cerberus-db` volume). The
+  container runs as uid 65532; make the host `data/` writable by it
+  (`sudo chown -R 65532:65532 data/`) or admin `PUT`s answer `500`.

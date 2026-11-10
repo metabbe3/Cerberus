@@ -17,7 +17,10 @@ FROM gcr.io/distroless/static:nonroot
 COPY --from=build --chown=65532:65532 /var/lib/cerberus /var/lib/cerberus
 COPY --from=build /cerberus /cerberus
 COPY policies/ /policies/
-COPY data/ /data/
+# /data must be writable by nonroot: PUT /v1/admin/data writes a temp file
+# next to the data file and renames it over (root-owned → 500 permission denied).
+# With the compose bind mount, the host dir must be writable by uid 65532 too.
+COPY --chown=65532:65532 data/ /data/
 ENV CERBERUS_POLICY_DIR=/policies \
 	CERBERUS_DATA_FILE=/data/prod.json \
 	CERBERUS_AUDIT_DB=/var/lib/cerberus/cerberus.db

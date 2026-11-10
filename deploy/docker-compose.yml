@@ -1,6 +1,9 @@
 # Cerberus engine standalone. From the repo root:
 #   CERBERUS_ADMIN_TOKEN=smoke docker compose -f deploy/docker-compose.yml up
 # The audit DB lives in the named volume, so decisions survive restarts.
+# ../data is bind-mounted so dashboard edits (PUT /v1/admin/data) persist on the
+# host; the container runs as uid 65532, so make it writable first:
+#   sudo chown -R 65532:65532 data/   (or: chmod -R a+rwX data/ for local dev)
 services:
   cerberus:
     build:

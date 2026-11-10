@@ -64,6 +64,7 @@ resp=$(curl -fsS -H 'Content-Type: application/json' \
 	-d '{"stage":"tool","key_id":"k-glob","tool_call":"kubernetes_get_pods","args":{"cmd":"kubectl get pods --token sk-abc123"}}' \
 	"$BASE/v1/decide/tool") || fail "masked decide request"
 echo "$resp" | grep -q '\[REDACTED\]' || fail "masking: $resp"
+if echo "$resp" | grep -q 'sk-abc123'; then fail "masking leaked the raw secret: $resp"; fi
 
 # 4. admin without token → 401.
 code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/v1/admin/data")
