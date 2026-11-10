@@ -64,7 +64,8 @@ func run() error {
 		return fmt.Errorf("cerberus: engine: %w", err)
 	}
 
-	watchHUP(store, log)
+	stopHUP := watchHUP(ctx, store, log)
+	defer stopHUP()
 
 	api := server.New(server.Deps{Engine: eng, Store: store, Audit: auditLog, AdminToken: cfg.AdminToken, Version: version})
 	srv := newHTTPServer(cfg.Addr, api)
@@ -112,21 +113,36 @@ func newHTTPServer(addr string, h http.Handler) *http.Server {
 }
 
 // watchHUP reloads policy+data from disk on SIGHUP; a failed reload keeps the
-// previous snapshot live and is logged. Runs until the process exits.
-func watchHUP(store *policy.Store, log *slog.Logger) {
+// previous snapshot live and is logged. The watcher ends when ctx is done or
+// the returned stop is called (which also unregisters the signal and waits for
+// an in-flight reload to return).
+func watchHUP(ctx context.Context, store *policy.Store, log *slog.Logger) (stop func()) {
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
 	go func() {
-		for range hup {
-			snap, err := store.Reload(context.Background()) // ponytail: background ctx — reload after SIGTERM is a harmless race at exit
-			if err != nil {
-				log.Error("sighup reload failed; previous snapshot stays live",
-					"err", err, "epoch", store.Current().Epoch)
-				continue
+		defer close(done)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hup:
+				snap, err := store.Reload(ctx)
+				if err != nil {
+					log.Error("sighup reload failed; previous snapshot stays live",
+						"err", err, "epoch", store.Current().Epoch)
+					continue
+				}
+				log.Info("sighup reload ok", "epoch", snap.Epoch)
 			}
-			log.Info("sighup reload ok", "epoch", snap.Epoch)
 		}
 	}()
+	return func() {
+		signal.Stop(hup)
+		cancel()
+		<-done
+	}
 }
 
 func newLogger(level string) *slog.Logger {

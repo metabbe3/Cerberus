@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 
@@ -17,8 +18,11 @@ func (s *Server) decide(stage string) http.HandlerFunc {
 		if !ok {
 			return
 		}
+		// The body must be a JSON object: json.Unmarshal accepts the literal
+		// null (and leaves Input zero-valued), which is a malformed request,
+		// not a decision.
 		var in engine.Input
-		if err := json.Unmarshal(body, &in); err != nil {
+		if !isJSONObject(body) || json.Unmarshal(body, &in) != nil {
 			writeErr(w, http.StatusBadRequest, "invalid json")
 			return
 		}
@@ -28,4 +32,10 @@ func (s *Server) decide(stage string) http.HandlerFunc {
 		d := s.deps.Engine.Decide(r.Context(), in)
 		writeJSON(w, http.StatusOK, d)
 	}
+}
+
+// isJSONObject reports whether b, ignoring leading whitespace, starts an object.
+func isJSONObject(b []byte) bool {
+	b = bytes.TrimLeft(b, " \t\r\n")
+	return len(b) > 0 && b[0] == '{'
 }

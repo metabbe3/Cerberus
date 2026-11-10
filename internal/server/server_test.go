@@ -35,6 +35,7 @@ type harness struct {
 	store    *policy.Store
 	auditLog *audit.Logger
 	policies string // policy dir the store compiles from (may be a scratch copy)
+	dataPath string // data file the store writes on PUT
 }
 
 func newHarness(t *testing.T) *harness {
@@ -83,7 +84,7 @@ func newHarnessIn(t *testing.T, dir string) *harness {
 		t.Fatalf("engine.New: %v", err)
 	}
 
-	h := &harness{store: store, auditLog: al, policies: dir}
+	h := &harness{store: store, auditLog: al, policies: dir, dataPath: dataPath}
 	h.api = New(Deps{
 		Engine: eng, Store: store, Audit: al,
 		AdminToken: adminToken, Version: "test",
@@ -209,6 +210,47 @@ func TestDecide_InvalidJSON400(t *testing.T) {
 	}
 }
 
+// Review Focus 1: empty bodies and the JSON literal null (which json.Unmarshal
+// accepts, leaving Input zero-valued) are malformed requests, not decisions.
+func TestDecide_EmptyAndNullBody400(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	for _, body := range []string{"", "null", "  ", "[]", `"x"`} {
+		resp := h.do(t, http.MethodPost, "/v1/decide", "application/json", body, false)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("body %q: status = %d, want 400", body, resp.StatusCode)
+		}
+	}
+}
+
+// A server-side write failure (here: read-only data dir) is a 500, not a 422,
+// and must not leak absolute filesystem paths to the client.
+func TestAdmin_PutData_IOFailure500NoPath(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	dir := filepath.Dir(h.dataPath)
+	if err := os.Chmod(dir, 0o500); err != nil { // #nosec G302 -- test-only read-only dir
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) // #nosec G302 -- restore for TempDir cleanup
+	raw, err := os.ReadFile(testData)
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	before := h.store.Current().Epoch
+	resp := h.do(t, http.MethodPut, "/v1/admin/data", "application/json", string(raw), true)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", resp.StatusCode)
+	}
+	body := decodeJSON[map[string]string](t, resp.Body)
+	if strings.Contains(body["error"], dir) || strings.Contains(body["error"], "/") {
+		t.Fatalf("error leaks a path: %q", body["error"])
+	}
+	if got := h.store.Current().Epoch; got != before {
+		t.Fatalf("epoch = %d after failed write, want %d", got, before)
+	}
+}
+
 func TestDecide_BodyTooLarge413(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -235,6 +277,7 @@ func TestAdmin_NoToken401(t *testing.T) {
 		{http.MethodGet, "/v1/admin/data"},
 		{http.MethodPut, "/v1/admin/data"},
 		{http.MethodPost, "/v1/admin/reload"},
+		{http.MethodPost, "/v1/admin/policy/validate"},
 		{http.MethodGet, "/v1/audit"},
 		{http.MethodGet, "/v1/events"},
 	} {

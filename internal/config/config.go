@@ -51,7 +51,8 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	fs.StringVar(&c.PolicyDir, "policy-dir", c.PolicyDir, "Rego bundle directory ($CERBERUS_POLICY_DIR)")
 	fs.StringVar(&c.DataFile, "data-file", c.DataFile, "policy data JSON ($CERBERUS_DATA_FILE)")
 	fs.StringVar(&c.AuditDB, "audit-db", c.AuditDB, "audit SQLite path ($CERBERUS_AUDIT_DB)")
-	fs.StringVar(&c.AdminToken, "admin-token", c.AdminToken, "admin bearer token, required ($CERBERUS_ADMIN_TOKEN)")
+	// No -admin-token flag: a secret on argv is readable by any local user via
+	// ps or /proc/<pid>/cmdline. The token comes from the environment only.
 	fs.StringVar(&c.LogLevel, "log-level", c.LogLevel, "debug|info|warn|error ($CERBERUS_LOG_LEVEL)")
 	fs.IntVar(&c.CacheSize, "cache-size", c.CacheSize, "LRU decision cache entries ($CERBERUS_CACHE_SIZE)")
 	fs.Func("eval-timeout", "per-eval budget, e.g. 10ms ($CERBERUS_EVAL_TIMEOUT)", func(s string) error {
@@ -67,7 +68,7 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	}
 
 	if c.AdminToken == "" {
-		return Config{}, errors.New("config: CERBERUS_ADMIN_TOKEN is required (env or -admin-token)")
+		return Config{}, errors.New("config: CERBERUS_ADMIN_TOKEN is required (env only; never a flag)")
 	}
 	return c, nil
 }

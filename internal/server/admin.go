@@ -2,14 +2,18 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/metabbe3/cerberus/internal/audit"
+	"github.com/metabbe3/cerberus/internal/policy"
 	"github.com/open-policy-agent/opa/v1/ast"
 	"github.com/open-policy-agent/opa/v1/loader"
 )
@@ -43,20 +47,46 @@ func (s *Server) putData(w http.ResponseWriter, r *http.Request) {
 	}
 	snap, err := s.deps.Store.ReplaceData(r.Context(), body)
 	if err != nil {
-		writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		writeStoreErr(w, "put data", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, epochResponse{Epoch: snap.Epoch})
 }
 
-// reload recompiles from disk (epoch +1); same 422 contract as putData.
+// reload recompiles from disk (epoch +1); same error contract as putData.
 func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 	snap, err := s.deps.Store.Reload(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		writeStoreErr(w, "reload", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, epochResponse{Epoch: snap.Epoch})
+}
+
+// writeStoreErr maps a Store error: a rejected document or policy (ErrData,
+// ErrCompile) is the client's to fix → 422 with the validation message; any
+// other failure (disk full, permissions, missing file) is a server fault →
+// 500 with a generic message, details only in the log. Absolute paths never
+// reach the client.
+func writeStoreErr(w http.ResponseWriter, op string, err error) {
+	if errors.Is(err, policy.ErrData) || errors.Is(err, policy.ErrCompile) {
+		writeErr(w, http.StatusUnprocessableEntity, stripPaths(err.Error()))
+		return
+	}
+	slog.Error("admin: "+op+" failed", "err", err)
+	writeErr(w, http.StatusInternalServerError, op+" failed; see server log")
+}
+
+// stripPaths replaces absolute-path tokens in a message with their base name.
+func stripPaths(msg string) string {
+	fields := strings.Fields(msg)
+	for i, f := range fields {
+		trimmed := strings.TrimRight(f, ":,")
+		if strings.HasPrefix(trimmed, "/") {
+			fields[i] = filepath.Base(trimmed) + f[len(trimmed):]
+		}
+	}
+	return strings.Join(fields, " ")
 }
 
 // validatePolicy parses one submitted module and compiles it together with

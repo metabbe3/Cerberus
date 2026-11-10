@@ -15,9 +15,14 @@ func TestLoad_RequiresAdminToken(t *testing.T) {
 	if _, err := Load(nil, env(nil)); err == nil {
 		t.Fatal("want error when CERBERUS_ADMIN_TOKEN is empty")
 	}
-	// A flag-supplied token satisfies the requirement too.
-	if _, err := Load([]string{"-admin-token", "tok"}, env(nil)); err != nil {
-		t.Fatalf("flag -admin-token rejected: %v", err)
+}
+
+// The admin token is env-only: a secret on argv leaks via ps//proc/cmdline,
+// so -admin-token must not exist (unknown flag → startup error).
+func TestLoad_AdminTokenFlagRejected(t *testing.T) {
+	t.Parallel()
+	if _, err := Load([]string{"-admin-token", "tok"}, env(map[string]string{"CERBERUS_ADMIN_TOKEN": "envtok"})); err == nil {
+		t.Fatal("-admin-token accepted; want unknown-flag error")
 	}
 }
 
@@ -66,7 +71,7 @@ func TestLoad_ParsesTimeout(t *testing.T) {
 func TestLoad_FlagOverridesEnv(t *testing.T) {
 	t.Parallel()
 	c, err := Load(
-		[]string{"-addr", ":2222", "-cache-size", "9", "-admin-token", "flagtok"},
+		[]string{"-addr", ":2222", "-cache-size", "9"},
 		env(map[string]string{
 			"CERBERUS_ADMIN_TOKEN": "envtok",
 			"CERBERUS_ADDR":        ":1111",
@@ -82,8 +87,8 @@ func TestLoad_FlagOverridesEnv(t *testing.T) {
 	if c.CacheSize != 9 {
 		t.Errorf("cache size: got %d, want 9", c.CacheSize)
 	}
-	if c.AdminToken != "flagtok" {
-		t.Errorf("admin token: got %q, want flagtok", c.AdminToken)
+	if c.AdminToken != "envtok" {
+		t.Errorf("admin token: got %q, want envtok", c.AdminToken)
 	}
 	// Env value survives when no flag overrides it.
 	if c.EvalTimeout != 10*time.Millisecond {
