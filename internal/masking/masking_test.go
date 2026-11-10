@@ -122,6 +122,20 @@ func TestCompile_BadRegexErrors(t *testing.T) {
 	}
 }
 
+func TestCompile_EmptyMatchPatternRejected(t *testing.T) {
+	// \d* matches "" and would insert the transform output at every
+	// character position, blowing up args, the LRU cache, SSE and SQLite.
+	for _, pattern := range []string{`\d*`, "x*", ""} {
+		if _, err := Compile([]Spec{{Pattern: pattern, Transform: "redact"}}); err == nil {
+			t.Fatalf("Compile(%q): err = nil, want error", pattern)
+		}
+	}
+	// Patterns that require at least one character stay legal.
+	if _, err := Compile([]Spec{{Pattern: ".+", Transform: "redact"}}); err != nil {
+		t.Fatalf("Compile(.+): %v", err)
+	}
+}
+
 func TestCompile_BadTransformErrors(t *testing.T) {
 	if _, err := Compile([]Spec{{Pattern: "x", Transform: "base64"}}); err == nil {
 		t.Fatal("Compile with unknown transform: err = nil, want error")

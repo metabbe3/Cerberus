@@ -10,3 +10,16 @@ Ruling (Task 5): ADR-0001 miss p99 <1ms unmeetable on M2 (GC/scheduler tail 1.5-
 Task 7: complete (commit ab5c5e5, tests: go test -race -count=1 ./internal/server -> ok; make test ./... + golangci-lint 0 issues + opa-check/opa-test 19/19 green)
 Task 8: complete (commit 0683b7d, tests: make lint test opa-check opa-test smoke -> all green, smoke 7/7; docker build + live container probe OK; tagged v0.1.0)
 Final: fixed golden-test timeout flake — reproduce attempted (not reproducible standalone), fix = 2s eval timeout in server test harness; suite green 3x -race; ALSO fixed make bench \$-escaping (benchmarks never ran) — verified BenchmarkDecide_Hit/Miss now execute
+Final: fixed internal-failure denies cached in LRU + singleflight eval under leader ctx — TestDecide_CancelledLeaderNotShared, TestDecide_InternalFailureNotCached RED->GREEN
+Final: fixed cerberus_decisions_total unbounded stage label cardinality (collapsed to llm|tool|other before WithLabelValues) — TestDecide_UnknownStageBoundedMetricLabel RED->GREEN
+Final: fixed audit shutdown losing events (writer flushed with cancelled signal ctx) — TestLogger_CancelledContextKeepsEvents RED->GREEN
+Final: fixed audit Emit taking Logger.mu on hot path (ring+fan-out moved to writer goroutine) — TestLogger_EmitTakesNoMutex RED->GREEN
+Final: fixed unknown stage bypassed key gate with bypass_unknown_keys=true (unknown-stage deny now evaluated before key gate) — test_unknown_stage_unregistered_key_bypass_denies RED->GREEN
+Final: fixed decodeData accepts JSON null / {} data document, wiping policy via PUT /v1/admin/data — TestLoad_RejectsNullAndEmptyDocument RED->GREEN
+Final: hardened Review Focus 3 admin tests: malformed-JSON PUT (`{"agents":`) + broken-.rego reload now assert 422, unchanged epoch, old snapshot still answering decides — TestAdmin_PutData_InvalidKeeps422, TestAdmin_Reload_BrokenRegoKeeps422 RED->GREEN (verified via injected 500 mutants)
+Final: fixed TestDecide_Singleflight not proving singleflight collapse — parked-leader eval hook, delta=1 impossible without sf; test RED(delta=11, sf removed)->GREEN
+Final: fixed stale/backwards cerberus_policy_epoch gauge (set per-request in Decide) — swap-time OnSwap hook in Store.Reload/ReplaceData — TestPolicyEpoch_TracksReloadWithoutTraffic, TestPolicyEpoch_NeverMovesBackwards RED->GREEN
+Final: fixed Cached flag and hit/miss counters wrong under singleflight (leader of joined flight said cached=true; waiters and in-flight re-check hits uncounted) — TestDecide_SingleflightCachedFlags RED->GREEN
+Final: fixed SSE handlers blocking graceful shutdown (parked dashboard held srv.Shutdown out 10s; streams now cancelled via RegisterOnShutdown) — TestEvents_ShutdownEndsStream RED->GREEN
+Final: fixed slow-loris body trickle parking goroutines in readBody forever (no ReadTimeout/IdleTimeout on http.Server) — TestServerCutsOffSlowBody RED->GREEN
+Final: fixed writeAtomic never fsyncing temp file or parent dir (power loss after PUT /v1/admin/data could leave data/prod.json empty/truncated, gateway unable to start) — TestStore_ReplaceData_FsyncsDataAndDir RED->GREEN

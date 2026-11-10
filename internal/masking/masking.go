@@ -39,6 +39,11 @@ func Compile(specs []Spec) ([]Rule, error) {
 		if err != nil {
 			return nil, fmt.Errorf("masking: pattern %q: %w", s.Pattern, err)
 		}
+		// A pattern that matches "" would insert the transform at every
+		// character position — reject it (e.g. \d*, x*, empty).
+		if re.MatchString("") {
+			return nil, fmt.Errorf("masking: pattern %q matches the empty string", s.Pattern)
+		}
 		rules = append(rules, Rule{Re: re, Transform: s.Transform, Scope: s.Scope})
 	}
 	return rules, nil
