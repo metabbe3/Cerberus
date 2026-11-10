@@ -5,7 +5,11 @@
 > dashboard, tanpa recompile.
 
 ## Status
-DESIGN (spec review) — belum implementasi. Owner: Nicholas. Dibangun oleh Hermes Agent.
+PLANNED — belum implementasi. Owner: Nicholas. Dibangun oleh Hermes Agent.
+
+- Arah & fase: [docs/ROADMAP.md](docs/ROADMAP.md)
+- Aturan kode (Go/Rego/TS): [docs/CONVENTIONS.md](docs/CONVENTIONS.md)
+- Plan eksekusi Phase 1 (core engine): [docs/superpowers/plans/2026-11-10-phase1-core-engine.md](docs/superpowers/plans/2026-11-10-phase1-core-engine.md)
 
 ## Konsep inti (dari diskusi owner, 10-11 Nov 2026)
 
