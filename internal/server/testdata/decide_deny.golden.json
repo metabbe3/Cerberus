@@ -1,0 +1,8 @@
+{
+  "decision": "deny",
+  "rule_id": "ai.tool.restricted",
+  "reason": "tool call kubernetes_delete_pod is restricted",
+  "masked_args": null,
+  "epoch": 1,
+  "cached": false
+}

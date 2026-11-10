@@ -1,0 +1,10 @@
+{
+  "decision": "allow",
+  "rule_id": "ai.tool.allow",
+  "reason": "tool call kubernetes_get_pods allowed",
+  "masked_args": {
+    "cmd": "k get pods --token [REDACTED]"
+  },
+  "epoch": 1,
+  "cached": false
+}
