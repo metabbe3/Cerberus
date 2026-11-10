@@ -56,7 +56,10 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatalf("audit.Open: %v", err)
 	}
-	eng, err := engine.New(store, al, engine.Options{})
+	// ponytail: 2s eval timeout — under -race + full-suite load a 10ms default
+	// budget flakes the golden tests (observed once); timeout behavior itself is
+	// covered by engine TestDecide_TimeoutDenies, so outcome tests don't need it.
+	eng, err := engine.New(store, al, engine.Options{EvalTimeout: 2 * time.Second})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}

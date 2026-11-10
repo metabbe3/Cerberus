@@ -18,7 +18,7 @@ opa-check:
 	opa check --strict policies/
 
 bench:
-	go test -run=^$ -bench=. -benchmem ./internal/engine
+	go test -run '^$$' -bench=. -benchmem ./internal/engine
 
 smoke:
 	scripts/smoke.sh
