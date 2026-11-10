@@ -5,7 +5,7 @@
 > dashboard, tanpa recompile.
 
 ## Status
-PLANNED — belum implementasi. Owner: Nicholas. Dibangun oleh Hermes Agent.
+IN PROGRESS — Phase 1 (core engine) sedang dibangun. Owner: Nicholas. Dibangun oleh Hermes Agent.
 
 - Arah & fase: [docs/ROADMAP.md](docs/ROADMAP.md)
 - Aturan kode (Go/Rego/TS): [docs/CONVENTIONS.md](docs/CONVENTIONS.md)

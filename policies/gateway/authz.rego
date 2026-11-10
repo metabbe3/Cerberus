@@ -35,7 +35,7 @@ tool_call_allowed(tool_name) if {
 	call_matches_pattern(pattern, tool_name)
 }
 
-tool_call_allowed(tool_name) if {
+tool_call_allowed(_) if {
 	not agent.allowed_tool_calls
 	not agent.restricted_tool_calls
 }
