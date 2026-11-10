@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/metabbe3/cerberus/internal/audit"
@@ -114,8 +115,13 @@ func (e *Engine) Decide(ctx context.Context, in Input) Decision {
 				return hit, nil
 			}
 			cacheMissesTotal.Inc()
-			d := e.eval(ctx, snap, in)
-			e.cache.Add(key, d) // masked result is what gets cached
+			// Detach from the leader's request ctx: one client's disconnect
+			// must not fail-closed the eval for every waiter on the flight.
+			// EvalTimeout still bounds the work.
+			d := e.eval(context.WithoutCancel(ctx), snap, in)
+			if !strings.HasPrefix(d.RuleID, "internal.") { // internal.* are transient; never cache them
+				e.cache.Add(key, d) // masked result is what gets cached
+			}
 			return d, nil
 		})
 		d = res.(Decision)

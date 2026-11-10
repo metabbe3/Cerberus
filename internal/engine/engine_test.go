@@ -165,6 +165,28 @@ func TestDecide_UnknownStageDenied(t *testing.T) {
 	}
 }
 
+func TestDecide_CancelledLeaderNotShared(t *testing.T) {
+	e := newTestEngine(t, &recSink{}, Options{})
+	in := toolInput("k-glob", "kubernetes_get_pods", nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // leader's client dropped mid-eval
+	d := e.Decide(ctx, in)
+	if d.Decision != "allow" {
+		t.Fatalf("decision = %s/%s, want allow (one client's disconnect must not fail-closed the flight)", d.Decision, d.RuleID)
+	}
+}
+
+func TestDecide_InternalFailureNotCached(t *testing.T) {
+	e := newTestEngine(t, &recSink{}, Options{EvalTimeout: 1 * time.Nanosecond})
+	in := toolInput("k-glob", "kubernetes_get_pods", nil)
+	if d := e.Decide(context.Background(), in); d.RuleID != "internal.timeout" {
+		t.Fatalf("rule_id = %s, want internal.timeout", d.RuleID)
+	}
+	if d := e.Decide(context.Background(), in); d.Cached {
+		t.Fatal("second call Cached=true: transient internal.timeout deny was cached for the epoch")
+	}
+}
+
 func TestDecide_EmitsAudit(t *testing.T) {
 	sink := &recSink{}
 	e := newTestEngine(t, sink, Options{})
