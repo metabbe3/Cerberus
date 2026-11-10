@@ -23,3 +23,12 @@ Final: fixed Cached flag and hit/miss counters wrong under singleflight (leader 
 Final: fixed SSE handlers blocking graceful shutdown (parked dashboard held srv.Shutdown out 10s; streams now cancelled via RegisterOnShutdown) — TestEvents_ShutdownEndsStream RED->GREEN
 Final: fixed slow-loris body trickle parking goroutines in readBody forever (no ReadTimeout/IdleTimeout on http.Server) — TestServerCutsOffSlowBody RED->GREEN
 Final: fixed writeAtomic never fsyncing temp file or parent dir (power loss after PUT /v1/admin/data could leave data/prod.json empty/truncated, gateway unable to start) — TestStore_ReplaceData_FsyncsDataAndDir RED->GREEN
+Final (Opus 5.5, inline after workflow agents died on API 403): fixed all remaining review findings —
+  581b149 rego: multi-arg-violation conflict, undefined reason on missing model/tool_call, non-boolean bypass flag, case-variant tool skipping constraints, team budget_limit; +22 opa tests (41/41)
+  390069c server/cmd/config: null/empty decide body 400, store I/O fault 500 w/o paths, owned HUP watcher, env-only admin token, validate route in 401 test
+  6353671 masking/engine: object keys masked, JSON leaves pinned, deterministic internal-failure-not-cached test, audit masked-args test
+  69d9b2b deploy/docs: /data writable by nonroot (verified live PUT 200), GUIDE quickstart + stage recipe fixed, smoke asserts no raw secret
+  3a75eb2 tests: audit Since assertions, store non-blocking proof, bench pinned to 8 goroutines
+Ruling (Final): config.bypass_unknown_teams stays reserved — a registered key is governed by its own entry (Global Constraints + prod.json); team lists/budget apply on top when the team is registered — cost if wrong: an owner wanting team-required mode needs a new rule
+Ruling (Final): -admin-token flag removed (secret on argv) — cost if wrong: operators who used the flag must switch to env
+Final verify: make build lint test opa-check opa-test bench smoke -> all green (opa 41/41, smoke 7/7, hit p99 27us, miss mean 19us / p99 1.05ms)
