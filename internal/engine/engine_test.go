@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -253,14 +255,28 @@ func TestDecide_CancelledLeaderNotShared(t *testing.T) {
 	}
 }
 
+// Deterministic: the eval hook sleeps past the eval budget on the first call
+// only, so the first decision is guaranteed internal.timeout and the second is
+// guaranteed a fresh, successful eval — a 1ns budget is not deterministic
+// (a fast eval can occasionally finish before the deadline check).
 func TestDecide_InternalFailureNotCached(t *testing.T) {
-	e := newTestEngine(t, &recSink{}, Options{EvalTimeout: 1 * time.Nanosecond})
+	e := newTestEngine(t, &recSink{}, Options{EvalTimeout: 20 * time.Millisecond})
+	var calls atomic.Int32
+	e.evalHook = func() {
+		if calls.Add(1) == 1 {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
 	in := toolInput("k-glob", "kubernetes_get_pods", nil)
 	if d := e.Decide(context.Background(), in); d.RuleID != "internal.timeout" {
-		t.Fatalf("rule_id = %s, want internal.timeout", d.RuleID)
+		t.Fatalf("first rule_id = %s, want internal.timeout", d.RuleID)
 	}
-	if d := e.Decide(context.Background(), in); d.Cached {
+	d := e.Decide(context.Background(), in)
+	if d.Cached {
 		t.Fatal("second call Cached=true: transient internal.timeout deny was cached for the epoch")
+	}
+	if d.RuleID != "ai.tool.allow" {
+		t.Fatalf("second rule_id = %s, want ai.tool.allow (fresh eval)", d.RuleID)
 	}
 }
 
@@ -352,5 +368,27 @@ func TestDecide_EmitsAudit(t *testing.T) {
 	}
 	if evs[0].Subject != "m1" {
 		t.Fatalf("event subject = %q, want %q (Model for llm stage)", evs[0].Subject, "m1")
+	}
+}
+
+// Mask before persist: the audit event (→ SQLite and the SSE stream) must carry
+// the masked args, never the raw secret.
+func TestDecide_AuditCarriesMaskedArgsOnly(t *testing.T) {
+	sink := &recSink{}
+	e := newTestEngine(t, sink, Options{})
+	e.Decide(context.Background(), toolInput("k-glob", "kubernetes_exec", map[string]any{"cmd": "use sk-abc123"}))
+	evs := sink.got()
+	if len(evs) != 1 {
+		t.Fatalf("sink got %d events, want 1", len(evs))
+	}
+	raw, err := json.Marshal(evs[0])
+	if err != nil {
+		t.Fatalf("marshal event: %v", err)
+	}
+	if strings.Contains(string(raw), "sk-abc123") {
+		t.Fatalf("audit event leaks the raw secret: %s", raw)
+	}
+	if got := evs[0].Args["cmd"]; got != "use [REDACTED]" {
+		t.Fatalf("event args.cmd = %v, want %q", got, "use [REDACTED]")
 	}
 }

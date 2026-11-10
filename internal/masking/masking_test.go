@@ -3,6 +3,7 @@ package masking
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"reflect"
 	"testing"
 )
@@ -54,6 +55,42 @@ func TestApply_Hash(t *testing.T) {
 	}
 	if !changed {
 		t.Fatal("changed = false, want true")
+	}
+}
+
+// Real decoded JSON leaves are float64, bool and nil — all must pass through
+// untouched (Review Focus 4), and a secret used as an object key is masked too.
+func TestApply_JSONLeavesAndKeys(t *testing.T) {
+	rules, err := Compile([]Spec{{Pattern: "sk-[A-Za-z0-9]+", Transform: "redact"}})
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	var in map[string]any
+	if err := json.Unmarshal([]byte(`{"n": 1.5, "b": true, "z": null, "sk-keysecret": "v", "s": "sk-x"}`), &in); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	out, changed := Apply(rules, "args", in)
+	if !changed {
+		t.Fatal("changed = false, want true")
+	}
+	got := out.(map[string]any)
+	if got["n"] != 1.5 || got["b"] != true || got["z"] != nil {
+		t.Fatalf("non-string leaves changed: n=%v b=%v z=%v", got["n"], got["b"], got["z"])
+	}
+	if _, ok := got["z"]; !ok {
+		t.Fatal("null leaf dropped; want key z kept with nil value")
+	}
+	if got["s"] != "[REDACTED]" {
+		t.Fatalf("s = %v, want [REDACTED]", got["s"])
+	}
+	if _, leaked := got["sk-keysecret"]; leaked {
+		t.Fatalf("secret object key survived masking: %v", got)
+	}
+	if got["[REDACTED]"] != "v" {
+		t.Fatalf("masked key missing its value: %v", got)
+	}
+	if _, ok := in["sk-keysecret"]; !ok {
+		t.Fatal("Apply mutated its input map")
 	}
 }
 

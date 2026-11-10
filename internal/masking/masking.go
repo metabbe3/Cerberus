@@ -65,12 +65,16 @@ func Apply(rules []Rule, scope string, v any) (out any, changed bool) {
 func apply(rules []Rule, scope string, v any) (any, bool) {
 	switch t := v.(type) {
 	case map[string]any:
+		// Keys are masked like values: a secret used as an object key must not
+		// reach the audit log. If two keys mask to the same string the later
+		// one wins — acceptable, since the originals were both secrets.
 		out := make(map[string]any, len(t))
 		changed := false
 		for k, val := range t {
 			nv, c := apply(rules, scope, val)
-			out[k] = nv
-			changed = changed || c
+			nk, kc := transform(rules, scope, k)
+			out[nk.(string)] = nv
+			changed = changed || c || kc
 		}
 		return out, changed
 	case []any:
