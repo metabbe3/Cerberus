@@ -67,11 +67,7 @@ func run() error {
 	watchHUP(store, log)
 
 	api := server.New(server.Deps{Engine: eng, Store: store, Audit: auditLog, AdminToken: cfg.AdminToken, Version: version})
-	srv := &http.Server{
-		Addr:              cfg.Addr,
-		Handler:           api,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
+	srv := newHTTPServer(cfg.Addr, api)
 	// End SSE streams when shutdown begins; the events handler otherwise ends
 	// only on client disconnect or audit close (below), and Shutdown would wait
 	// out its full deadline on any parked dashboard.
@@ -98,6 +94,21 @@ func run() error {
 		log.Error("audit close", "err", err)
 	}
 	return nil
+}
+
+// newHTTPServer builds the public listener: ReadTimeout bounds the whole
+// request read (headers+body) so slow-loris body tricklers are cut off instead
+// of parking a goroutine in readBody forever. It does not set WriteTimeout —
+// SSE streams write for minutes after the request is fully read. IdleTimeout
+// reaps keep-alive connections parked between requests.
+func newHTTPServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 }
 
 // watchHUP reloads policy+data from disk on SIGHUP; a failed reload keeps the
