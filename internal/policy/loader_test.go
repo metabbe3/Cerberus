@@ -69,9 +69,18 @@ func TestLoad_BadRegoReturnsErrCompile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "broken.rego"), []byte(broken), 0o600); err != nil {
 		t.Fatalf("write broken rego: %v", err)
 	}
-	_, err := Load(context.Background(), dir, []byte("{}"), 1)
+	_, err := Load(context.Background(), dir, loadTestData(t), 1)
 	if !errors.Is(err, ErrCompile) {
 		t.Fatalf("err = %v, want ErrCompile", err)
+	}
+}
+
+func TestLoad_RejectsNullAndEmptyDocument(t *testing.T) {
+	for _, doc := range []string{"null", "{}"} {
+		_, err := Load(context.Background(), policyDir, []byte(doc), 1)
+		if !errors.Is(err, ErrData) {
+			t.Fatalf("Load(%s): err = %v, want ErrData", doc, err)
+		}
 	}
 }
 

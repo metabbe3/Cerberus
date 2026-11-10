@@ -93,16 +93,26 @@ func bundleFilter(_ string, info os.FileInfo, _ int) bool {
 	return !strings.HasSuffix(name, ".rego") || strings.HasSuffix(name, "_test.rego")
 }
 
-// decodeData strictly decodes the data document, rejecting unknown top-level
-// keys so a typo can never silently disable part of the policy.
+// decodeData strictly decodes the data document, rejecting non-objects (JSON
+// null included), unknown top-level keys so a typo can never silently disable
+// part of the policy, and documents missing config or agents — an empty or
+// partial document would wipe the policy and disable every registered agent.
 func decodeData(dataJSON []byte) (map[string]any, error) {
 	var keys map[string]json.RawMessage
 	if err := json.Unmarshal(dataJSON, &keys); err != nil {
 		return nil, fmt.Errorf("policy: %w: %w", ErrData, err)
 	}
+	if keys == nil { // JSON null (or an otherwise non-object document)
+		return nil, fmt.Errorf("policy: %w: document is not a JSON object", ErrData)
+	}
 	for k := range keys {
 		if !allowedTopKeys[k] {
 			return nil, fmt.Errorf("policy: %w: unknown top-level key %q", ErrData, k)
+		}
+	}
+	for _, k := range []string{"config", "agents"} {
+		if _, ok := keys[k]; !ok {
+			return nil, fmt.Errorf("policy: %w: missing required top-level key %q", ErrData, k)
 		}
 	}
 	var data map[string]any
