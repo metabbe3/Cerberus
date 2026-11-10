@@ -182,6 +182,50 @@ releaseFlight:
 	}
 }
 
+// The singleflight leader that actually ran the eval must report Cached=false
+// even when others joined its flight, every waiter that skipped the eval must
+// report Cached=true and count as a cache hit, and the one real eval must be
+// the only miss — so hits+misses equals decisions.
+func TestDecide_SingleflightCachedFlags(t *testing.T) {
+	e := newTestEngine(t, &recSink{}, Options{})
+	in := toolInput("k-glob", "kubernetes_get_pods", nil)
+
+	// Park the leader inside its eval so a second identical caller provably
+	// joins the flight instead of racing past it.
+	parked := make(chan struct{})
+	release := make(chan struct{})
+	e.evalHook = func() {
+		close(parked)
+		<-release
+	}
+
+	hitBefore := testutil.ToFloat64(cacheHitsTotal)
+	missBefore := testutil.ToFloat64(cacheMissesTotal)
+
+	leaderRes := make(chan Decision, 1)
+	waiterRes := make(chan Decision, 1)
+	go func() { leaderRes <- e.Decide(context.Background(), in) }()
+	<-parked // leader inside eval, cache still empty
+	go func() { waiterRes <- e.Decide(context.Background(), in) }()
+	time.Sleep(20 * time.Millisecond) // let the waiter park inside the flight
+	close(release)
+
+	leader := <-leaderRes
+	waiter := <-waiterRes
+	if leader.Cached {
+		t.Errorf("leader that ran the eval reported Cached=true, want false (it did the fresh eval)")
+	}
+	if !waiter.Cached {
+		t.Errorf("flight waiter reported Cached=false, want true (it skipped the eval)")
+	}
+	if got := testutil.ToFloat64(cacheMissesTotal) - missBefore; got != 1 {
+		t.Errorf("cache misses delta = %v, want 1 (only the leader's eval)", got)
+	}
+	if got := testutil.ToFloat64(cacheHitsTotal) - hitBefore; got != 1 {
+		t.Errorf("cache hits delta = %v, want 1 (the waiter skipped the eval)", got)
+	}
+}
+
 func TestDecide_TimeoutDenies(t *testing.T) {
 	e := newTestEngine(t, &recSink{}, Options{EvalTimeout: 1 * time.Nanosecond})
 	d := e.Decide(context.Background(), toolInput("k-glob", "kubernetes_get_pods", nil))

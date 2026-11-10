@@ -15,7 +15,7 @@ var (
 
 	cacheHitsTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "cerberus_cache_hits_total",
-		Help: "Decisions served from the LRU eval cache.",
+		Help: "Decisions that skipped a fresh eval (LRU hit or shared flight).",
 	})
 
 	cacheMissesTotal = promauto.NewCounter(prometheus.CounterOpts{

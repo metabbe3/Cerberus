@@ -115,12 +115,18 @@ func (e *Engine) Decide(ctx context.Context, in Input) Decision {
 		hit.Cached = true
 		d = hit
 	} else {
-		res, _, shared := e.sf.Do(key, func() (any, error) {
+		// evaled is written only by the goroutine whose closure singleflight
+		// actually runs (the leader); waiters' closures never execute, so each
+		// caller reads its own untouched copy — race-free by construction.
+		var evaled bool
+		res, _, _ := e.sf.Do(key, func() (any, error) {
 			// Re-check: a flight may have filled the cache between our Get
 			// miss and this fn running, which would double-count the miss.
+			// This caller skipped a fresh eval: it counts as a hit below.
 			if hit, ok := e.cache.Get(key); ok {
 				return hit, nil
 			}
+			evaled = true
 			cacheMissesTotal.Inc()
 			// Detach from the leader's request ctx: one client's disconnect
 			// must not fail-closed the eval for every waiter on the flight.
@@ -132,7 +138,10 @@ func (e *Engine) Decide(ctx context.Context, in Input) Decision {
 			return d, nil
 		})
 		d = res.(Decision)
-		d.Cached = shared // waiters on a shared flight also skipped a fresh eval
+		if !evaled { // waiter on a shared flight, or leader whose re-check found the cache filled
+			cacheHitsTotal.Inc()
+			d.Cached = true
+		}
 	}
 
 	d.LatencyUS = time.Since(start).Microseconds()
