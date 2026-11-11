@@ -95,6 +95,29 @@ export async function validatePolicy(
   }
 }
 
+export async function reloadPolicy(): Promise<{ epoch: number }> {
+  const res = await engineFetch("/v1/admin/reload", {
+    method: "POST",
+  });
+  return (await res.json()) as { epoch: number };
+}
+
+export interface EngineStatus {
+  bundle_epoch: number;
+  revision: string;
+  active_revision: string;
+  policies_loaded_at: string;
+  snapshot_age: string;
+  last_reload: string;
+  cache_hit_rate?: number;
+  audit_queue_depth?: number;
+}
+
+export async function getStatus(): Promise<EngineStatus> {
+  const res = await engineFetch("/v1/admin/status");
+  return (await res.json()) as EngineStatus;
+}
+
 // Raw upstream response for the SSE proxy — the route streams res.body
 // straight to the client (no buffering layer of our own). The caller's
 // abort signal (the browser disconnect) must reach the upstream fetch, or
