@@ -73,3 +73,44 @@ func TestStr(t *testing.T) {
 		t.Errorf("Str(nil) != empty string")
 	}
 }
+
+func TestValidateRequest(t *testing.T) {
+	// Normal valid request
+	req1, _ := http.NewRequest(http.MethodPost, "http://example.com/api", nil)
+	req1.Header.Set("Content-Length", "10")
+	if err := ValidateRequest(req1); err != nil {
+		t.Errorf("valid request returned error: %v", err)
+	}
+
+	// Content-Length and Transfer-Encoding simultaneously
+	req2, _ := http.NewRequest(http.MethodPost, "http://example.com/api", nil)
+	req2.Header.Set("Content-Length", "10")
+	req2.Header.Set("Transfer-Encoding", "chunked")
+	if err := ValidateRequest(req2); err == nil {
+		t.Error("expected error for CL + TE simultaneously, got nil")
+	}
+
+	// Duplicate Content-Length headers
+	req3, _ := http.NewRequest(http.MethodPost, "http://example.com/api", nil)
+	req3.Header.Add("Content-Length", "10")
+	req3.Header.Add("Content-Length", "20")
+	if err := ValidateRequest(req3); err == nil {
+		t.Error("expected error for duplicate Content-Length headers, got nil")
+	}
+
+	// Duplicate Host headers
+	req4, _ := http.NewRequest(http.MethodGet, "http://example.com/api", nil)
+	req4.Header.Add("Host", "example.com")
+	req4.Header.Add("Host", "attacker.com")
+	if err := ValidateRequest(req4); err == nil {
+		t.Error("expected error for duplicate Host headers, got nil")
+	}
+
+	// Duplicate Transfer-Encoding headers
+	req5, _ := http.NewRequest(http.MethodPost, "http://example.com/api", nil)
+	req5.Header.Add("Transfer-Encoding", "chunked")
+	req5.Header.Add("Transfer-Encoding", "identity")
+	if err := ValidateRequest(req5); err == nil {
+		t.Error("expected error for duplicate Transfer-Encoding headers, got nil")
+	}
+}

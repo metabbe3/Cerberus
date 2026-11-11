@@ -30,9 +30,15 @@ decide_closed(inp) := out if {
 
 fixture_teams := {
 	"t-http": {
-		"allowed_hosts": ["*.internal.corp", "api.github.com"],
+		"allowed_hosts": ["*.internal.corp", "api.github.com", "apple.com"],
 		"denied_hosts": ["evil.com", "*.malicious.net"],
 		"allowed_methods": ["GET", "POST"],
+		"allowed_ports": [80, 443, 8080],
+	},
+	"t-http-custom-port": {
+		"allowed_hosts": ["api.github.com"],
+		"allowed_methods": ["GET", "POST"],
+		"allowed_ports": [80, 443, 3128],
 	},
 }
 
@@ -40,12 +46,21 @@ fixture_agents := {
 	"k-http": {
 		"name": "http-agent",
 		"team_id": "t-http",
-		"allowed_hosts": ["*.internal.corp", "api.github.com"],
+		"allowed_hosts": ["*.internal.corp", "api.github.com", "apple.com"],
 		"denied_hosts": ["evil.com", "*.malicious.net"],
 		"allowed_methods": ["GET", "POST"],
+		"allowed_ports": [80, 443, 8080],
 	},
 	"k-http-open": {
 		"name": "http-open-agent",
+	},
+	"k-http-default-ports": {
+		"name": "http-default-ports-agent",
+		"allowed_hosts": ["api.github.com", "example.com"],
+	},
+	"k-http-custom-port": {
+		"name": "http-custom-port-agent",
+		"team_id": "t-http-custom-port",
 	},
 }
 
@@ -104,6 +119,85 @@ test_http_method_not_allowed if {
 	})
 	out.decision == "deny"
 	out.rule_id == "http.method_not_allowed"
+}
+
+# Port tests: port 25, 53, 3128 default deny; 443/80 allow; explicitly allowed port allow
+test_http_port_25_denied if {
+	out := decide({
+		"stage": "http",
+		"key_id": "k-http-default-ports",
+		"resource": "http://api.github.com:25/mail",
+		"args": {"method": "POST", "port": 25},
+	})
+	out.decision == "deny"
+	out.rule_id == "http.port_not_allowed"
+}
+
+test_http_port_53_denied if {
+	out := decide({
+		"stage": "http",
+		"key_id": "k-http-default-ports",
+		"resource": "http://api.github.com:53/dns",
+		"args": {"method": "GET", "port": 53},
+	})
+	out.decision == "deny"
+	out.rule_id == "http.port_not_allowed"
+}
+
+test_http_port_3128_default_denied if {
+	out := decide({
+		"stage": "http",
+		"key_id": "k-http-default-ports",
+		"resource": "http://api.github.com:3128/proxy",
+		"args": {"method": "GET", "port": 3128},
+	})
+	out.decision == "deny"
+	out.rule_id == "http.port_not_allowed"
+}
+
+test_http_port_3128_explicit_allowed if {
+	out := decide({
+		"stage": "http",
+		"key_id": "k-http-custom-port",
+		"resource": "http://api.github.com:3128/proxy",
+		"args": {"method": "GET", "port": 3128},
+	})
+	out.decision == "allow"
+	out.rule_id == "http.allow"
+}
+
+test_http_port_80_default_allowed if {
+	out := decide({
+		"stage": "http",
+		"key_id": "k-http-default-ports",
+		"resource": "http://example.com/test",
+		"args": {"method": "GET", "port": 80},
+	})
+	out.decision == "allow"
+	out.rule_id == "http.allow"
+}
+
+test_http_port_443_default_allowed if {
+	out := decide({
+		"stage": "http",
+		"key_id": "k-http-default-ports",
+		"resource": "https://example.com/test",
+		"args": {"method": "GET", "port": 443},
+	})
+	out.decision == "allow"
+	out.rule_id == "http.allow"
+}
+
+# Punycode / Homoglyph fail-closed test: xn--pple-4td.com not in allowed_hosts -> deny
+test_http_punycode_homoglyph_denied if {
+	out := decide({
+		"stage": "http",
+		"key_id": "k-http",
+		"resource": "https://xn--pple-4td.com/login",
+		"args": {"method": "GET"},
+	})
+	out.decision == "deny"
+	out.rule_id == "http.host_not_allowed"
 }
 
 # Layer 3: Bypass

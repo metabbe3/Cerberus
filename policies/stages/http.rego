@@ -26,6 +26,27 @@ extract_host(raw) := h if {
 
 req_host := extract_host(resource)
 
+# Extract port from URL or host:port string.
+extract_port(raw) := p if {
+	contains(raw, "://")
+	after_proto := split(raw, "://")[1]
+	host_port := split(after_proto, "/")[0]
+	contains(host_port, ":")
+	p = split(host_port, ":")[1]
+} else := p if {
+	not contains(raw, "://")
+	host_port := split(raw, "/")[0]
+	contains(host_port, ":")
+	p = split(host_port, ":")[1]
+} else := "443" if {
+	startswith(raw, "https://")
+} else := "80" if {
+	startswith(raw, "http://")
+} else := "443"
+
+raw_port := object.get(args, "port", extract_port(resource))
+req_port := sprintf("%v", [raw_port])
+
 method := upper(object.get(args, "method", object.get(input, "action", "GET")))
 
 # ---------- http decision else-chain ----------
@@ -61,6 +82,12 @@ http_decision := {
 	"reason": sprintf("host %q not in allowed_hosts", [req_host]),
 } if {
 	host_not_allowed
+} else := {
+	"decision": "deny",
+	"rule_id": "http.port_not_allowed",
+	"reason": sprintf("port %v not in allowed_ports", [req_port]),
+} if {
+	port_not_allowed
 } else := {
 	"decision": "deny",
 	"rule_id": "http.method_not_allowed",
@@ -124,6 +151,36 @@ method_allowed if {
 method_allowed if {
 	some m in authz.team.allowed_methods
 	upper(m) == method
+}
+
+# Port allowlist: default to [80, 443] for allowlisted hosts unless configured on agent or team
+default_allowed_ports := ["80", "443", 80, 443]
+
+port_restriction_active if allow_hosts_configured
+port_restriction_active if allow_ports_configured
+
+port_allowed if {
+	not allow_ports_configured
+	some p in default_allowed_ports
+	sprintf("%v", [p]) == req_port
+}
+
+port_allowed if {
+	some p in authz.agent.allowed_ports
+	sprintf("%v", [p]) == req_port
+}
+
+port_allowed if {
+	some p in authz.team.allowed_ports
+	sprintf("%v", [p]) == req_port
+}
+
+allow_ports_configured if authz.agent.allowed_ports
+allow_ports_configured if authz.team.allowed_ports
+
+port_not_allowed if {
+	port_restriction_active
+	not port_allowed
 }
 
 # ---------- shield prod checks (P0.3) ----------

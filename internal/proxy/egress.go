@@ -61,6 +61,17 @@ func NewEgressProxy(eng *engine.Engine, cfg EgressConfig) (*EgressProxy, error) 
 
 // ServeHTTP handles both forward HTTP requests and HTTPS CONNECT tunnels.
 func (p *EgressProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if err := util.ValidateRequest(r); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error":   "bad request",
+			"rule_id": "proxy.egress.malformed_request",
+			"reason":  err.Error(),
+		})
+		return
+	}
+
 	keyID := p.resolveKey(r)
 	if p.cfg.Limiter != nil {
 		v := p.cfg.Limiter.Allow(r.Context(), keyID, "http")
@@ -146,7 +157,7 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 						Stage:    "http",
 						KeyID:    keyID,
 						Action:   "CONNECT",
-						Resource: ip.String(),
+						Resource: net.JoinHostPort(ip.String(), port),
 						Args: map[string]any{
 							"method": "CONNECT",
 							"host":   ip.String(),
@@ -154,7 +165,7 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 						},
 					}
 					ipDec := p.engine.Decide(r.Context(), ipIn)
-					if !ipDec.Allowed() {
+					if strings.HasPrefix(ipDec.RuleID, "shield.prod.") {
 						p.writeForbidden(w, ipDec)
 						return
 					}
@@ -229,6 +240,12 @@ func (p *EgressProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	keyID := p.resolveKey(r)
+	hostOnly, port := util.ExtractHost(r.Host)
+	if port == "443" && !strings.Contains(r.Host, ":") {
+		if r.URL.Scheme == "http" || strings.HasPrefix(destURL, "http://") {
+			port = "80"
+		}
+	}
 
 	in := engine.Input{
 		Stage:    "http",
@@ -237,7 +254,8 @@ func (p *EgressProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		Resource: destURL,
 		Args: map[string]any{
 			"method": r.Method,
-			"host":   r.Host,
+			"host":   hostOnly,
+			"port":   port,
 			"path":   r.URL.Path,
 		},
 	}
@@ -248,7 +266,6 @@ func (p *EgressProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// DNS check: if host is not a raw IP, resolve and check each IP against prod shield
-	hostOnly, _ := util.ExtractHost(r.Host)
 	if net.ParseIP(hostOnly) == nil && p.cfg.LookupIP != nil {
 		if ips, err := p.cfg.LookupIP(hostOnly); err == nil {
 			for _, ip := range ips {
@@ -256,15 +273,16 @@ func (p *EgressProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 					Stage:    "http",
 					KeyID:    keyID,
 					Action:   r.Method,
-					Resource: ip.String(),
+					Resource: net.JoinHostPort(ip.String(), port),
 					Args: map[string]any{
 						"method": r.Method,
 						"host":   ip.String(),
+						"port":   port,
 						"path":   r.URL.Path,
 					},
 				}
 				ipDec := p.engine.Decide(r.Context(), ipIn)
-				if !ipDec.Allowed() {
+				if strings.HasPrefix(ipDec.RuleID, "shield.prod.") {
 					p.writeForbidden(w, ipDec)
 					return
 				}

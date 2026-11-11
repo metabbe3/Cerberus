@@ -94,7 +94,7 @@ func newHarnessIn(t *testing.T, dir string) *harness {
 		AdminToken: adminToken, Version: "test",
 	})
 	h.ts = httptest.NewServer(h.api)
-	t.Cleanup(func() { h.ts.Close(); _ = al.Close() }) // server first, then logger
+	t.Cleanup(func() { h.ts.CloseClientConnections(); h.ts.Close(); _ = al.Close() }) // server first, then logger
 	return h
 }
 
@@ -1127,5 +1127,66 @@ func TestBreakGlass_EndToEnd(t *testing.T) {
 	_ = json.NewDecoder(resp5.Body).Decode(&dec5)
 	if dec5.Decision != "deny" {
 		t.Fatalf("expected deny after deactivation, got %s", dec5.Decision)
+	}
+}
+
+// 8A.5: Audit untuk cache-hit: dua panggilan decide identik -> keduanya tercatat di /v1/audit
+func TestServer_Decide_AuditCacheHit(t *testing.T) {
+	h := newHarness(t)
+
+	body := `{"stage":"tool","key_id":"k-glob","tool_call":"kubernetes_get_pods","args":{"cmd":"k get pods"}}`
+
+	// Call 1: Miss
+	resp1 := h.do(t, http.MethodPost, "/v1/decide", "application/json", body, false)
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("call 1 status = %d, want 200", resp1.StatusCode)
+	}
+	var dec1 engine.Decision
+	_ = json.NewDecoder(resp1.Body).Decode(&dec1)
+	_ = resp1.Body.Close()
+	if dec1.Cached {
+		t.Fatalf("call 1 should not be cached")
+	}
+
+	// Call 2: Hit
+	resp2 := h.do(t, http.MethodPost, "/v1/decide", "application/json", body, false)
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("call 2 status = %d, want 200", resp2.StatusCode)
+	}
+	var dec2 engine.Decision
+	_ = json.NewDecoder(resp2.Body).Decode(&dec2)
+	_ = resp2.Body.Close()
+	if !dec2.Cached {
+		t.Fatalf("call 2 should be cached")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Query /v1/audit: both events must be recorded in /v1/audit
+	auditResp := h.do(t, http.MethodGet, "/v1/audit?key_id=k-glob", "", "", true)
+	if auditResp.StatusCode != http.StatusOK {
+		t.Fatalf("audit status = %d, want 200", auditResp.StatusCode)
+	}
+	var evs []audit.Event
+	if err := json.NewDecoder(auditResp.Body).Decode(&evs); err != nil {
+		t.Fatalf("decode audit events: %v", err)
+	}
+	_ = auditResp.Body.Close()
+
+	var matchCount int
+	var cachedCount int
+	for _, e := range evs {
+		if e.KeyID == "k-glob" && e.Subject == "kubernetes_get_pods" {
+			matchCount++
+			if e.Cached {
+				cachedCount++
+			}
+		}
+	}
+	if matchCount < 2 {
+		t.Fatalf("expected at least 2 events for identical decide calls in /v1/audit, got %d", matchCount)
+	}
+	if cachedCount < 1 {
+		t.Fatalf("expected at least 1 cache hit recorded in /v1/audit, got %d", cachedCount)
 	}
 }

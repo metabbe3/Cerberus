@@ -3,6 +3,7 @@ package util
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -133,4 +134,31 @@ func ExtractHost(raw string) (host string, port string) {
 		return host, "443"
 	}
 	return h, p
+}
+
+// ValidateRequest checks for malformed requests (e.g. HTTP smuggling vectors like
+// Content-Length and Transfer-Encoding present together, duplicate Content-Length/Host headers).
+func ValidateRequest(r *http.Request) error {
+	if r == nil {
+		return nil
+	}
+	// Check for Content-Length and Transfer-Encoding present simultaneously
+	hasCL := r.ContentLength > 0 || r.Header.Get("Content-Length") != "" || len(r.Header.Values("Content-Length")) > 0
+	hasTE := len(r.TransferEncoding) > 0 || r.Header.Get("Transfer-Encoding") != "" || len(r.Header.Values("Transfer-Encoding")) > 0
+	if hasCL && hasTE {
+		return fmt.Errorf("malformed request: Content-Length and Transfer-Encoding both present")
+	}
+	// Check duplicate Content-Length headers
+	if len(r.Header.Values("Content-Length")) > 1 {
+		return fmt.Errorf("malformed request: duplicate Content-Length header")
+	}
+	// Check duplicate Host headers
+	if len(r.Header.Values("Host")) > 1 {
+		return fmt.Errorf("malformed request: duplicate Host header")
+	}
+	// Check duplicate Transfer-Encoding headers
+	if len(r.Header.Values("Transfer-Encoding")) > 1 {
+		return fmt.Errorf("malformed request: duplicate Transfer-Encoding header")
+	}
+	return nil
 }

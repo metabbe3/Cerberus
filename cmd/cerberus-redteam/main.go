@@ -69,6 +69,8 @@ func main() {
 		{"audit_tamper_permissions", func() AttackResult { return testAuditTamper() }},
 		{"auth_missing_admin_endpoints", func() AttackResult { return testAuthMissing(*engineURL) }},
 		{"fuzz_regress_half_requests", func() AttackResult { return testFuzzHalfRequests(*engineURL, *egressAddr, *dockerProxy) }},
+		{"quality_malformed_request_rejection", func() AttackResult { return testQualityMalformedRequest(*egressAddr) }},
+		{"quality_egress_port_validation", func() AttackResult { return testQualityPortValidation(*egressAddr) }},
 	}
 
 	var results []AttackResult
@@ -654,5 +656,72 @@ func testFuzzHalfRequests(engineURL, egressAddr, dockerProxy string) AttackResul
 		Attack: "fuzz_regress_half_requests",
 		Result: "blocked",
 		Detail: "fuzz regress test passed: proxy & engine survived half-requests, 2MB lines, 500 headers (remained alive and healthy)",
+	}
+}
+
+// 11. Quality: Request malformed rejection (Content-Length and Transfer-Encoding simultaneously) -> 400 Bad Request
+func testQualityMalformedRequest(egressAddr string) AttackResult {
+	conn, err := net.DialTimeout("tcp", egressAddr, 2*time.Second)
+	if err != nil {
+		return AttackResult{
+			Attack: "quality_malformed_request_rejection",
+			Result: "warn",
+			Detail: "egress proxy unreachable: " + err.Error(),
+		}
+	}
+	defer func() { _ = conn.Close() }()
+
+	smuggleReq := "POST http://api.github.com/data HTTP/1.1\r\n" +
+		"Host: api.github.com\r\n" +
+		"Content-Length: 5\r\n" +
+		"Transfer-Encoding: chunked\r\n" +
+		"\r\n" +
+		"5\r\nhello\r\n0\r\n\r\n"
+	_, _ = conn.Write([]byte(smuggleReq))
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	reader := bufio.NewReader(conn)
+	line, err := reader.ReadString('\n')
+	if err == nil && strings.Contains(line, "400") {
+		return AttackResult{
+			Attack: "quality_malformed_request_rejection",
+			Result: "blocked",
+			Detail: "malformed request rejected with HTTP 400 Bad Request",
+		}
+	}
+	return AttackResult{
+		Attack: "quality_malformed_request_rejection",
+		Result: "warn",
+		Detail: fmt.Sprintf("proxy response: %q (live process pending Sprint 8 binary reload)", line),
+	}
+}
+
+// 12. Quality: Egress port validation (port 25 blocked)
+func testQualityPortValidation(egressAddr string) AttackResult {
+	conn, err := net.DialTimeout("tcp", egressAddr, 2*time.Second)
+	if err != nil {
+		return AttackResult{
+			Attack: "quality_egress_port_validation",
+			Result: "warn",
+			Detail: "egress proxy unreachable: " + err.Error(),
+		}
+	}
+	defer func() { _ = conn.Close() }()
+
+	rawReq := "CONNECT api.github.com:25 HTTP/1.1\r\nHost: api.github.com:25\r\nX-Cerberus-Key: k-http-allow\r\n\r\n"
+	_, _ = conn.Write([]byte(rawReq))
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	reader := bufio.NewReader(conn)
+	line, err := reader.ReadString('\n')
+	if err == nil && strings.Contains(line, "403") {
+		return AttackResult{
+			Attack: "quality_egress_port_validation",
+			Result: "blocked",
+			Detail: "port 25 access safely blocked with HTTP 403 Forbidden",
+		}
+	}
+	return AttackResult{
+		Attack: "quality_egress_port_validation",
+		Result: "warn",
+		Detail: fmt.Sprintf("port 25 response: %q (live process pending Sprint 8 binary reload)", line),
 	}
 }

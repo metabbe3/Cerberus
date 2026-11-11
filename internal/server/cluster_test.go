@@ -45,6 +45,7 @@ func TestCluster_GossipSync_PullFromAuthoritativePeer(t *testing.T) {
 	})
 	ts1 := httptest.NewServer(srv1)
 	defer ts1.Close()
+	defer srv1.ShutdownStreams()
 
 	// Install bundle-rev-alpha on Node 1
 	dataRaw, err := os.ReadFile(testData)
@@ -100,6 +101,7 @@ func TestCluster_GossipSync_PullFromAuthoritativePeer(t *testing.T) {
 	})
 	ts2 := httptest.NewServer(srv2)
 	defer ts2.Close()
+	defer srv2.ShutdownStreams()
 
 	// Initial check: Node 2 should NOT have bundle-rev-alpha
 	if store2.Current().Revision == "bundle-rev-alpha" {
@@ -141,6 +143,7 @@ func TestCluster_AuditMergeSort(t *testing.T) {
 	})
 	ts2 := httptest.NewServer(srv2)
 	defer ts2.Close()
+	defer srv2.ShutdownStreams()
 
 	srv1 := New(Deps{
 		Engine:     eng1,
@@ -153,6 +156,7 @@ func TestCluster_AuditMergeSort(t *testing.T) {
 	})
 	ts1 := httptest.NewServer(srv1)
 	defer ts1.Close()
+	defer srv1.ShutdownStreams()
 
 	// Emit interleaved events into both nodes
 	t0 := time.Now().Add(-10 * time.Minute)
