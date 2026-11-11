@@ -288,12 +288,6 @@ func copyDir(src, dst string) error {
 	})
 }
 
-// dryRunSmoke verifies that the candidate snapshot satisfies essential invariants:
-// prod shield protects dangerous operations and clean queries pass.
-func dryRunSmoke(ctx context.Context, snap *Snapshot) error {
-	return DryRunSmoke(ctx, snap)
-}
-
 func strVal(v any) string {
 	return util.Str(v)
 }
@@ -362,7 +356,7 @@ func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, err
 	snap.Revision = b.Revision
 
 	// Dry-run eval smoke: subset test fixtures must pass before activation
-	if err := dryRunSmoke(ctx, snap); err != nil {
+	if err := DryRunSmoke(ctx, snap); err != nil {
 		slog.Warn("bundle rejected: dry-run smoke test failed", "err", err)
 		return nil, fmt.Errorf("bundle: smoke test failed: %w", err)
 	}

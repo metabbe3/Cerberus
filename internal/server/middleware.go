@@ -99,10 +99,6 @@ func isJSONContentType(h string) bool {
 // APIError represents a structured error response with code and message.
 type APIError = util.APIError
 
-func statusCodeToCode(status int) string {
-	return util.StatusCodeToCode(status)
-}
-
 // admin guards the admin routes with the bearer token, compared in constant
 // time. An empty configured token rejects everything.
 func (s *Server) admin(next http.HandlerFunc) http.HandlerFunc {
