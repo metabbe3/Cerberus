@@ -107,6 +107,7 @@ func New(d Deps) *Server {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
+	mux.HandleFunc("GET /v1/health/components", s.admin(s.componentsHandler))
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("GET /metrics", promhttp.Handler().ServeHTTP)
 	mux.HandleFunc("GET /v1/metrics", promhttp.Handler().ServeHTTP)

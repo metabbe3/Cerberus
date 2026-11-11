@@ -9,14 +9,17 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx driver for database/sql
 )
 
-// PG is a PostgreSQL mirror of the gateway data document.
+// PG is a PostgreSQL mirror of the gateway data document. Every operation is
+// logged with its duration so gateway-data changes are traceable end to end.
 type PG struct {
-	db *sql.DB
+	db  *sql.DB
+	log *slog.Logger
 }
 
 // Open connects using a DSN (postgres://... or pgx://...). Callers must Close.
@@ -31,17 +34,33 @@ func Open(ctx context.Context, dsn string) (*PG, error) {
 		db.Close()
 		return nil, fmt.Errorf("store: ping pg: %w", err)
 	}
-	return &PG{db: db}, nil
+	return &PG{db: db, log: slog.Default().With("component", "pg_store")}, nil
 }
 
 // Close releases the connection pool.
 func (p *PG) Close() error { return p.db.Close() }
+
+// Ping verifies the connection is alive (used by /v1/health/components).
+func (p *PG) Ping(ctx context.Context) error {
+	return p.db.PingContext(ctx)
+}
 
 // LoadData rebuilds the gateway data document {config, teams, agents,
 // blocked_patterns, domains, prod_shield, ssh} from PG tables.
 // Missing optional tables degrade to empty values; agents/config are required
 // non-empty (same fail-closed contract as decodeData).
 func (p *PG) LoadData(ctx context.Context) (map[string]any, error) {
+	start := time.Now()
+	out, err := p.loadData(ctx)
+	if err != nil {
+		p.log.Error("pg load_data failed", "err", err, "dur_ms", time.Since(start).Milliseconds())
+		return nil, err
+	}
+	p.log.Info("pg load_data", "agents", len(out["agents"].(map[string]any)), "dur_ms", time.Since(start).Milliseconds())
+	return out, nil
+}
+
+func (p *PG) loadData(ctx context.Context) (map[string]any, error) {
 	out := map[string]any{}
 
 	var cfgJSON string
@@ -148,6 +167,18 @@ func (p *PG) LoadData(ctx context.Context) (map[string]any, error) {
 // (delete+insert tables it owns; upsert singletons). Agents absent from the
 // document are disabled, not deleted — audit history keeps key_ids stable.
 func (p *PG) SaveData(ctx context.Context, data map[string]any) error {
+	start := time.Now()
+	err := p.saveData(ctx, data)
+	if err != nil {
+		p.log.Error("pg save_data failed", "err", err, "dur_ms", time.Since(start).Milliseconds())
+		return err
+	}
+	agents, _ := data["agents"].(map[string]any)
+	p.log.Info("pg save_data", "agents", len(agents), "dur_ms", time.Since(start).Milliseconds())
+	return nil
+}
+
+func (p *PG) saveData(ctx context.Context, data map[string]any) error {
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
@@ -281,6 +312,7 @@ func (p *PG) ListTemplates(ctx context.Context) ([]map[string]any, error) {
 
 // UpsertTemplate inserts or updates a custom wizard template.
 func (p *PG) UpsertTemplate(ctx context.Context, id, name, desc, stage string, policy map[string]any) error {
+	start := time.Now()
 	polJSON, _ := json.Marshal(policy)
 	_, err := p.db.ExecContext(ctx, `
 		INSERT INTO templates (template_id, name, description, stage, policy, builtin, updated_at)
@@ -288,19 +320,24 @@ func (p *PG) UpsertTemplate(ctx context.Context, id, name, desc, stage string, p
 		ON CONFLICT (template_id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, stage = EXCLUDED.stage, policy = EXCLUDED.policy, updated_at = now()`,
 		id, name, desc, stage, string(polJSON))
 	if err != nil {
+		p.log.Error("pg upsert_template failed", "id", id, "err", err)
 		return fmt.Errorf("store: upsert template: %w", err)
 	}
+	p.log.Info("pg upsert_template", "id", id, "stage", stage, "dur_ms", time.Since(start).Milliseconds())
 	return nil
 }
 
 // DeleteTemplate removes a custom template (builtins are protected).
 func (p *PG) DeleteTemplate(ctx context.Context, id string) error {
+	start := time.Now()
 	res, err := p.db.ExecContext(ctx, `DELETE FROM templates WHERE template_id = $1 AND NOT builtin`, id)
 	if err != nil {
+		p.log.Error("pg delete_template failed", "id", id, "err", err)
 		return fmt.Errorf("store: delete template: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("store: template %s not found or builtin", id)
 	}
+	p.log.Info("pg delete_template", "id", id, "dur_ms", time.Since(start).Milliseconds())
 	return nil
 }
