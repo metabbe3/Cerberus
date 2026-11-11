@@ -772,9 +772,13 @@ func TestAdmin_Status(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 
-	// Make a decision so stats are non-zero
+	// Make an allow decision and a deny decision so stats & top denies are populated
 	h.do(t, http.MethodPost, "/v1/decide", "application/json", decideAllowBody, false)
+	denyBody := `{"stage":"tool","key_id":"k-open","tool_call":"bash","args":{"cmd":"rm -rf /"}}`
+	h.do(t, http.MethodPost, "/v1/decide", "application/json", denyBody, false)
+	time.Sleep(50 * time.Millisecond)
 
+	// Layer 1: Happy path - GET /v1/status returns 200 with all status metrics including Sprint 2D fields
 	resp := h.do(t, http.MethodGet, "/v1/status", "", "", false)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -783,13 +787,46 @@ func TestAdmin_Status(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
 		t.Fatalf("decode status: %v", err)
 	}
-	for _, key := range []string{"bundle_epoch", "policies_loaded_at", "last_reload", "eval_total/24h", "cache_hit_rate", "audit_queue_depth"} {
+	for _, key := range []string{
+		"bundle_epoch", "revision", "active_revision",
+		"policies_loaded_at", "snapshot_age", "snapshot_age_seconds",
+		"last_reload", "eval_total/24h", "cache_hit_rate",
+		"audit_queue_depth", "top_denies_24h",
+	} {
 		if _, ok := st[key]; !ok {
 			t.Errorf("status missing key %q: %+v", key, st)
 		}
 	}
 	if st["bundle_epoch"].(float64) < 1 {
 		t.Errorf("bundle_epoch = %v, want >= 1", st["bundle_epoch"])
+	}
+
+	// Verify top_denies_24h contains the denied rule
+	topDenies, ok := st["top_denies_24h"].([]any)
+	if !ok {
+		t.Fatalf("top_denies_24h is not a slice: %+v", st["top_denies_24h"])
+	}
+	var foundShieldDeny bool
+	for _, item := range topDenies {
+		m, ok := item.(map[string]any)
+		if ok && m["rule_id"] == "shield.cmd.dangerous" && m["count"].(float64) >= 1 {
+			foundShieldDeny = true
+		}
+	}
+	if !foundShieldDeny {
+		t.Errorf("top_denies_24h missing shield.cmd.dangerous: %+v", topDenies)
+	}
+
+	// Layer 2: Tamper / method not allowed
+	badMethod := h.do(t, http.MethodPost, "/v1/status", "", "", false)
+	if badMethod.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /v1/status = %d, want 405", badMethod.StatusCode)
+	}
+
+	// Layer 3: Fail-closed / robustness - GET /v1/admin/status with admin token also returns 200
+	adminResp := h.do(t, http.MethodGet, "/v1/admin/status", "", "", true)
+	if adminResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /v1/admin/status = %d, want 200", adminResp.StatusCode)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -249,6 +250,58 @@ func (l *Logger) Since(lastID int64) []Event {
 // QueueDepth returns the number of pending events waiting in the audit channel.
 func (l *Logger) QueueDepth() int {
 	return len(l.ch)
+}
+
+// RuleDenyCount records the count of denies attributed to a rule_id.
+type RuleDenyCount struct {
+	RuleID string `json:"rule_id"`
+	Count  int64  `json:"count"`
+}
+
+// TopDenies returns the top-N rule_ids by deny count since the given time.
+func (l *Logger) TopDenies(ctx context.Context, since time.Time, limit int) ([]RuleDenyCount, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	maxID, counts, err := l.mgr.denyCountsSince(ctx, since)
+	if err != nil {
+		return nil, err
+	}
+	if counts == nil {
+		counts = make(map[string]int64)
+	}
+
+	// Also inspect ring buffer for events emitted after SQLite's maxID
+	l.mu.Lock()
+	for _, ev := range l.ring.recent(l.opts.RingSize) {
+		if ev.ID > maxID && ev.Decision == "deny" && !ev.Time.Before(since) {
+			counts[ev.RuleID]++
+		}
+	}
+	l.mu.Unlock()
+
+	result := make([]RuleDenyCount, 0, len(counts))
+	for ruleID, count := range counts {
+		result = append(result, RuleDenyCount{RuleID: ruleID, Count: count})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Count != result[j].Count {
+			return result[i].Count > result[j].Count
+		}
+		return result[i].RuleID < result[j].RuleID
+	})
+	if len(result) > limit {
+		result = result[:limit]
+	}
+	return result, nil
+}
+
+// TopDenies24h returns the top-10 rule_ids by deny count in the past 24 hours.
+func (l *Logger) TopDenies24h(ctx context.Context, limit int) ([]RuleDenyCount, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	return l.TopDenies(ctx, time.Now().Add(-24*time.Hour), limit)
 }
 
 // Close flushes pending batches, stops writer & shipper, and closes SQLite.

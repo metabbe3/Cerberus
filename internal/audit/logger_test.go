@@ -557,3 +557,78 @@ func TestLogger_ShipOut(t *testing.T) {
 	}
 }
 
+func TestLogger_TopDenies24h(t *testing.T) {
+	ctx := context.Background()
+	dbDir := t.TempDir()
+	dbPath := filepath.Join(dbDir, "audit.db")
+
+	l, err := Open(ctx, dbPath, Options{
+		BatchSize:  2,
+		FlushEvery: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer l.Close()
+
+	now := time.Now()
+
+	// Layer 1: Happy path - emit deny events across multiple rule_ids
+	// rule-a: 5 denies
+	// rule-b: 3 denies
+	// rule-c: 1 deny
+	// rule-d: 1 allow (must NOT be counted)
+	for range 5 {
+		l.Emit(Event{Time: now, Stage: "tool", KeyID: "k1", Decision: "deny", RuleID: "shield.cmd.dangerous"})
+	}
+	for range 3 {
+		l.Emit(Event{Time: now, Stage: "tool", KeyID: "k1", Decision: "deny", RuleID: "ai.tool.deny"})
+	}
+	l.Emit(Event{Time: now, Stage: "docker", KeyID: "k1", Decision: "deny", RuleID: "docker.privileged"})
+	l.Emit(Event{Time: now, Stage: "tool", KeyID: "k1", Decision: "allow", RuleID: "ai.tool.allow"})
+
+	// Give writer a moment to flush to SQLite
+	time.Sleep(50 * time.Millisecond)
+
+	top, err := l.TopDenies24h(ctx, 10)
+	if err != nil {
+		t.Fatalf("TopDenies24h: %v", err)
+	}
+	if len(top) != 3 {
+		t.Fatalf("TopDenies24h len = %d, want 3: %+v", len(top), top)
+	}
+	if top[0].RuleID != "shield.cmd.dangerous" || top[0].Count != 5 {
+		t.Errorf("top[0] = %+v, want shield.cmd.dangerous with count 5", top[0])
+	}
+	if top[1].RuleID != "ai.tool.deny" || top[1].Count != 3 {
+		t.Errorf("top[1] = %+v, want ai.tool.deny with count 3", top[1])
+	}
+	if top[2].RuleID != "docker.privileged" || top[2].Count != 1 {
+		t.Errorf("top[2] = %+v, want docker.privileged with count 1", top[2])
+	}
+
+	// Layer 2: Tamper / boundary - events older than 24h must be excluded
+	oldTime := now.Add(-25 * time.Hour)
+	l.Emit(Event{Time: oldTime, Stage: "tool", KeyID: "k1", Decision: "deny", RuleID: "old.rule"})
+	time.Sleep(50 * time.Millisecond)
+
+	topAfterOld, err := l.TopDenies24h(ctx, 10)
+	if err != nil {
+		t.Fatalf("TopDenies24h after old: %v", err)
+	}
+	for _, item := range topAfterOld {
+		if item.RuleID == "old.rule" {
+			t.Fatalf("found old.rule in TopDenies24h: %+v", item)
+		}
+	}
+
+	// Layer 3: Limit enforcement (e.g. top 2)
+	top2, err := l.TopDenies24h(ctx, 2)
+	if err != nil {
+		t.Fatalf("TopDenies24h(limit 2): %v", err)
+	}
+	if len(top2) != 2 {
+		t.Fatalf("TopDenies24h(limit 2) len = %d, want 2", len(top2))
+	}
+}
+

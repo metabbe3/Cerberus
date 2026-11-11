@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_time ON events (time);
 CREATE INDEX IF NOT EXISTS idx_events_key_id_time ON events (key_id, time);
+CREATE INDEX IF NOT EXISTS idx_events_decision_time ON events (decision, time);
 `
 
 const eventCols = "id, time, stage, key_id, subject, decision, rule_id, reason, epoch, cached, latency_us, args"
@@ -392,6 +393,83 @@ func eraseEvent(ctx context.Context, db *sql.DB, id int64) (bool, error) {
 		return false, err
 	}
 	return n > 0, nil
+}
+
+func queryDenyCounts(ctx context.Context, db *sql.DB, since time.Time, counts map[string]int64) error {
+	rows, err := db.QueryContext(ctx, "SELECT rule_id, COUNT(*) FROM events WHERE decision = 'deny' AND time >= ? GROUP BY rule_id", since.UnixNano())
+	if err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			return nil
+		}
+		return fmt.Errorf("audit: query denies: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var ruleID string
+		var cnt int64
+		if err := rows.Scan(&ruleID, &cnt); err != nil {
+			return err
+		}
+		counts[ruleID] += cnt
+	}
+	return rows.Err()
+}
+
+func (m *dbManager) denyCountsSince(ctx context.Context, since time.Time) (int64, map[string]int64, error) {
+	counts := make(map[string]int64)
+	if m.isMemory {
+		db := m.dbs["memory"]
+		maxID, err := maxEventID(ctx, db)
+		if err != nil {
+			return 0, nil, err
+		}
+		if err := queryDenyCounts(ctx, db, since, counts); err != nil {
+			return 0, nil, err
+		}
+		return maxID, counts, nil
+	}
+
+	entries, err := os.ReadDir(m.baseDir)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	var files []string
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, "audit-") && strings.HasSuffix(name, ".db") {
+			files = append(files, name)
+		} else if name == filepath.Base(m.origPath) && !strings.HasPrefix(name, "audit-") {
+			files = append(files, name)
+		}
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(files)))
+
+	var globalMaxID int64
+	for _, fn := range files {
+		if strings.HasPrefix(fn, "audit-") {
+			dayStr := strings.TrimPrefix(fn, "audit-")
+			dayStr = strings.TrimSuffix(dayStr, ".db")
+			if t, err := time.Parse("20060102", dayStr); err == nil {
+				if t.Add(24 * time.Hour).Before(since) {
+					break
+				}
+			}
+		}
+
+		db, err := openSQLite(filepath.Join(m.baseDir, fn))
+		if err != nil {
+			continue
+		}
+		mID, _ := maxEventID(ctx, db)
+		if mID > globalMaxID {
+			globalMaxID = mID
+		}
+		_ = queryDenyCounts(ctx, db, since, counts)
+		_ = db.Close()
+	}
+	return globalMaxID, counts, nil
 }
 
 func boolInt(b bool) int64 {

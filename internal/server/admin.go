@@ -320,17 +320,23 @@ func (s *Server) rollbackBundle(w http.ResponseWriter, r *http.Request) {
 }
 
 type statusResponse struct {
-	BundleEpoch       uint64  `json:"bundle_epoch"`
-	PoliciesLoadedAt  string  `json:"policies_loaded_at"`
-	LastReload        string  `json:"last_reload"`
-	EvalTotal24hSlash uint64  `json:"eval_total/24h"`
-	EvalTotal24h      uint64  `json:"eval_total_24h"`
-	CacheHitRate      float64 `json:"cache_hit_rate"`
-	AuditQueueDepth   int     `json:"audit_queue_depth"`
+	BundleEpoch        uint64                `json:"bundle_epoch"`
+	Revision           string                `json:"revision"`
+	ActiveRevision     string                `json:"active_revision"`
+	PoliciesLoadedAt   string                `json:"policies_loaded_at"`
+	SnapshotAge        string                `json:"snapshot_age"`
+	SnapshotAgeSeconds float64               `json:"snapshot_age_seconds"`
+	LastReload         string                `json:"last_reload"`
+	EvalTotal24hSlash  uint64                `json:"eval_total/24h"`
+	EvalTotal24h       uint64                `json:"eval_total_24h"`
+	CacheHitRate       float64               `json:"cache_hit_rate"`
+	AuditQueueDepth    int                   `json:"audit_queue_depth"`
+	TopDenies24h       []audit.RuleDenyCount `json:"top_denies_24h"`
+	Deny24hTop10       []audit.RuleDenyCount `json:"deny_24h_top10,omitempty"`
 }
 
 // getStatus returns runtime status metrics (bundle epoch, evals, cache hit rate, audit queue).
-func (s *Server) getStatus(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) getStatus(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Store == nil || s.deps.Store.Current() == nil {
 		writeErr(w, http.StatusServiceUnavailable, "not ready")
 		return
@@ -346,17 +352,33 @@ func (s *Server) getStatus(w http.ResponseWriter, _ *http.Request) {
 		hitRate = float64(hits) / float64(total)
 	}
 	queueDepth := 0
+	var topDenies []audit.RuleDenyCount
 	if s.deps.Audit != nil {
 		queueDepth = s.deps.Audit.QueueDepth()
+		var err error
+		topDenies, err = s.deps.Audit.TopDenies24h(r.Context(), 10)
+		if err != nil {
+			slog.Warn("admin: top denies 24h", "error", err)
+		}
 	}
+	if topDenies == nil {
+		topDenies = []audit.RuleDenyCount{}
+	}
+	age := time.Since(snap.Loaded)
 	resp := statusResponse{
-		BundleEpoch:       snap.Epoch,
-		PoliciesLoadedAt:  snap.Loaded.UTC().Format(time.RFC3339),
-		LastReload:        snap.Loaded.UTC().Format(time.RFC3339),
-		EvalTotal24hSlash: total,
-		EvalTotal24h:      total,
-		CacheHitRate:      hitRate,
-		AuditQueueDepth:   queueDepth,
+		BundleEpoch:        snap.Epoch,
+		Revision:           snap.Revision,
+		ActiveRevision:     snap.Revision,
+		PoliciesLoadedAt:   snap.Loaded.UTC().Format(time.RFC3339),
+		SnapshotAge:        age.Round(time.Millisecond).String(),
+		SnapshotAgeSeconds: age.Seconds(),
+		LastReload:         snap.Loaded.UTC().Format(time.RFC3339),
+		EvalTotal24hSlash:  total,
+		EvalTotal24h:       total,
+		CacheHitRate:       hitRate,
+		AuditQueueDepth:    queueDepth,
+		TopDenies24h:       topDenies,
+		Deny24hTop10:       topDenies,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
