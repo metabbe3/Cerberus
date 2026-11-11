@@ -16,7 +16,11 @@ type Input struct {
 	Prompt   string         `json:"prompt,omitempty"`
 	ToolCall string         `json:"tool_call,omitempty"`
 	Args     map[string]any `json:"args,omitempty"`
-	Context  map[string]any `json:"context,omitempty"`
+	// Messages carries the full LLM conversation (role+content objects) so
+	// blocked-pattern scans cover every message — injection payloads hide in
+	// user turns, pasted transcripts, and OCR'd image text alike.
+	Messages []map[string]any `json:"messages,omitempty"`
+	Context  map[string]any   `json:"context,omitempty"`
 }
 
 // regoInput converts Input to the generic map OPA evaluates. Empty strings and
@@ -55,6 +59,9 @@ func regoInput(in Input) map[string]any {
 	}
 	if in.Args != nil {
 		m["args"] = in.Args
+	}
+	if in.Messages != nil {
+		m["messages"] = in.Messages
 	}
 	if in.Context != nil {
 		m["context"] = in.Context

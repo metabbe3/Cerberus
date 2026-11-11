@@ -129,6 +129,23 @@ blocked_prompt if {
 	contains(lower(input.prompt), lower(pattern))
 }
 
+# Deep scan: injection payload can hide in any message content (incl. OCR'd
+# image text, pasted transcript, or tool result) — check every string value
+# in input.messages and input.args, not just input.prompt.
+blocked_prompt if {
+	some pattern in data.blocked_patterns
+	some msg in input.messages
+	is_string(msg.content)
+	contains(lower(msg.content), lower(pattern))
+}
+
+blocked_prompt if {
+	some pattern in data.blocked_patterns
+	some _, val in input.args
+	is_string(val)
+	contains(lower(val), lower(pattern))
+}
+
 # Denied when an allow-list exists (agent or team) and the model is not in it.
 # Helper form: `not input.model in ...` would not fire when the model key is
 # missing entirely, silently allowing the call.
