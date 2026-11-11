@@ -105,6 +105,11 @@ type Decision struct {
 	LatencyUS  int64          `json:"-"`
 }
 
+// Allowed reports whether the decision is "allow".
+func (d Decision) Allowed() bool {
+	return d.Decision == "allow"
+}
+
 // Decide answers one request. It never returns an error and never blocks on a
 // mutex: cache hit ~100ns, miss goes through singleflight so N identical
 // concurrent requests share one eval.

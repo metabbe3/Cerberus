@@ -154,4 +154,3 @@ http_shield_target if prod.prod_ip(req_host)
 http_shield_target if prod.touches_prod(req_host)
 
 http_shield_target if prod.touches_prod(resource)
-

@@ -117,6 +117,39 @@ test_docker_mount_forbidden if {
 	out.rule_id == "docker.mount_forbidden"
 }
 
+test_docker_stop_normal_allowed if {
+	out := decide({
+		"stage": "docker",
+		"key_id": "k-docker-open",
+		"action": "stop",
+		"resource": "my-worker-container",
+	})
+	out.decision == "allow"
+	out.rule_id == "docker.allow"
+}
+
+test_docker_stop_protected_denied if {
+	out := decide({
+		"stage": "docker",
+		"key_id": "k-docker-open",
+		"action": "stop",
+		"resource": "teknikalidnew-db-1",
+	})
+	out.decision == "deny"
+	out.rule_id == "shield.container.protected"
+}
+
+test_docker_rm_protected_denied if {
+	out := decide({
+		"stage": "docker",
+		"key_id": "k-docker-open",
+		"action": "rm",
+		"resource": "teknikalidnew-db-1",
+	})
+	out.decision == "deny"
+	out.rule_id == "shield.container.protected"
+}
+
 # Layer 3: Bypass
 test_docker_stranger_bypass_allowed if {
 	out := decide({

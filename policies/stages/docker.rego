@@ -113,6 +113,8 @@ cap_add_all if {
 
 # Image allowlist: when defined on agent or team, image must match glob pattern
 image_not_allowed if {
+	image != ""
+	not action in ["rm", "rmi", "delete", "down", "stop", "kill"]
 	image_allowlist_configured
 	not image_allowed
 }
@@ -144,7 +146,7 @@ docker_container_protected if {
 	docker_protected_target
 }
 
-docker_delete_action if action in ["rm", "rmi", "delete", "down"]
+docker_delete_action if action in ["rm", "rmi", "delete", "down", "stop", "kill"]
 
 docker_delete_action if prod.is_container_delete_call(action)
 
@@ -157,4 +159,3 @@ docker_protected_target if {
 	some arg_val in prod.all_arg_strings(args)
 	prod.touches_protected_container(arg_val)
 }
-
