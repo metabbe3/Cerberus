@@ -191,8 +191,8 @@ func (e *Engine) eval(ctx context.Context, snap *policy.Snapshot, in Input) Deci
 	evalDuration.Observe(dur)
 	evalDurationStage.WithLabelValues(metricStage(in.Stage)).Observe(dur)
 
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
+	if err != nil || evalCtx.Err() != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(evalCtx.Err(), context.DeadlineExceeded) {
 			evalTimeoutsTotal.Inc()
 			return denyInternal(snap, "internal.timeout", "policy eval exceeded timeout")
 		}
