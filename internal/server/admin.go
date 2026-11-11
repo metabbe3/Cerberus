@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,14 +10,18 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/metabbe3/cerberus/internal/audit"
+	"github.com/metabbe3/cerberus/internal/masking"
 	"github.com/metabbe3/cerberus/internal/policy"
 	"github.com/open-policy-agent/opa/v1/ast"
 	"github.com/open-policy-agent/opa/v1/loader"
+	"github.com/open-policy-agent/opa/v1/rego"
+	"github.com/open-policy-agent/opa/v1/storage/inmem"
 )
 
 type epochResponse struct {
@@ -353,4 +359,210 @@ func (s *Server) getStatus(w http.ResponseWriter, _ *http.Request) {
 		AuditQueueDepth:   queueDepth,
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+type policyModuleInfo struct {
+	ID      string `json:"id"`
+	Path    string `json:"path"`
+	Package string `json:"package"`
+	Hash    string `json:"hash"`
+	Raw     string `json:"raw"`
+}
+
+type listPoliciesResponse struct {
+	Revision string             `json:"revision"`
+	Result   []policyModuleInfo `json:"result"`
+}
+
+// listPolicies handles GET /v1/policies returning list of policy modules + revision + hash.
+func (s *Server) listPolicies(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Store == nil || s.deps.Store.Current() == nil {
+		writeErr(w, http.StatusServiceUnavailable, "store unavailable")
+		return
+	}
+	snap := s.deps.Store.Current()
+	dir := s.deps.Store.PolicyDir()
+
+	var modules []policyModuleInfo
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(info.Name(), ".rego") || strings.HasSuffix(info.Name(), "_test.rego") {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+
+		sum := sha256.Sum256(content)
+		hashStr := hex.EncodeToString(sum[:])
+
+		parsed, err := ast.ParseModule(rel, string(content))
+		pkg := ""
+		if err == nil && parsed != nil && parsed.Package != nil {
+			pkg = parsed.Package.Path.String()
+			pkg = strings.TrimPrefix(pkg, "data.")
+		}
+
+		modules = append(modules, policyModuleInfo{
+			ID:      rel,
+			Path:    rel,
+			Package: pkg,
+			Hash:    hashStr,
+			Raw:     string(content),
+		})
+		return nil
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	sort.Slice(modules, func(i, j int) bool {
+		return modules[i].ID < modules[j].ID
+	})
+
+	writeJSON(w, http.StatusOK, listPoliciesResponse{
+		Revision: snap.Revision,
+		Result:   modules,
+	})
+}
+
+var apiDataMaskRules, _ = masking.Compile([]masking.Spec{
+	{Pattern: `sk-[A-Za-z0-9_\-]+`, Transform: "redact", Scope: ""},
+	{Pattern: `[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`, Transform: "mask", Scope: ""},
+})
+
+// getV1Data handles GET /v1/data (and ?path=...) reading data document read-only with secrets/emails masked.
+func (s *Server) getV1Data(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Store == nil || s.deps.Store.Current() == nil {
+		writeErr(w, http.StatusServiceUnavailable, "store unavailable")
+		return
+	}
+	snap := s.deps.Store.Current()
+
+	p := r.URL.Query().Get("path")
+	if p == "" {
+		trimmed := strings.TrimPrefix(r.URL.Path, "/v1/data")
+		p = strings.TrimPrefix(trimmed, "/")
+	}
+	p = strings.Trim(p, "/")
+
+	var curr any = snap.Data
+	if p != "" {
+		segments := strings.FieldsFunc(p, func(c rune) bool {
+			return c == '/' || c == '.'
+		})
+		for _, seg := range segments {
+			m, ok := curr.(map[string]any)
+			if !ok {
+				writeErrCode(w, http.StatusNotFound, "not_found", fmt.Sprintf("path %q not found", p))
+				return
+			}
+			val, found := m[seg]
+			if !found {
+				writeErrCode(w, http.StatusNotFound, "not_found", fmt.Sprintf("path %q not found", p))
+				return
+			}
+			curr = val
+		}
+	}
+
+	// Masking: JANGAN expose data.agents mentah — masking email/token di response
+	masked, _ := masking.Apply(apiDataMaskRules, "", curr)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"result": masked,
+	})
+}
+
+type queryRequest struct {
+	Q     string         `json:"q"`
+	Query string         `json:"query"`
+	Input map[string]any `json:"input"`
+}
+
+// postQuery handles POST /v1/query evaluating ad-hoc Rego query (rate limited to 10/min, with email/token masked).
+func (s *Server) postQuery(w http.ResponseWriter, r *http.Request) {
+	// Rate limit: 10 per minute
+	if s.queryLimiter != nil && !s.queryLimiter.Allow() {
+		writeErrCode(w, http.StatusTooManyRequests, "rate_limit_exceeded", "query rate limit exceeded (10/min)")
+		return
+	}
+
+	if s.deps.Store == nil || s.deps.Store.Current() == nil {
+		writeErr(w, http.StatusServiceUnavailable, "store unavailable")
+		return
+	}
+
+	body, ok := readBody(w, r)
+	if !ok {
+		return
+	}
+
+	var req queryRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+
+	q := req.Q
+	if q == "" {
+		q = req.Query
+	}
+	if q == "" {
+		writeErr(w, http.StatusBadRequest, "query (q) is required")
+		return
+	}
+
+	snap := s.deps.Store.Current()
+	dir := s.deps.Store.PolicyDir()
+
+	res, err := loader.NewFileLoader().WithFilter(regoFilter).All([]string{dir})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	opts := []func(*rego.Rego){
+		rego.Query(q),
+		rego.Store(inmem.NewFromObject(snap.Data)),
+		rego.StrictBuiltinErrors(true),
+	}
+	for _, m := range res.Modules {
+		opts = append(opts, rego.ParsedModule(m.Parsed))
+	}
+
+	prepared, err := rego.New(opts...).PrepareForEval(r.Context())
+	if err != nil {
+		writeErrCode(w, http.StatusUnprocessableEntity, "compile_error", err.Error())
+		return
+	}
+
+	rs, err := prepared.Eval(r.Context(), rego.EvalInput(req.Input))
+	if err != nil {
+		writeErrCode(w, http.StatusInternalServerError, "eval_error", err.Error())
+		return
+	}
+
+	rawJSON, err := json.Marshal(rs)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "marshal eval result")
+		return
+	}
+	var resData any
+	_ = json.Unmarshal(rawJSON, &resData)
+
+	masked, _ := masking.Apply(apiDataMaskRules, "", resData)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"result": masked,
+	})
 }

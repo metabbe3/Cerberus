@@ -94,6 +94,38 @@ func isJSONContentType(h string) bool {
 	return err == nil && mt == "application/json"
 }
 
+// APIError represents a structured error response with code and message.
+type APIError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Error   string `json:"error,omitempty"`
+}
+
+func statusCodeToCode(status int) string {
+	switch status {
+	case http.StatusUnauthorized:
+		return "unauthorized"
+	case http.StatusTooManyRequests:
+		return "rate_limit_exceeded"
+	case http.StatusNotFound:
+		return "not_found"
+	case http.StatusBadRequest:
+		return "bad_request"
+	case http.StatusUnprocessableEntity:
+		return "unprocessable_entity"
+	case http.StatusForbidden:
+		return "forbidden"
+	case http.StatusServiceUnavailable:
+		return "service_unavailable"
+	case http.StatusRequestEntityTooLarge:
+		return "request_entity_too_large"
+	case http.StatusUnsupportedMediaType:
+		return "unsupported_media_type"
+	default:
+		return "internal_error"
+	}
+}
+
 // admin guards the admin routes with the bearer token, compared in constant
 // time. An empty configured token rejects everything.
 func (s *Server) admin(next http.HandlerFunc) http.HandlerFunc {
@@ -102,6 +134,10 @@ func (s *Server) admin(next http.HandlerFunc) http.HandlerFunc {
 		if s.deps.AdminToken == "" || !ok ||
 			subtle.ConstantTimeCompare([]byte(tok), []byte(s.deps.AdminToken)) != 1 {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		if s.adminLimiter != nil && !s.adminLimiter.Allow() {
+			writeErr(w, http.StatusTooManyRequests, "rate limit exceeded")
 			return
 		}
 		next(w, r)
@@ -131,7 +167,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeErr(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	code := statusCodeToCode(status)
+	writeJSON(w, status, APIError{Code: code, Message: msg, Error: msg})
+}
+
+func writeErrCode(w http.ResponseWriter, status int, code, msg string) {
+	writeJSON(w, status, APIError{Code: code, Message: msg, Error: msg})
 }
 
 // newRequestID is 8 random bytes as hex; on RNG failure it is empty and the

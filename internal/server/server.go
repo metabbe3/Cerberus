@@ -8,6 +8,8 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/metabbe3/cerberus/internal/audit"
 	"github.com/metabbe3/cerberus/internal/engine"
@@ -31,9 +33,46 @@ type Server struct {
 	deps Deps
 	log  *slog.Logger
 
+	adminLimiter *rateLimiter
+	queryLimiter *rateLimiter
+
 	handler       http.Handler
 	streamsCtx    context.Context    // cancelled by ShutdownStreams
 	streamsCancel context.CancelFunc // registered on http.Server via main
+}
+
+type rateLimiter struct {
+	mu       sync.Mutex
+	capacity int
+	tokens   float64
+	rate     float64
+	last     time.Time
+}
+
+func newRateLimiter(limitPerMin int) *rateLimiter {
+	return &rateLimiter{
+		capacity: limitPerMin,
+		tokens:   float64(limitPerMin),
+		rate:     float64(limitPerMin) / 60.0,
+		last:     time.Now(),
+	}
+}
+
+func (rl *rateLimiter) Allow() bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	now := time.Now()
+	elapsed := now.Sub(rl.last).Seconds()
+	rl.last = now
+	rl.tokens += elapsed * rl.rate
+	if rl.tokens > float64(rl.capacity) {
+		rl.tokens = float64(rl.capacity)
+	}
+	if rl.tokens >= 1.0 {
+		rl.tokens -= 1.0
+		return true
+	}
+	return false
 }
 
 // New builds the full handler: routes + middleware. One ServeMux, Go 1.22
@@ -41,7 +80,12 @@ type Server struct {
 // ShutdownStreams with http.Server.RegisterOnShutdown so a graceful shutdown
 // ends SSE streams instead of draining on them.
 func New(d Deps) *Server {
-	s := &Server{deps: d, log: slog.Default()}
+	s := &Server{
+		deps:         d,
+		log:          slog.Default(),
+		adminLimiter: newRateLimiter(1000), // generous general admin limiter
+		queryLimiter: newRateLimiter(10),   // strict 10/min for POST /v1/query
+	}
 	s.streamsCtx, s.streamsCancel = context.WithCancel(context.Background())
 
 	mux := http.NewServeMux()
@@ -65,6 +109,12 @@ func New(d Deps) *Server {
 	mux.HandleFunc("POST /v1/admin/bundle", s.admin(s.uploadBundle))
 	mux.HandleFunc("PUT /v1/admin/bundle", s.admin(s.uploadBundle))
 	mux.HandleFunc("POST /v1/admin/bundle/rollback", s.admin(s.rollbackBundle))
+
+	// SPRINT 2C REST API parity
+	mux.HandleFunc("GET /v1/policies", s.admin(s.listPolicies))
+	mux.HandleFunc("GET /v1/data", s.admin(s.getV1Data))
+	mux.HandleFunc("GET /v1/data/", s.admin(s.getV1Data))
+	mux.HandleFunc("POST /v1/query", s.admin(s.postQuery))
 
 	s.handler = s.withMiddleware(mux)
 	return s
