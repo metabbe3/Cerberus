@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { CerberusMark } from "@/components/cerberus-logo";
 import {
   ArrowLeft,
   ArrowRight,
@@ -16,7 +17,7 @@ export default function DocsIntroPage() {
       <header className="sticky top-4 z-50 px-4">
         <nav className="max-w-5xl mx-auto clay-card px-4 py-2.5 flex items-center justify-between gap-3">
           <Link href="/" className="flex items-center gap-2.5 min-w-0">
-            <span className="clay-chip clay-chip-coral size-9 text-lg shrink-0">🦉</span>
+            <span className="clay-chip clay-chip-coral size-9 shrink-0 grid place-items-center"><CerberusMark size={22} className="text-[var(--clay-accent)]" /></span>
             <span className="font-extrabold text-base sm:text-lg tracking-tight text-[var(--clay-ink)]">
               Cerberus
             </span>
@@ -220,7 +221,7 @@ npm install github:metabbe3/Cerberus#main --prefix .  # atau copy sdk/ts/src`}</
         <div className="max-w-4xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-6 text-center sm:text-left">
           <div className="space-y-1">
             <div className="flex items-center justify-center sm:justify-start gap-2">
-              <span className="clay-chip clay-chip-coral text-sm size-6">🦉</span>
+              <span className="clay-chip clay-chip-coral size-6 shrink-0 grid place-items-center"><CerberusMark size={15} /></span>
               <span className="font-bold text-sm text-[var(--clay-ink)]">
                 Cerberus Policy Engine
               </span>

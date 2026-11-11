@@ -27,6 +27,7 @@ Dokumen ini = satu sumber kebenaran desain untuk SEMUA permukaan Cerberus (landi
 
 ## Do & Don't (anti AI-slop)
 - DON'T: gradien ungu/biru generik, emoji berjejalan, kartu 3-kolom isi kosong, "Powered by AI", angka hype tanpa konteks, heading glow, border-radius aneh-aneh per kartu.
+- BRAND: logo Cerberus = SVG mark tiga kepala geometris (components/cerberus-logo.tsx, CerberusMark) — dipakai di SEMUA permukaan publik (nav, footer). Emoji 🦉 HANYA untuk Owl dashboard, JANGAN di landing/docs publik.
 - DO: klaim spesifik + bukti (decision card nyata), hierarchy jelas (1 H1), whitespace lega, satu CTA utama, copy bahasa Indonesia formal ringkas.
 
 ## Motion
