@@ -35,16 +35,14 @@ export function useAudit(params: URLSearchParams) {
   });
 }
 
-// Save = clone the live document, replace one agent, zod-parse, PUT. An
-// engine 422 throws with its message verbatim; the live cache is untouched.
-export function useSaveAgent() {
+// One PUT for the whole data document; both the agent editor and settings
+// clone the live doc, patch it, and hand the result here. An engine 422
+// throws with its message verbatim; the live cache is untouched until the
+// engine confirms.
+export function usePutData() {
   const qc = useQueryClient();
-  const { data: current } = useData();
   return useMutation({
-    mutationFn: async ({ keyId, agent }: { keyId: string; agent: Agent }) => {
-      if (!current) throw new Error("no data loaded");
-      const next = structuredClone(current.data);
-      next.agents[keyId] = agent;
+    mutationFn: async (next: CerberusData) => {
       const res = await fetch("/api/data", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -55,5 +53,19 @@ export function useSaveAgent() {
       return out as { epoch: number };
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["data"] }),
+  });
+}
+
+// Save = clone the live document, replace one agent, zod-parse, PUT.
+export function useSaveAgent() {
+  const { data: current } = useData();
+  const put = usePutData();
+  return useMutation({
+    mutationFn: async ({ keyId, agent }: { keyId: string; agent: Agent }) => {
+      if (!current) throw new Error("no data loaded");
+      const next = structuredClone(current.data);
+      next.agents[keyId] = agent;
+      return put.mutateAsync(next);
+    },
   });
 }
