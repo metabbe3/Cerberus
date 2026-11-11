@@ -1,39 +1,11 @@
 "use client";
 
-import { Check, Copy } from "lucide-react";
-import { useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Badge } from "@/components/ui/badge";
+import { KeyCell } from "@/components/key-cell";
 import type { Agent } from "@/lib/schema";
 
 export type AgentRow = { keyId: string } & Agent;
-
-// 64-hex key IDs: truncated display, full ID on click-to-copy — and the
-// click never bubbles into the row's editor navigation.
-function KeyCell({ id }: { id: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      type="button"
-      title={`${id} — click to copy`}
-      className="flex items-center gap-1 font-mono text-xs text-muted-foreground hover:text-foreground"
-      onClick={(e) => {
-        e.stopPropagation();
-        navigator.clipboard.writeText(id).then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1200);
-        });
-      }}
-    >
-      {id.length > 14 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id}
-      {copied ? (
-        <Check className="size-3" aria-hidden />
-      ) : (
-        <Copy className="size-3" aria-hidden />
-      )}
-    </button>
-  );
-}
 
 function ToolCountCell({ agent }: { agent: Agent }) {
   const n =

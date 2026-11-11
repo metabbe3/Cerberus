@@ -1,6 +1,7 @@
 "use client";
 
 import { Plus, Save, X } from "lucide-react";
+import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -9,7 +10,6 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -40,9 +40,29 @@ export function AgentEditor({
   keyId: string;
   agent: Agent;
 }) {
-  const [draft, setDraft] = useState<Agent>(() => structuredClone(agent));
+  const params = useSearchParams();
+  const [draft, setDraft] = useState<Agent>(() => {
+    const d = structuredClone(agent);
+    // "Create rule from this event" lands here pre-filled: tool denials add
+    // the invoked subject to restricted_tool_calls; llm denials can't be a
+    // per-agent tool rule (models are gated by allowlists / blocked_patterns),
+    // so only a hint is shown.
+    const prefill = params.get("prefill");
+    if (prefill?.startsWith("restricted:")) {
+      const subject = decodeURIComponent(prefill.slice("restricted:".length));
+      d.restricted_tool_calls = d.restricted_tool_calls ?? [];
+      if (!d.restricted_tool_calls.includes(subject)) {
+        d.restricted_tool_calls.push(subject);
+      }
+    }
+    return d;
+  });
   const save = useSaveAgent();
   const [savedError, setSavedError] = useState<string | null>(null);
+  const prefill = params.get("prefill");
+  const llmHint = prefill?.startsWith("llm:")
+    ? decodeURIComponent(prefill.slice("llm:".length))
+    : null;
 
   const set = (patch: Partial<Agent>) => setDraft((d) => ({ ...d, ...patch }));
   const list = (field: keyof Agent) => (draft[field] as string[] | undefined) ?? [];
@@ -71,6 +91,18 @@ export function AgentEditor({
           <Save aria-hidden /> Save
         </Button>
       </div>
+
+      {llmHint ? (
+        <Alert>
+          <AlertCircle />
+          <AlertTitle>Model denied: {llmHint}</AlertTitle>
+          <AlertDescription>
+            Models are gated per-agent (allowed_models) and globally by
+            blocked_patterns in the data document — adjust those, not this
+            agent&apos;s tool rules.
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       {savedError ? (
         <Alert variant="destructive">
@@ -248,6 +280,7 @@ function ConstraintsEditor({
                 }
                 onRemove={() => {
                   const { [arg]: _drop, ...rest } = args;
+                  void _drop;
                   onChange({ ...value, [tool]: rest } as typeof value);
                 }}
               />

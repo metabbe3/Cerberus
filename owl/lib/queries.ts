@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { parseData, type Agent, type CerberusData } from "./schema";
+import { AuditEventSchema, parseData, type Agent, type AuditEvent, type CerberusData } from "./schema";
 
 // The one server-state hook for the data document: every page reads the
 // engine's data through this same ["data"] cache entry, so a PUT elsewhere
@@ -17,6 +17,22 @@ async function fetchData(): Promise<OwlData> {
 
 export function useData() {
   return useQuery({ queryKey: ["data"], queryFn: fetchData });
+}
+
+// Newest-first decision history; params are the engine's filter params
+// (key_id, stage, decision, rule_id, since, limit) passed through verbatim.
+export function useAudit(params: URLSearchParams) {
+  return useQuery({
+    queryKey: ["audit", params.toString()],
+    queryFn: async (): Promise<AuditEvent[]> => {
+      const res = await fetch(`/api/audit?${params.toString()}`);
+      const body = await res.json();
+      if (!res.ok) {
+        throw new Error((body as { error?: string }).error ?? "audit query failed");
+      }
+      return AuditEventSchema.array().parse(body);
+    },
+  });
 }
 
 // Save = clone the live document, replace one agent, zod-parse, PUT. An
