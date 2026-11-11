@@ -27,3 +27,24 @@ jobs:
       - run: make test
       - run: make opa-check
       - run: make opa-test
+
+  owl:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: owl
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: owl/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm run test
+      # Playwright smoke (3 flows) runs locally against a real engine + dev
+      # server; CI keeps the cheap static checks until it hurts to skip them.
