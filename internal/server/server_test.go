@@ -1190,3 +1190,46 @@ func TestServer_Decide_AuditCacheHit(t *testing.T) {
 		t.Fatalf("expected at least 1 cache hit recorded in /v1/audit, got %d", cachedCount)
 	}
 }
+
+// 8B finishing: unit test Go end-to-end stage ssh (decide stage=ssh connect host=git.teknikal.id -> allow; host unknown -> deny)
+func TestDecide_SSHStageEndToEnd(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+
+	// 1. Host allowlisted by wildcard (*.teknikal.id) -> allow
+	allowBody := `{"stage":"ssh","key_id":"k-open","action":"connect","host":"git.teknikal.id","user":"ubuntu","port":22}`
+	respAllow := h.do(t, http.MethodPost, "/v1/decide", "application/json", allowBody, false)
+	if respAllow.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", respAllow.StatusCode)
+	}
+	var decAllow engine.Decision
+	if err := json.NewDecoder(respAllow.Body).Decode(&decAllow); err != nil {
+		t.Fatalf("decode allow decision: %v", err)
+	}
+	_ = respAllow.Body.Close()
+	if decAllow.Decision != "allow" {
+		t.Fatalf("expected decision allow, got %q (rule_id: %s, reason: %s)", decAllow.Decision, decAllow.RuleID, decAllow.Reason)
+	}
+	if decAllow.RuleID != "ssh.allow" {
+		t.Fatalf("expected rule_id ssh.allow, got %q", decAllow.RuleID)
+	}
+
+	// 2. Unknown host -> deny
+	denyBody := `{"stage":"ssh","key_id":"k-open","action":"connect","host":"unknown-host.example.com","user":"ubuntu","port":22}`
+	respDeny := h.do(t, http.MethodPost, "/v1/decide", "application/json", denyBody, false)
+	if respDeny.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", respDeny.StatusCode)
+	}
+	var decDeny engine.Decision
+	if err := json.NewDecoder(respDeny.Body).Decode(&decDeny); err != nil {
+		t.Fatalf("decode deny decision: %v", err)
+	}
+	_ = respDeny.Body.Close()
+	if decDeny.Decision != "deny" {
+		t.Fatalf("expected decision deny, got %q", decDeny.Decision)
+	}
+	if decDeny.RuleID != "ssh.host_not_allowed" {
+		t.Fatalf("expected rule_id ssh.host_not_allowed, got %q", decDeny.RuleID)
+	}
+}
+

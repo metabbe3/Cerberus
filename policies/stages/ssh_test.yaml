@@ -1,0 +1,107 @@
+# Cerberus SSH Stage Test Specification (YAML format)
+cases:
+  - name: "wildcard_match"
+    description: "Wildcard match allowed (*.teknikal.id)"
+    input:
+      stage: "ssh"
+      key_id: "k-open"
+      action: "connect"
+      host: "dev.teknikal.id"
+      user: "ubuntu"
+      port: 22
+    expected:
+      decision: "allow"
+      rule_id: "ssh.allow"
+
+  - name: "subdomain_nonmatch_deny"
+    description: "Subdomain non-match denied"
+    input:
+      stage: "ssh"
+      key_id: "k-open"
+      action: "connect"
+      host: "attacker.com"
+      user: "ubuntu"
+      port: 22
+    expected:
+      decision: "deny"
+      rule_id: "ssh.host_not_allowed"
+
+  - name: "deny_hosts_wins"
+    description: "deny_hosts wins over wildcard allow"
+    input:
+      stage: "ssh"
+      key_id: "k-open"
+      action: "connect"
+      host: "node1.blocked.teknikal.id"
+      user: "ubuntu"
+      port: 22
+    expected:
+      decision: "deny"
+      rule_id: "ssh.host_denied"
+
+  - name: "port_non_allowlist_deny"
+    description: "Port non-allowlist denied (port 2222)"
+    input:
+      stage: "ssh"
+      key_id: "k-open"
+      action: "connect"
+      host: "dev.teknikal.id"
+      user: "ubuntu"
+      port: 2222
+    expected:
+      decision: "deny"
+      rule_id: "ssh.port_not_allowed"
+
+  - name: "exec_dangerous_command_rm_rf"
+    description: "Exec dangerous command rm -rf denied"
+    input:
+      stage: "ssh"
+      key_id: "k-open"
+      action: "exec"
+      host: "dev.teknikal.id"
+      user: "ubuntu"
+      port: 22
+      command: "rm -rf /var/data"
+    expected:
+      decision: "deny"
+      rule_id: "ssh.command_denied"
+
+  - name: "exec_safe_command_allow"
+    description: "Exec safe command allowed (uptime)"
+    input:
+      stage: "ssh"
+      key_id: "k-open"
+      action: "exec"
+      host: "dev.teknikal.id"
+      user: "ubuntu"
+      port: 22
+      command: "uptime"
+    expected:
+      decision: "allow"
+      rule_id: "ssh.allow"
+
+  - name: "fail_closed_unknown_host"
+    description: "Fail-closed on unknown host"
+    input:
+      stage: "ssh"
+      key_id: "k-open"
+      action: "connect"
+      host: "internal-db.unauthorized.net"
+      user: "ubuntu"
+      port: 22
+    expected:
+      decision: "deny"
+      rule_id: "ssh.host_not_allowed"
+
+  - name: "user_separated"
+    description: "User separated: unauthorized user root denied"
+    input:
+      stage: "ssh"
+      key_id: "k-open"
+      action: "connect"
+      host: "dev.teknikal.id"
+      user: "root"
+      port: 22
+    expected:
+      decision: "deny"
+      rule_id: "ssh.user_not_allowed"

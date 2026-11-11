@@ -8,6 +8,10 @@ type Input struct {
 	KeyID    string         `json:"key_id"`
 	Action   string         `json:"action,omitempty"`
 	Resource string         `json:"resource,omitempty"`
+	Host     string         `json:"host,omitempty"`
+	User     string         `json:"user,omitempty"`
+	Port     any            `json:"port,omitempty"`
+	Command  string         `json:"command,omitempty"`
 	Model    string         `json:"model,omitempty"`
 	Prompt   string         `json:"prompt,omitempty"`
 	ToolCall string         `json:"tool_call,omitempty"`
@@ -19,7 +23,7 @@ type Input struct {
 // nil maps are omitted, mirroring the JSON omitempty tags, so policy sees
 // exactly the wire shape of POST /v1/decide.
 func regoInput(in Input) map[string]any {
-	m := make(map[string]any, 9)
+	m := make(map[string]any, 13)
 	m["stage"] = in.Stage
 	m["key_id"] = in.KeyID
 	if in.Action != "" {
@@ -27,6 +31,18 @@ func regoInput(in Input) map[string]any {
 	}
 	if in.Resource != "" {
 		m["resource"] = in.Resource
+	}
+	if in.Host != "" {
+		m["host"] = in.Host
+	}
+	if in.User != "" {
+		m["user"] = in.User
+	}
+	if in.Port != nil && in.Port != "" && in.Port != 0 {
+		m["port"] = in.Port
+	}
+	if in.Command != "" {
+		m["command"] = in.Command
 	}
 	if in.Model != "" {
 		m["model"] = in.Model

@@ -511,14 +511,29 @@ func TestEgressProxy_ResourceHygiene_IdleConnection(t *testing.T) {
 	}
 
 	// Server remains fully responsive
-	client := proxyServer.Client()
-	req, _ := http.NewRequest(http.MethodGet, proxyServer.URL+"/healthz", nil)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer backend.Close()
+
+	proxyURL, _ := url.Parse(proxyServer.URL)
+	testClient := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+		},
+		Timeout: 3 * time.Second,
+	}
+	req, _ := http.NewRequest(http.MethodGet, backend.URL+"/ping", nil)
 	req.Header.Set("X-Cerberus-Key", "k-open")
-	resp, err := client.Do(req)
+	resp, err := testClient.Do(req)
 	if err != nil {
 		t.Fatalf("server not responsive after idle connection: %v", err)
 	}
 	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK from backend, got %d", resp.StatusCode)
+	}
 }
 
 // 8A.2: Pemeriksaan IP tujuan menyeluruh (DNS pinning with multi-A-record)
