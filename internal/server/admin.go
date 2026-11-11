@@ -69,7 +69,9 @@ func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 // 500 with a generic message, details only in the log. Absolute paths never
 // reach the client.
 func writeStoreErr(w http.ResponseWriter, op string, err error) {
-	if errors.Is(err, policy.ErrData) || errors.Is(err, policy.ErrCompile) {
+	if errors.Is(err, policy.ErrData) || errors.Is(err, policy.ErrCompile) ||
+		errors.Is(err, policy.ErrInvalidSignature) || errors.Is(err, policy.ErrMissingSignature) ||
+		strings.Contains(err.Error(), "smoke test failed") {
 		writeErr(w, http.StatusUnprocessableEntity, stripPaths(err.Error()))
 		return
 	}
@@ -287,6 +289,28 @@ func (s *Server) uploadBundle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, epochResponse{Epoch: snap.Epoch})
+}
+
+// rollbackBundle handles POST /v1/admin/bundle/rollback.
+func (s *Server) rollbackBundle(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Store == nil {
+		writeErr(w, http.StatusServiceUnavailable, "store unavailable")
+		return
+	}
+	snap, err := s.deps.Store.Rollback(r.Context())
+	if err != nil {
+		if errors.Is(err, policy.ErrNoRollback) {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeStoreErr(w, "rollback bundle", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":       true,
+		"epoch":    snap.Epoch,
+		"revision": snap.Revision,
+	})
 }
 
 type statusResponse struct {

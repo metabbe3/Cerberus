@@ -827,7 +827,7 @@ func TestAdmin_UploadBundle(t *testing.T) {
 	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
 
-	manifest := []byte(`{"roots":["gateway","stages"]}`)
+	manifest := []byte(`{"roots":["stages"]}`)
 	_ = tw.WriteHeader(&tar.Header{Name: ".manifest", Size: int64(len(manifest)), Mode: 0o600})
 	_, _ = tw.Write(manifest)
 
@@ -839,13 +839,18 @@ func TestAdmin_UploadBundle(t *testing.T) {
 			"k-open": {"name": "open-agent", "budget_limit": 5}
 		},
 		"blocked_patterns": ["jailbreak"],
-		"domains": {}
+		"domains": {},
+		"prod_shield": {
+			"dangerous_cmd_patterns": [
+				{"id": "rm_rf", "regex": "rm\\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)"}
+			]
+		}
 	}`)
 	_ = tw.WriteHeader(&tar.Header{Name: "data.json", Size: int64(len(updatedData)), Mode: 0o600})
 	_, _ = tw.Write(updatedData)
 
-	// Include current rego files
-	for _, rel := range []string{"gateway/authz.rego", "stages/ai.rego", "stages/llm.rego", "stages/tool.rego", "shield/prod.rego"} {
+	// Include stages rego files
+	for _, rel := range []string{"stages/ai.rego", "stages/llm.rego", "stages/tool.rego"} {
 		content, err := os.ReadFile(filepath.Join(h.policies, rel))
 		if err != nil {
 			t.Fatalf("read %s: %v", rel, err)

@@ -64,6 +64,7 @@ func New(d Deps) *Server {
 	mux.HandleFunc("POST /v1/admin/decisions/erase", s.admin(s.eraseDecision))
 	mux.HandleFunc("POST /v1/admin/bundle", s.admin(s.uploadBundle))
 	mux.HandleFunc("PUT /v1/admin/bundle", s.admin(s.uploadBundle))
+	mux.HandleFunc("POST /v1/admin/bundle/rollback", s.admin(s.rollbackBundle))
 
 	s.handler = s.withMiddleware(mux)
 	return s

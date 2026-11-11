@@ -14,9 +14,10 @@ import (
 // rules. Readers get it from Store.Current and must treat it as read-only;
 // updates are made by building a new Snapshot and swapping it in.
 type Snapshot struct {
-	Epoch   uint64
-	Query   rego.PreparedEvalQuery // query: data.gateway.authz.decision
-	Data    map[string]any         // parsed data JSON (read-only after build)
-	Maskers map[string][]masking.Rule
-	Loaded  time.Time
+	Epoch    uint64
+	Revision string                 // bundle/policy revision (from .manifest or empty)
+	Query    rego.PreparedEvalQuery // query: data.gateway.authz.decision
+	Data     map[string]any         // parsed data JSON (read-only after build)
+	Maskers  map[string][]masking.Rule
+	Loaded   time.Time
 }

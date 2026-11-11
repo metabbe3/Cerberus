@@ -5,18 +5,39 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/open-policy-agent/opa/v1/rego"
 )
+
+// ErrNoRollback is returned when rollback is requested but no previous snapshot is available.
+var ErrNoRollback = errors.New("bundle: no previous snapshot available for rollback")
+
+// Manifest represents an OPA bundle manifest.
+type Manifest struct {
+	Revision string   `json:"revision"`
+	Roots    []string `json:"roots"`
+}
 
 // Bundle represents an unpacked OPA-style bundle in memory.
 type Bundle struct {
-	Manifest  []byte
-	DataJSON  []byte
-	RegoFiles map[string][]byte
+	Manifest       []byte
+	ManifestObj    *Manifest
+	Revision       string
+	Roots          []string
+	DataJSON       []byte
+	SignaturesJSON []byte
+	RegoFiles      map[string][]byte
+	DataFiles      map[string][]byte
+	RawFiles       map[string][]byte
 }
 
 // ReadBundle extracts an OPA bundle (.tar.gz) from r.
@@ -30,6 +51,8 @@ func ReadBundle(r io.Reader) (*Bundle, error) {
 	tr := tar.NewReader(gz)
 	b := &Bundle{
 		RegoFiles: make(map[string][]byte),
+		DataFiles: make(map[string][]byte),
+		RawFiles:  make(map[string][]byte),
 	}
 
 	for {
@@ -52,25 +75,231 @@ func ReadBundle(r io.Reader) (*Bundle, error) {
 			return nil, fmt.Errorf("bundle: read entry %s: %w", name, err)
 		}
 		content := buf.Bytes()
+		b.RawFiles[name] = content
 
 		switch {
 		case name == ".manifest" || strings.HasSuffix(name, "/.manifest"):
 			b.Manifest = content
+		case name == "signatures.json" || name == ".signatures.json" ||
+			strings.HasSuffix(name, "/signatures.json") || strings.HasSuffix(name, "/.signatures.json"):
+			b.SignaturesJSON = content
 		case name == "data.json" || strings.HasSuffix(name, "/data.json"):
 			b.DataJSON = content
+		case strings.HasSuffix(name, ".json") && (strings.HasPrefix(name, "data/") || strings.Contains(name, "/data/")):
+			b.DataFiles[name] = content
 		case strings.HasSuffix(name, ".rego") && !strings.HasSuffix(name, "_test.rego"):
 			b.RegoFiles[name] = content
 		}
 	}
 
+	// Parse .manifest if present
+	if len(b.Manifest) > 0 {
+		var m Manifest
+		if err := json.Unmarshal(b.Manifest, &m); err != nil {
+			return nil, fmt.Errorf("bundle: %w: parse .manifest: %v", ErrData, err)
+		}
+		b.ManifestObj = &m
+		b.Revision = m.Revision
+		b.Roots = m.Roots
+
+		// Refuse bundle if roots overlap with local core modules (gateway/shield)
+		if err := checkRootsOverlap(m.Roots); err != nil {
+			slog.Warn("bundle refused: roots overlap with local core", "err", err)
+			return nil, fmt.Errorf("bundle: %w: %w", ErrData, err)
+		}
+	}
+
+	// Also verify that no rego file attempts to overwrite local core modules
+	for name := range b.RegoFiles {
+		rel := filepath.Clean(name)
+		if strings.HasPrefix(rel, "policies/") {
+			rel = strings.TrimPrefix(rel, "policies/")
+		}
+		if strings.HasPrefix(rel, "gateway/") || strings.HasPrefix(rel, "shield/") || rel == "gateway.rego" || rel == "shield.rego" {
+			slog.Warn("bundle refused: rego file overlaps with local core", "file", name)
+			return nil, fmt.Errorf("bundle: %w: file %s overwrites local core module (gateway/shield)", ErrData, name)
+		}
+	}
+
+	// Handle data merging: root data.json + /data/* subtree
+	dataMap := make(map[string]any)
+	if len(b.DataJSON) > 0 {
+		if err := json.Unmarshal(b.DataJSON, &dataMap); err != nil {
+			return nil, fmt.Errorf("bundle: %w: decode data.json: %v", ErrData, err)
+		}
+	}
+
+	for path, content := range b.DataFiles {
+		if err := mergeDataSubtree(dataMap, path, content); err != nil {
+			return nil, fmt.Errorf("bundle: %w: merge data subtree %s: %v", ErrData, path, err)
+		}
+	}
+
+	if len(dataMap) > 0 {
+		merged, err := json.Marshal(dataMap)
+		if err != nil {
+			return nil, fmt.Errorf("bundle: %w: marshal merged data: %v", ErrData, err)
+		}
+		b.DataJSON = merged
+	}
+
 	if len(b.DataJSON) == 0 {
-		return nil, fmt.Errorf("bundle: %w: missing data.json", ErrData)
+		return nil, fmt.Errorf("bundle: %w: missing data.json or /data/* subtree", ErrData)
 	}
 	if len(b.RegoFiles) == 0 {
 		return nil, fmt.Errorf("bundle: %w: no rego policy files found", ErrCompile)
 	}
 
 	return b, nil
+}
+
+// checkRootsOverlap verifies no root overlaps with local core modules (gateway, shield).
+func checkRootsOverlap(roots []string) error {
+	for _, r := range roots {
+		clean := strings.TrimPrefix(r, "/")
+		clean = strings.TrimPrefix(clean, "data.")
+		parts := strings.FieldsFunc(clean, func(c rune) bool {
+			return c == '/' || c == '.'
+		})
+		if len(parts) > 0 {
+			top := parts[0]
+			if top == "gateway" || top == "shield" {
+				return fmt.Errorf("root %q overlaps with local core module %s", r, top)
+			}
+		}
+	}
+	return nil
+}
+
+// mergeDataSubtree parses content and merges into dataMap based on path under data/.
+func mergeDataSubtree(dataMap map[string]any, path string, content []byte) error {
+	var val any
+	if err := json.Unmarshal(content, &val); err != nil {
+		return err
+	}
+
+	// Clean path, remove leading "data/" or anything up to "/data/"
+	clean := strings.TrimPrefix(path, "/")
+	clean = strings.TrimPrefix(clean, "./")
+	if idx := strings.Index(clean, "data/"); idx >= 0 {
+		clean = clean[idx+len("data/"):]
+	}
+	clean = strings.TrimSuffix(clean, ".json")
+	if clean == "" || clean == "data" {
+		if vm, ok := val.(map[string]any); ok {
+			for k, v := range vm {
+				dataMap[k] = v
+			}
+			return nil
+		}
+		return errors.New("root data file must contain a JSON object")
+	}
+
+	keys := strings.Split(clean, "/")
+	curr := dataMap
+	for i, k := range keys {
+		if i == len(keys)-1 {
+			// If both existing and new are maps, merge
+			if existing, ok := curr[k].(map[string]any); ok {
+				if vm, ok := val.(map[string]any); ok {
+					for ek, ev := range vm {
+						existing[ek] = ev
+					}
+					break
+				}
+			}
+			curr[k] = val
+			break
+		}
+		nxt, ok := curr[k].(map[string]any)
+		if !ok {
+			nxt = make(map[string]any)
+			curr[k] = nxt
+		}
+		curr = nxt
+	}
+	return nil
+}
+
+// copyDir copies all files from src to dst.
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return nil
+		}
+		destPath := filepath.Join(dst, rel)
+		if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(destPath, data, 0o600)
+	})
+}
+
+// dryRunSmoke verifies that the candidate snapshot satisfies essential invariants:
+// prod shield protects dangerous operations and clean queries pass.
+func dryRunSmoke(ctx context.Context, snap *Snapshot) error {
+	// Smoke test 1: prod shield blocks dangerous command
+	in1 := map[string]any{
+		"stage":     "tool",
+		"key_id":    "k-stranger-smoke",
+		"tool_call": "bash",
+		"args":      map[string]any{"cmd": "rm -rf /"},
+		"bypass":    true,
+	}
+	rs1, err := snap.Query.Eval(ctx, rego.EvalInput(in1))
+	if err != nil {
+		return fmt.Errorf("smoke eval shield error: %w", err)
+	}
+	if len(rs1) == 0 || len(rs1[0].Expressions) == 0 {
+		return errors.New("smoke eval shield returned no expression")
+	}
+	val1, ok := rs1[0].Expressions[0].Value.(map[string]any)
+	if !ok {
+		return errors.New("smoke eval shield returned invalid value")
+	}
+	if strVal(val1["decision"]) != "deny" || strVal(val1["rule_id"]) != "shield.cmd.dangerous" {
+		return fmt.Errorf("smoke eval shield failed: got %v/%v, want deny/shield.cmd.dangerous", val1["decision"], val1["rule_id"])
+	}
+
+	// Smoke test 2: clean tool command with bypass allowed
+	in2 := map[string]any{
+		"stage":     "tool",
+		"key_id":    "k-stranger-smoke",
+		"tool_call": "bash",
+		"args":      map[string]any{"cmd": "echo clean"},
+		"bypass":    true,
+	}
+	rs2, err := snap.Query.Eval(ctx, rego.EvalInput(in2))
+	if err != nil {
+		return fmt.Errorf("smoke eval clean error: %w", err)
+	}
+	if len(rs2) == 0 || len(rs2[0].Expressions) == 0 {
+		return errors.New("smoke eval clean returned no expression")
+	}
+	val2, ok := rs2[0].Expressions[0].Value.(map[string]any)
+	if !ok {
+		return errors.New("smoke eval clean returned invalid value")
+	}
+	if strVal(val2["decision"]) != "allow" {
+		return fmt.Errorf("smoke eval clean failed: got %v, want allow", val2["decision"])
+	}
+
+	return nil
+}
+
+func strVal(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
 }
 
 // LoadBundle validates and installs an in-memory bundle.tar.gz.
@@ -85,15 +314,31 @@ func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, err
 		return nil, err
 	}
 
-	// Unpack to a temporary directory for validation
+	// Signature verification: if a verification key is configured on the store,
+	// the bundle MUST have a valid Ed25519 signature over all files.
+	if s.verificationKey != nil {
+		if err := VerifyBundle(b.RawFiles, b.SignaturesJSON, s.verificationKey); err != nil {
+			slog.Warn("bundle signature verification failed", "err", err)
+			return nil, fmt.Errorf("bundle: %w: %w", ErrInvalidSignature, err)
+		}
+	}
+
+	// Unpack to a temporary directory for staging & validation
 	tmpDir, err := os.MkdirTemp("", "cerberus-bundle-*")
 	if err != nil {
 		return nil, fmt.Errorf("bundle: temp dir: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
+	// Copy base policies (local core gateway/shield) into tmpDir so they are preserved
+	if s.policyDir != "" {
+		if err := copyDir(s.policyDir, tmpDir); err != nil {
+			return nil, fmt.Errorf("bundle: copy local core policies: %w", err)
+		}
+	}
+
+	// Unpack bundle's rego files into tmpDir
 	for name, content := range b.RegoFiles {
-		// Clean and flatten or recreate relative paths
 		rel := filepath.Clean(name)
 		if strings.HasPrefix(rel, "policies/") {
 			rel = strings.TrimPrefix(rel, "policies/")
@@ -111,6 +356,13 @@ func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, err
 	snap, err := Load(ctx, tmpDir, b.DataJSON, old.Epoch+1)
 	if err != nil {
 		return nil, err
+	}
+	snap.Revision = b.Revision
+
+	// Dry-run eval smoke: subset test fixtures must pass before activation
+	if err := dryRunSmoke(ctx, snap); err != nil {
+		slog.Warn("bundle rejected: dry-run smoke test failed", "err", err)
+		return nil, fmt.Errorf("bundle: smoke test failed: %w", err)
 	}
 
 	// If store has paths configured on disk, persist the bundle contents so
@@ -136,6 +388,12 @@ func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, err
 		}
 	}
 
+	// Save previous state for instant rollback
+	s.prevSnapshot = old
+	s.prevBundle = s.currentBundle
+	s.currentBundle = bundleGz
+
+	// Atomic swap
 	s.ptr.Store(snap)
 	if s.onSwap != nil {
 		s.onSwap(snap)
@@ -150,4 +408,85 @@ func (s *Store) LoadBundleFile(ctx context.Context, path string) (*Snapshot, err
 		return nil, fmt.Errorf("bundle: read file %s: %w", path, err)
 	}
 	return s.LoadBundle(ctx, raw)
+}
+
+// Rollback restores the previous bundle snapshot atomically with epoch+1.
+func (s *Store) Rollback(ctx context.Context) (*Snapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.prevSnapshot == nil && len(s.prevBundle) == 0 {
+		return nil, ErrNoRollback
+	}
+
+	old := s.ptr.Load()
+	var rolledBack *Snapshot
+
+	if len(s.prevBundle) > 0 {
+		b, err := ReadBundle(bytes.NewReader(s.prevBundle))
+		if err != nil {
+			return nil, fmt.Errorf("rollback: read prev bundle: %w", err)
+		}
+
+		tmpDir, err := os.MkdirTemp("", "cerberus-rollback-*")
+		if err != nil {
+			return nil, fmt.Errorf("rollback: temp dir: %w", err)
+		}
+		defer func() { _ = os.RemoveAll(tmpDir) }()
+
+		if s.policyDir != "" {
+			_ = copyDir(s.policyDir, tmpDir)
+		}
+		for name, content := range b.RegoFiles {
+			rel := filepath.Clean(name)
+			if strings.HasPrefix(rel, "policies/") {
+				rel = strings.TrimPrefix(rel, "policies/")
+			}
+			dest := filepath.Join(tmpDir, rel)
+			_ = os.MkdirAll(filepath.Dir(dest), 0o750)
+			_ = os.WriteFile(dest, content, 0o600)
+		}
+
+		snap, err := Load(ctx, tmpDir, b.DataJSON, old.Epoch+1)
+		if err != nil {
+			return nil, fmt.Errorf("rollback: load prev bundle: %w", err)
+		}
+		snap.Revision = b.Revision
+
+		if s.policyDir != "" {
+			for name, content := range b.RegoFiles {
+				rel := filepath.Clean(name)
+				if strings.HasPrefix(rel, "policies/") {
+					rel = strings.TrimPrefix(rel, "policies/")
+				}
+				dest := filepath.Join(s.policyDir, rel)
+				_ = os.MkdirAll(filepath.Dir(dest), 0o750)
+				_ = writeAtomic(dest, content)
+			}
+		}
+		if s.dataPath != "" {
+			_ = writeAtomic(s.dataPath, b.DataJSON)
+		}
+
+		rolledBack = snap
+	} else if s.prevSnapshot != nil {
+		rolledBack = &Snapshot{
+			Epoch:    old.Epoch + 1,
+			Revision: s.prevSnapshot.Revision,
+			Query:    s.prevSnapshot.Query,
+			Data:     s.prevSnapshot.Data,
+			Maskers:  s.prevSnapshot.Maskers,
+			Loaded:   time.Now(),
+		}
+	}
+
+	s.currentBundle = s.prevBundle
+	s.prevBundle = nil
+	s.prevSnapshot = nil
+
+	s.ptr.Store(rolledBack)
+	if s.onSwap != nil {
+		s.onSwap(rolledBack)
+	}
+	return rolledBack, nil
 }

@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,14 +14,32 @@ import (
 // lock-free on the hot path; mu only serializes Reload/ReplaceData against
 // each other so epochs increase monotonically.
 type Store struct {
-	ptr       atomic.Pointer[Snapshot]
-	policyDir string
-	dataPath  string
-	mu        sync.Mutex
+	ptr             atomic.Pointer[Snapshot]
+	policyDir       string
+	dataPath        string
+	verificationKey ed25519.PublicKey
+	mu              sync.Mutex
 	// onSwap, when non-nil, runs after each successful swap. Callers set it
 	// once before serving traffic (the engine keeps cerberus_policy_epoch
 	// live through it); read only under mu, so no race with Reload.
-	onSwap func(*Snapshot)
+	onSwap        func(*Snapshot)
+	prevSnapshot  *Snapshot
+	prevBundle    []byte
+	currentBundle []byte
+}
+
+// SetVerificationKey sets the public key used to verify incoming bundles.
+func (s *Store) SetVerificationKey(k ed25519.PublicKey) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.verificationKey = k
+}
+
+// VerificationKey returns the currently configured bundle verification public key.
+func (s *Store) VerificationKey() ed25519.PublicKey {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.verificationKey
 }
 
 // OnSwap registers f to run after each successful snapshot swap (Reload,
