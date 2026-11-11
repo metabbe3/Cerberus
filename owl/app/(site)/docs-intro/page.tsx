@@ -46,7 +46,7 @@ export default function DocsIntroPage() {
               href="https://github.com/metabbe3/Cerberus"
               target="_blank"
               rel="noreferrer"
-              className="clay-btn clay-btn-ghost clay-btn-sm font-semibold text-xs gap-1.5 hidden xs:inline-flex"
+              className="clay-btn clay-btn-ghost clay-btn-sm font-semibold text-xs gap-1.5 hidden sm:inline-flex"
             >
               GitHub
               <ExternalLink className="size-3 opacity-70" />

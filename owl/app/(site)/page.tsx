@@ -111,23 +111,23 @@ if (decision.allowed) {
         <nav className="max-w-5xl mx-auto clay-card px-4 py-2.5 flex items-center justify-between gap-3">
           <Link href="/" className="flex items-center gap-2.5 min-w-0">
             <span className="clay-chip clay-chip-coral size-9 text-lg shrink-0">🦉</span>
-            <span className="font-extrabold text-lg tracking-tight text-[var(--clay-ink)]">
+            <span className="font-extrabold text-base sm:text-lg tracking-tight text-[var(--clay-ink)]">
               Cerberus
             </span>
             <span className="hidden sm:inline text-xs font-semibold text-[var(--clay-ink-muted)] truncate">
               Policy Engine untuk AI Agent
             </span>
           </Link>
-          <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto">
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             <Link
               href="/docs-intro"
-              className="clay-btn clay-btn-ghost px-3 py-1.5 text-xs sm:text-sm font-semibold whitespace-nowrap"
+              className="clay-btn clay-btn-ghost clay-btn-sm px-2.5 sm:px-3 text-[13px] sm:text-sm font-semibold whitespace-nowrap"
             >
-              Dokumentasi
+              Docs
             </Link>
             <Link
               href="/login"
-              className="clay-btn clay-btn-ghost px-3 py-1.5 text-xs sm:text-sm font-semibold whitespace-nowrap"
+              className="clay-btn clay-btn-ghost clay-btn-sm px-2.5 sm:px-3 text-[13px] sm:text-sm font-semibold whitespace-nowrap"
             >
               Dashboard
             </Link>
@@ -135,9 +135,10 @@ if (decision.allowed) {
               href="https://github.com/metabbe3/Cerberus"
               target="_blank"
               rel="noreferrer"
-              className="clay-btn clay-btn-accent px-3 py-1.5 text-xs sm:text-sm font-semibold whitespace-nowrap"
+              title="GitHub"
+              className="clay-btn clay-btn-accent clay-btn-sm px-2.5 sm:px-3 text-[13px] sm:text-sm font-semibold whitespace-nowrap"
             >
-              GitHub
+              GH
             </a>
           </div>
         </nav>
@@ -180,7 +181,7 @@ if (decision.allowed) {
                 Decision Stream
               </span>
             </div>
-            <div className="space-y-2.5 font-mono text-xs sm:text-[13px]">
+            <div className="space-y-2.5 font-mono text-[13px] sm:text-sm">
               <div className="rounded-xl bg-[var(--clay-bg)] px-3.5 py-2.5 flex items-center justify-between gap-2">
                 <span className="text-[var(--clay-ink)] truncate">tool: grep ERROR app.log</span>
                 <span className="shrink-0 font-bold text-[#155E40]">ALLOW</span>
@@ -439,9 +440,9 @@ if (decision.allowed) {
           {/* Snippet Install mini */}
           <div className="space-y-4">
             <div className="clay-card p-4 bg-[#F2EDE5] border border-[var(--clay-border)] flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2 overflow-x-auto font-mono text-xs sm:text-sm font-medium text-[var(--clay-ink)]">
+              <div className="flex items-center gap-2 min-w-0 font-mono text-[13px] sm:text-sm font-medium text-[var(--clay-ink)]">
                 <span className="text-[var(--clay-accent)] select-none font-bold">$</span>
-                <code>{sdkSnippets[activeTab].install}</code>
+                <code className="break-all">{sdkSnippets[activeTab].install}</code>
               </div>
               <button
                 type="button"
@@ -460,7 +461,7 @@ if (decision.allowed) {
                 <span className="text-white/60">{sdkSnippets[activeTab].ext}</span>
                 <span className="text-white/40">stdlib only</span>
               </div>
-              <pre className="overflow-x-auto font-mono text-xs sm:text-sm leading-relaxed text-[#EAE4DC]">
+              <pre className="font-mono text-[13px] sm:text-sm leading-relaxed text-[#F6F1E9] whitespace-pre-wrap break-words">
                 {sdkSnippets[activeTab].code}
               </pre>
             </div>
