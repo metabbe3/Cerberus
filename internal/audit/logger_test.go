@@ -595,7 +595,9 @@ func TestLogger_TopDenies24h(t *testing.T) {
 	var top []RuleDenyCount
 	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 		top, _ = l.TopDenies24h(ctx, 10)
-		if len(top) == 3 {
+		// Poll until fully settled: length alone can reach 3 while async
+		// flush is still writing (counts off-by-one). Wait for exact counts.
+		if len(top) == 3 && top[0].Count == 5 && top[1].Count == 3 && top[2].Count == 1 {
 			break
 		}
 	}
