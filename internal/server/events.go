@@ -98,5 +98,16 @@ func writeFrame(w io.Writer, ev audit.Event) bool {
 	} else {
 		_, err = fmt.Fprintf(w, "event: decision\ndata: %s\n\n", b)
 	}
+	if err != nil {
+		return false
+	}
+	if ev.RuleID == "ops.rate_limited" || ev.RuleID == "ops.kill_switch" || ev.RuleID == "ops.break_glass" {
+		if ev.ID > 0 {
+			_, err = fmt.Fprintf(w, "id: %d\nevent: alert\ndata: %s\n\n", ev.ID, b)
+		} else {
+			_, err = fmt.Fprintf(w, "event: alert\ndata: %s\n\n", b)
+		}
+	}
+	return err == nil
 	return err == nil
 }

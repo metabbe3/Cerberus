@@ -11,7 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/metabbe3/cerberus/internal/audit"
 	"github.com/metabbe3/cerberus/internal/engine"
+	"github.com/metabbe3/cerberus/internal/ratelimit"
 )
 
 // EgressConfig holds options for the HTTP/HTTPS egress proxy.
@@ -20,6 +22,8 @@ type EgressConfig struct {
 	DialTimeout   time.Duration
 	// LookupIP overrides DNS lookup; defaults to net.LookupIP.
 	LookupIP func(host string) ([]net.IP, error)
+	Limiter  *ratelimit.Limiter
+	Audit    *audit.Logger
 }
 
 // EgressProxy inspects all outbound HTTP and HTTPS (via CONNECT) traffic,
@@ -57,6 +61,35 @@ func NewEgressProxy(eng *engine.Engine, cfg EgressConfig) (*EgressProxy, error) 
 
 // ServeHTTP handles both forward HTTP requests and HTTPS CONNECT tunnels.
 func (p *EgressProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	keyID := p.resolveKey(r)
+	if p.cfg.Limiter != nil {
+		v := p.cfg.Limiter.Allow(r.Context(), keyID, "http")
+		if !v.Allowed {
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", v.RetryAfter))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"decision":    "deny",
+				"error":       "rate limit exceeded",
+				"rule_id":     v.RuleID,
+				"reason":      v.Reason,
+				"retry_after": v.RetryAfter,
+			})
+			if p.cfg.Audit != nil {
+				p.cfg.Audit.Emit(audit.Event{
+					Time:     time.Now(),
+					Stage:    "http",
+					KeyID:    keyID,
+					Subject:  r.Host,
+					Decision: "deny",
+					RuleID:   v.RuleID,
+					Reason:   v.Reason,
+				})
+			}
+			return
+		}
+	}
+
 	if r.Method == http.MethodConnect {
 		p.handleConnect(w, r)
 		return

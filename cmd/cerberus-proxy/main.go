@@ -22,6 +22,7 @@ import (
 	"github.com/metabbe3/cerberus/internal/engine"
 	"github.com/metabbe3/cerberus/internal/policy"
 	"github.com/metabbe3/cerberus/internal/proxy"
+	"github.com/metabbe3/cerberus/internal/ratelimit"
 )
 
 var version = "dev"
@@ -115,6 +116,8 @@ func run() error {
 		return fmt.Errorf("cerberus-proxy: engine: %w", err)
 	}
 
+	lim := ratelimit.NewLimiter(store, auditLog)
+
 	parsedDockerHost, err := url.Parse(dockerHost)
 	if err != nil {
 		return fmt.Errorf("cerberus-proxy: invalid docker host: %w", err)
@@ -123,6 +126,8 @@ func run() error {
 	dp, err := proxy.NewDockerProxy(eng, proxy.DockerConfig{
 		TargetURL:     parsedDockerHost,
 		FallbackKeyID: defaultKey,
+		Limiter:       lim,
+		Audit:         auditLog,
 	})
 	if err != nil {
 		return fmt.Errorf("cerberus-proxy: init docker proxy: %w", err)
@@ -162,6 +167,8 @@ func run() error {
 	if egressAddr != "" {
 		ep, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
 			FallbackKeyID: defaultKey,
+			Limiter:       lim,
+			Audit:         auditLog,
 		})
 		if err != nil {
 			return fmt.Errorf("cerberus-proxy: init egress proxy: %w", err)

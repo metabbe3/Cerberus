@@ -81,6 +81,16 @@
     "k-teamlist": {
       "name": "team-list-agent",
       "team_id": "t3"
+    },
+    "k-rate-limited": {
+      "name": "rate-limited-agent",
+      "allowed_tools": ["read"],
+      "rate_limit": {
+        "requests_per_minute": 60,
+        "bursts": 2,
+        "tool_calls_per_hour": 10,
+        "daily_tool_calls": 5
+      }
     }
   },
 

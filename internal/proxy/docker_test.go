@@ -51,6 +51,35 @@ func setupTestEngine(t *testing.T) *engine.Engine {
 	return eng
 }
 
+func setupTestEngineWithStore(t *testing.T) (*engine.Engine, *policy.Store) {
+	t.Helper()
+	repoRoot := findRepoRoot(t)
+	policyDir := filepath.Join(repoRoot, "policies")
+	dataFile := filepath.Join(repoRoot, "policies", "testdata", "data.json")
+
+	ctx := context.Background()
+	store, err := policy.NewStore(ctx, policyDir, dataFile)
+	if err != nil {
+		t.Fatalf("policy.NewStore: %v", err)
+	}
+
+	auditDB := filepath.Join(t.TempDir(), "audit.db")
+	auditLog, err := audit.Open(ctx, auditDB, audit.Options{})
+	if err != nil {
+		t.Fatalf("audit.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = auditLog.Close() })
+
+	eng, err := engine.New(store, auditLog, engine.Options{
+		CacheSize:   1000,
+		EvalTimeout: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	return eng, store
+}
+
 func findRepoRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/metabbe3/cerberus/internal/proxy"
+	"github.com/metabbe3/cerberus/internal/ratelimit"
 )
 
 func TestEgressProxy_HTTPForward(t *testing.T) {
@@ -257,5 +258,53 @@ func TestEgressProxy_FailClosedWhenUnreachable(t *testing.T) {
 	_, err := client.Get("http://example.com/foo")
 	if err == nil {
 		t.Fatal("expected request through unreachable proxy to fail, but succeeded")
+	}
+}
+
+func TestEgressProxy_RateLimit(t *testing.T) {
+	eng, store := setupTestEngineWithStore(t)
+	lim := ratelimit.NewLimiter(store, nil)
+	ep, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		FallbackKeyID: "k-rate-limited",
+		Limiter:       lim,
+	})
+	if err != nil {
+		t.Fatalf("NewEgressProxy: %v", err)
+	}
+
+	proxySrv := httptest.NewServer(ep)
+	defer proxySrv.Close()
+
+	pURL, _ := url.Parse(proxySrv.URL)
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(pURL),
+		},
+	}
+
+	// k-rate-limited has bursts: 2
+	for i := 0; i < 2; i++ {
+		req, _ := http.NewRequest(http.MethodGet, "http://api.internal.corp/data", nil)
+		req.Header.Set("X-Cerberus-Key", "k-rate-limited")
+		resp, _ := client.Do(req)
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}
+
+	// 3rd request should hit 429
+	req, _ := http.NewRequest(http.MethodGet, "http://api.internal.corp/data", nil)
+	req.Header.Set("X-Cerberus-Key", "k-rate-limited")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", resp.StatusCode)
+	}
+	if resp.Header.Get("Retry-After") == "" {
+		t.Errorf("expected Retry-After header")
 	}
 }

@@ -472,6 +472,26 @@ func (m *dbManager) denyCountsSince(ctx context.Context, since time.Time) (int64
 	return globalMaxID, counts, nil
 }
 
+func (m *dbManager) countToolCallsToday(ctx context.Context, keyID string, today time.Time) (int64, error) {
+	if m.isMemory {
+		db := m.dbs["memory"]
+		if db == nil {
+			return 0, nil
+		}
+		var count int64
+		err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM events WHERE key_id = ? AND stage = 'tool'", keyID).Scan(&count)
+		return count, err
+	}
+
+	db, err := m.getDBForTime(today)
+	if err != nil {
+		return 0, err
+	}
+	var count int64
+	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM events WHERE key_id = ? AND stage = 'tool'", keyID).Scan(&count)
+	return count, err
+}
+
 func boolInt(b bool) int64 {
 	if b {
 		return 1

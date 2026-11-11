@@ -14,6 +14,7 @@ import (
 	"github.com/metabbe3/cerberus/internal/audit"
 	"github.com/metabbe3/cerberus/internal/engine"
 	"github.com/metabbe3/cerberus/internal/policy"
+	"github.com/metabbe3/cerberus/internal/ratelimit"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -23,6 +24,7 @@ type Deps struct {
 	Engine     *engine.Engine
 	Store      *policy.Store
 	Audit      *audit.Logger
+	Limiter    *ratelimit.Limiter
 	AdminToken string
 	Version    string
 }
@@ -33,6 +35,7 @@ type Server struct {
 	deps Deps
 	log  *slog.Logger
 
+	limiter      *ratelimit.Limiter
 	adminLimiter *rateLimiter
 	queryLimiter *rateLimiter
 
@@ -80,9 +83,14 @@ func (rl *rateLimiter) Allow() bool {
 // ShutdownStreams with http.Server.RegisterOnShutdown so a graceful shutdown
 // ends SSE streams instead of draining on them.
 func New(d Deps) *Server {
+	lim := d.Limiter
+	if lim == nil && d.Store != nil {
+		lim = ratelimit.NewLimiter(d.Store, d.Audit)
+	}
 	s := &Server{
 		deps:         d,
 		log:          slog.Default(),
+		limiter:      lim,
 		adminLimiter: newRateLimiter(1000), // generous general admin limiter
 		queryLimiter: newRateLimiter(10),   // strict 10/min for POST /v1/query
 	}

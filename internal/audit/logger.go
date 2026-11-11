@@ -304,6 +304,14 @@ func (l *Logger) TopDenies24h(ctx context.Context, limit int) ([]RuleDenyCount, 
 	return l.TopDenies(ctx, time.Now().Add(-24*time.Hour), limit)
 }
 
+// DailyToolCallsCount returns the number of tool stage events logged today for keyID.
+func (l *Logger) DailyToolCallsCount(ctx context.Context, keyID string, today time.Time) (int64, error) {
+	if l == nil || l.mgr == nil {
+		return 0, nil
+	}
+	return l.mgr.countToolCallsToday(ctx, keyID, today)
+}
+
 // Close flushes pending batches, stops writer & shipper, and closes SQLite.
 func (l *Logger) Close() error {
 	activeLogger.CompareAndSwap(l, nil)

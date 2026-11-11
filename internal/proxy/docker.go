@@ -18,7 +18,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/metabbe3/cerberus/internal/audit"
 	"github.com/metabbe3/cerberus/internal/engine"
+	"github.com/metabbe3/cerberus/internal/ratelimit"
 )
 
 var (
@@ -39,6 +41,8 @@ type DockerConfig struct {
 	FallbackKeyID string
 	// LabelResolver resolves container labels. If nil, defaultResolver is used when TargetURL is set.
 	LabelResolver ContainerLabelResolver
+	Limiter       *ratelimit.Limiter
+	Audit         *audit.Logger
 }
 
 // DockerProxy intercepts Docker Engine API calls and evaluates them against the
@@ -130,6 +134,34 @@ func (p *DockerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"reason":  err.Error(),
 		})
 		return
+	}
+
+	if p.cfg.Limiter != nil {
+		v := p.cfg.Limiter.Allow(r.Context(), input.KeyID, "docker")
+		if !v.Allowed {
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", v.RetryAfter))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"decision":    "deny",
+				"error":       "rate limit exceeded",
+				"rule_id":     v.RuleID,
+				"reason":      v.Reason,
+				"retry_after": v.RetryAfter,
+			})
+			if p.cfg.Audit != nil {
+				p.cfg.Audit.Emit(audit.Event{
+					Time:     time.Now(),
+					Stage:    "docker",
+					KeyID:    input.KeyID,
+					Subject:  input.Resource,
+					Decision: "deny",
+					RuleID:   v.RuleID,
+					Reason:   v.Reason,
+				})
+			}
+			return
+		}
 	}
 
 	decision := p.engine.Decide(r.Context(), input)

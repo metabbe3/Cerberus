@@ -964,3 +964,40 @@ func TestAdmin_UploadBundle(t *testing.T) {
 		t.Fatalf("decision = %s/%s, want deny/ai.llm.budget_exceeded", dec.Decision, dec.RuleID)
 	}
 }
+
+func TestDecide_RateLimit(t *testing.T) {
+	h := newHarness(t)
+
+	// k-rate-limited has requests_per_minute: 60, bursts: 2
+	body := `{"stage": "tool", "key_id": "k-rate-limited", "tool_name": "read", "tool_args": {}}`
+
+	// 1st request -> allowed (200)
+	resp1 := h.do(t, http.MethodPost, "/v1/decide", "application/json", body, false)
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("req 1 status = %d, want 200", resp1.StatusCode)
+	}
+
+	// 2nd request -> allowed (200)
+	resp2 := h.do(t, http.MethodPost, "/v1/decide", "application/json", body, false)
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("req 2 status = %d, want 200", resp2.StatusCode)
+	}
+
+	// 3rd request -> rate limited (429)
+	resp3 := h.do(t, http.MethodPost, "/v1/decide", "application/json", body, false)
+	if resp3.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("req 3 status = %d, want 429", resp3.StatusCode)
+	}
+	retryAfter := resp3.Header.Get("Retry-After")
+	if retryAfter == "" {
+		t.Errorf("expected Retry-After header to be set")
+	}
+
+	var dec engine.Decision
+	if err := json.NewDecoder(resp3.Body).Decode(&dec); err != nil {
+		t.Fatalf("decode 429 body: %v", err)
+	}
+	if dec.Decision != "deny" || dec.RuleID != "ops.rate_limited" {
+		t.Errorf("dec = %s/%s, want deny/ops.rate_limited", dec.Decision, dec.RuleID)
+	}
+}

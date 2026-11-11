@@ -57,6 +57,13 @@ func NewStore(ctx context.Context, policyDir, dataPath string) (*Store, error) {
 	return s, nil
 }
 
+// NewStoreWithSnapshot wraps an existing Snapshot into a Store (primarily for tests).
+func NewStoreWithSnapshot(snap *Snapshot) *Store {
+	s := &Store{}
+	s.ptr.Store(snap)
+	return s
+}
+
 // Current returns the live snapshot, lock-free; never nil after NewStore.
 func (s *Store) Current() *Snapshot { return s.ptr.Load() }
 
