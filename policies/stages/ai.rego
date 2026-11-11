@@ -146,6 +146,16 @@ model_listed(models) if {
 	input.model in models
 }
 
+# Glob support for allowed_models, mirroring allowed_tool_calls semantics:
+# entry "*" allows everything; "glm-*" matches "glm-5.3-flash".
+model_listed(models) if {
+	some m in models
+	not input.model in models
+	is_string(m)
+	contains(m, "*")
+	glob.match(m, null, input.model)
+}
+
 # ---------- tool (pre-exec): restricted → not allowed → blocked pattern → argument constraints ----------
 
 tool_decision := {

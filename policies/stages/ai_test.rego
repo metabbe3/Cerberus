@@ -232,3 +232,20 @@ test_llm_team_budget_within if {
 	out := decide({"stage": "llm", "key_id": "k-teamlist", "model": "m1", "context": {"spend_usd": 99}})
 	out.rule_id == "ai.llm.allow"
 }
+
+# --- allowed_models glob support (regression: "*flash*" must match "glm-5.3-flash") ---
+
+test_llm_model_glob_allows_family if {
+	out := decide({"stage": "llm", "key_id": "k-model-glob", "model": "glm-5.3-flash", "messages": []})
+	out.rule_id == "ai.llm.allow"
+}
+
+test_llm_model_glob_denies_other_family if {
+	out := decide({"stage": "llm", "key_id": "k-model-glob", "model": "claude-opus-4.5", "messages": []})
+	out.rule_id == "ai.llm.model_not_allowed"
+}
+
+test_llm_model_exact_still_works if {
+	out := decide({"stage": "llm", "key_id": "k-open", "model": "glm-5.3-flash", "messages": []})
+	out.rule_id == "ai.llm.allow"
+}
