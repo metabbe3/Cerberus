@@ -105,10 +105,111 @@ if (decision.allowed) {
   return (
     <div className="flex flex-col min-h-screen">
       {/* ===================================================================
-          3. STATS BAND: 3 kartu clay kecil angka nyata
+          1. CAPSULE NAV — identitas + menu utama
           =================================================================== */}
-      <section className="max-w-5xl mx-auto px-4 w-full py-8">
-        </section>
+      <header className="sticky top-4 z-50 px-4">
+        <nav className="max-w-5xl mx-auto clay-card px-4 py-2.5 flex items-center justify-between gap-3">
+          <Link href="/" className="flex items-center gap-2.5 min-w-0">
+            <span className="clay-chip clay-chip-coral size-9 text-lg shrink-0">🦉</span>
+            <span className="font-extrabold text-lg tracking-tight text-[var(--clay-ink)]">
+              Cerberus
+            </span>
+            <span className="hidden sm:inline text-xs font-semibold text-[var(--clay-ink-muted)] truncate">
+              Policy Engine untuk AI Agent
+            </span>
+          </Link>
+          <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto">
+            <Link
+              href="/docs-intro"
+              className="clay-btn clay-btn-ghost px-3 py-1.5 text-xs sm:text-sm font-semibold whitespace-nowrap"
+            >
+              Dokumentasi
+            </Link>
+            <Link
+              href="/login"
+              className="clay-btn clay-btn-ghost px-3 py-1.5 text-xs sm:text-sm font-semibold whitespace-nowrap"
+            >
+              Dashboard
+            </Link>
+            <a
+              href="https://github.com/metabbe3/Cerberus"
+              target="_blank"
+              rel="noreferrer"
+              className="clay-btn clay-btn-accent px-3 py-1.5 text-xs sm:text-sm font-semibold whitespace-nowrap"
+            >
+              GitHub
+            </a>
+          </div>
+        </nav>
+      </header>
+
+      {/* ===================================================================
+          2. HERO — klaim utama + demo decision card
+          =================================================================== */}
+      <section className="relative max-w-5xl mx-auto px-4 w-full pt-14 pb-10 sm:pt-20 sm:pb-14 overflow-hidden">
+        <div className="clay-blob clay-blob-mint" aria-hidden="true" />
+        <div className="clay-blob clay-blob-lilac" aria-hidden="true" />
+        <div className="relative grid gap-10 lg:grid-cols-2 lg:items-center">
+          <div>
+            <span className="clay-chip clay-chip-surface px-4 py-1 text-xs font-semibold uppercase tracking-wider text-[var(--clay-ink-muted)]">
+              Keamanan Deterministik
+            </span>
+            <h1 className="mt-4 text-4xl sm:text-5xl font-extrabold tracking-tight leading-[1.08] text-[var(--clay-ink)]">
+              Setiap tool call dievaluasi sebelum dieksekusi.
+            </h1>
+            <p className="mt-4 text-sm sm:text-base text-[var(--clay-ink-muted)] leading-relaxed max-w-md">
+              Cerberus adalah policy engine untuk AI agent: izinkan, tolak, dan audit
+              setiap aksi — fail-closed by design, tanpa bergantung pada janji probabilistik LLM.
+            </p>
+            <div className="mt-7 flex flex-wrap gap-3">
+              <Link href="/docs-intro" className="clay-btn clay-btn-accent px-5 py-2.5 text-sm font-semibold">
+                Lihat Dokumentasi
+              </Link>
+              <Link href="/login" className="clay-btn clay-btn-ghost px-5 py-2.5 text-sm font-semibold">
+                Live Dashboard
+              </Link>
+            </div>
+          </div>
+
+          <div className="clay-card p-5 sm:p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <span className="clay-chip clay-chip-mint size-8">
+                <Terminal className="size-4 text-[#155E40]" />
+              </span>
+              <span className="text-xs font-bold uppercase tracking-wider text-[var(--clay-ink-muted)]">
+                Decision Stream
+              </span>
+            </div>
+            <div className="space-y-2.5 font-mono text-xs sm:text-[13px]">
+              <div className="rounded-xl bg-[var(--clay-bg)] px-3.5 py-2.5 flex items-center justify-between gap-2">
+                <span className="text-[var(--clay-ink)] truncate">tool: grep ERROR app.log</span>
+                <span className="shrink-0 font-bold text-[#155E40]">ALLOW</span>
+              </div>
+              <div className="rounded-xl bg-[var(--clay-bg)] px-3.5 py-2.5 flex items-center justify-between gap-2">
+                <span className="text-[var(--clay-ink)] truncate">ssh: deploy@git.teknikal.id</span>
+                <span className="shrink-0 font-bold text-[#155E40]">ALLOW</span>
+              </div>
+              <div className="rounded-xl bg-[var(--clay-bg)] px-3.5 py-2.5 flex items-center justify-between gap-2">
+                <span className="text-[var(--clay-ink)] truncate">tool: rm -rf /</span>
+                <span className="shrink-0 font-bold text-[#B3261E]">DENY</span>
+              </div>
+              <div className="rounded-xl bg-[var(--clay-bg)] px-3.5 py-2.5 flex items-center justify-between gap-2">
+                <span className="text-[var(--clay-ink)] truncate">llm: &quot;koneksi ke 10.0.3.7&quot;</span>
+                <span className="shrink-0 font-bold text-[#B3261E]">DENY</span>
+              </div>
+            </div>
+            <p className="mt-4 text-[11px] text-[var(--clay-ink-muted)] leading-relaxed">
+              Contoh nyata kebijakan: allowlist tool, whitelist host SSH, shield perintah
+              destruktif, dan blocked-pattern pada prompt LLM.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* ===================================================================
+          3. (stats band dihapus — internal tools, tanpa angka marketing)
+          =================================================================== */}
+      <span className="hidden" />
 
       {/* ===================================================================
           4. FITUR: 3 Puffy Cards dengan pressed-in icon chips
