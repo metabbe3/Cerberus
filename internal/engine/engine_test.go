@@ -238,7 +238,7 @@ func TestDecide_TimeoutDenies(t *testing.T) {
 
 func TestDecide_UnknownStageDenied(t *testing.T) {
 	e := newTestEngine(t, &recSink{}, Options{})
-	d := e.Decide(context.Background(), Input{Stage: "docker", KeyID: "k-glob"})
+	d := e.Decide(context.Background(), Input{Stage: "unknown_stage", KeyID: "k-glob"})
 	if d.Decision != "deny" || d.RuleID != "internal.unknown_stage" {
 		t.Fatalf("decision = %s/%s, want deny/internal.unknown_stage", d.Decision, d.RuleID)
 	}

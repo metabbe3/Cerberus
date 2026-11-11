@@ -33,7 +33,7 @@ decide_closed(inp) := out if {
 }
 
 test_unknown_stage_denied if {
-	out := decide({"stage": "docker", "key_id": "k-open"})
+	out := decide({"stage": "unknown_stage", "key_id": "k-open"})
 	out.decision == "deny"
 	out.rule_id == "internal.unknown_stage"
 }
