@@ -4,10 +4,22 @@ import { defineConfig } from "@playwright/test";
 // test PUTs don't dirty the repo) and Owl's dev server proxying to it. Port
 // 3100 keeps clear of :3000, which is commonly tunneled. The engine command
 // self-preps: build the binary and copy prod.json to a scratch data file
-// before starting.
+// before starting. A setup project signs in once and shares the cookie.
+export const E2E_PASSWORD = "e2e-pass";
+
 export default defineConfig({
   testDir: "./e2e",
   use: { baseURL: "http://localhost:3100" },
+  projects: [
+    { name: "setup", testMatch: /auth\.setup\.ts/ },
+    { name: "login", testMatch: /login\.spec\.ts/ },
+    {
+      name: "smoke",
+      testMatch: /smoke\.spec\.ts/,
+      dependencies: ["setup"],
+      use: { storageState: "test-results/.auth.json" },
+    },
+  ],
   webServer: [
     {
       command:
@@ -21,7 +33,7 @@ export default defineConfig({
     },
     {
       command: "PORT=3100 npm run dev",
-      url: "http://localhost:3100",
+      url: "http://localhost:3100/login",
       timeout: 60_000,
       reuseExistingServer: false,
       stdout: "pipe",
@@ -29,6 +41,8 @@ export default defineConfig({
       env: {
         CERBERUS_ADMIN_TOKEN: "e2e",
         CERBERUS_URL: "http://localhost:8089",
+        OWL_PASSWORD: E2E_PASSWORD,
+        OWL_SESSION_SECRET: "e2e-session-secret-0123456789abcdef0123456789abcdef",
       },
     },
   ],

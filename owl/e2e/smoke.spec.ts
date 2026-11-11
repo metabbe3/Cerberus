@@ -17,7 +17,8 @@ test("agents table loads and shows the seeded 64-hex key", async ({ page }) => {
 test("edit an agent and save — epoch increments; fail-closed flip shows the red confirm", async ({
   page,
 }) => {
-  const before = (await (await fetch("http://localhost:3100/api/data")).json()) as {
+  // page.request carries the signed-in cookie; bare fetch would get 401.
+  const before = (await (await page.request.get("/api/data")).json()) as {
     epoch: number;
   };
 

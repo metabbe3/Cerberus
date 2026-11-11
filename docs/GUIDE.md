@@ -162,19 +162,26 @@ masking, models/budget), live decision stream, Rego viewer + validate, settings.
 The browser never talks to the engine: Owl proxies every call through its own
 route handlers, so the admin token lives only in Owl's server env.
 
-**Owl has no authentication of its own** — every visitor is an admin through
-the proxy. Keep it on loopback or a private network and put an authenticating
-reverse proxy in front before exposing it; compose binds it to `127.0.0.1`.
-
+- **Login**: one shared admin password. `/login` checks `OWL_PASSWORD` and
+  sets a 12-hour httpOnly session cookie signed with `OWL_SESSION_SECRET`
+  (`openssl rand -hex 32`). Middleware gates every page and `/api/*`: pages
+  redirect to `/login`, APIs answer `401`. Leave either variable unset and
+  nobody can sign in — there is no open mode. Failed attempts wait 500ms;
+  that is the only brute-force defence, so terminate TLS (and rate-limit)
+  in front before exposing Owl beyond loopback.
 - **Env** (in `owl/.env.local`, gitignored — see `owl/.env.example`):
-  `CERBERUS_URL` (default `http://localhost:8089`) and `CERBERUS_ADMIN_TOKEN`
-  (no token → every page shows "Engine unreachable").
+  `CERBERUS_URL` (default `http://localhost:8089`), `CERBERUS_ADMIN_TOKEN`
+  (no token → every page shows "Engine unreachable"), `OWL_PASSWORD`,
+  `OWL_SESSION_SECRET`. The cookie is `Secure` in production builds; set
+  `OWL_INSECURE_COOKIE=1` to serve a production build over plain http.
 - **Dev**: `cd owl && cp .env.example .env.local && npm install && npm run dev`
   → http://localhost:3000. All engine reads/writes go through `/api/*` proxies
   (`/api/data`, `/api/audit`, `/api/events`, `/api/policy*`).
-- **Compose**: `CERBERUS_ADMIN_TOKEN=smoke docker compose -f
-  deploy/docker-compose.yml --profile owl up` → engine :8089, Owl :3000 with
-  the same token; `data/` and `policies/` are bind-mounted into both.
+- **Compose**: `CERBERUS_ADMIN_TOKEN=smoke OWL_PASSWORD=… OWL_SESSION_SECRET=…
+  docker compose -f deploy/docker-compose.yml --profile owl up` → engine :8089,
+  Owl on `127.0.0.1:3000`. `policies/` is mounted read-only into Owl for the
+  viewer; the engine bakes its policies in at image build, so rebuild after
+  editing Rego.
 - **Policy viewer ceiling**: the engine has no "read policy" endpoint, so the
   `/policy` page reads Rego files from `OWL_POLICY_DIR` (default: the repo's
   `../policies` relative to `owl/`) on Owl's server. Outside compose, point
@@ -183,7 +190,7 @@ reverse proxy in front before exposing it; compose binds it to `127.0.0.1`.
 - **Edits from the UI install whole documents**: every save PUTs the full data
   JSON (epoch +1); a 422 shows the engine's message verbatim and changes
   nothing. Tests: `npm run test` (vitest) + `npx playwright test` (needs a Go
-  toolchain; starts its own engine + dev server on :3100).
+  toolchain; starts its own engine + dev server on :3100 and signs in).
 
 ## Adding a stage (3 touches)
 
