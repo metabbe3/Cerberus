@@ -11,16 +11,19 @@ export async function middleware(req: NextRequest) {
   if (req.nextUrl.pathname.startsWith("/api/")) {
     return NextResponse.json({ error: "Not signed in" }, { status: 401 });
   }
-  // Behind a reverse proxy (cloudflared) the standalone server ignores the
-  // Host header, so req.url carries localhost:<port> and Next anchors
-  // absolute redirects to that origin. Start from the canonical redirect,
-  // then override Location to a relative path — browsers resolve it against
-  // the host they actually used, keeping the redirect proxy-safe.
   const next = req.nextUrl.pathname + req.nextUrl.search;
   const target = next !== "/" ? `/login?next=${encodeURIComponent(next)}` : "/login";
-  const res = NextResponse.redirect(new URL("/login", req.url));
-  res.headers.set("location", target);
-  return res;
+  // This runtime build breaks on NextResponse.redirect/rewrite behind a
+  // proxy (relative req.url -> ERR_INVALID_URL internally). Serve a tiny
+  // HTML page that sends the browser to /login via meta refresh instead —
+  // no URL construction anywhere.
+  const esc = target.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+  return new NextResponse(
+    `<!doctype html><html><head><meta charset="utf-8"><title>Owl — login</title>` +
+      `<meta http-equiv="refresh" content="0;url=${esc}">` +
+      `</head><body><p>Mengalihkan ke login… <a href="${esc}">lanjut</a></p></body></html>`,
+    { status: 200, headers: { "content-type": "text/html; charset=utf-8" } }
+  );
 }
 
 export const config = {
