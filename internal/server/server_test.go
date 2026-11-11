@@ -1001,3 +1001,98 @@ func TestDecide_RateLimit(t *testing.T) {
 		t.Errorf("dec = %s/%s, want deny/ops.rate_limited", dec.Decision, dec.RuleID)
 	}
 }
+
+func TestKillSwitch_EndToEnd(t *testing.T) {
+	h := newHarness(t)
+
+	// k-bad is configured in kill_switch.keys in policies/testdata/data.json
+	body := `{"stage": "llm", "key_id": "k-bad", "model": "m1"}`
+	resp := h.do(t, http.MethodPost, "/v1/decide", "application/json", body, false)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("decide status = %d, want 200", resp.StatusCode)
+	}
+
+	var dec engine.Decision
+	if err := json.NewDecoder(resp.Body).Decode(&dec); err != nil {
+		t.Fatalf("decode decision: %v", err)
+	}
+	if dec.Decision != "deny" || dec.RuleID != "ops.kill_switch" {
+		t.Fatalf("expected deny/ops.kill_switch, got %s/%s", dec.Decision, dec.RuleID)
+	}
+}
+
+func TestBreakGlass_EndToEnd(t *testing.T) {
+	h := newHarness(t)
+
+	body := `{"stage": "llm", "key_id": "k-bad", "model": "m1"}`
+
+	// 1. Without break-glass: denied by kill_switch
+	resp1 := h.do(t, http.MethodPost, "/v1/decide", "application/json", body, false)
+	var dec1 engine.Decision
+	_ = json.NewDecoder(resp1.Body).Decode(&dec1)
+	if dec1.Decision != "deny" {
+		t.Fatalf("expected deny without break-glass, got %s", dec1.Decision)
+	}
+
+	// 2. Non-admin client sending X-Break-Glass: MUST NOT bypass (unauthorized)
+	req2, _ := http.NewRequest(http.MethodPost, h.ts.URL+"/v1/decide", strings.NewReader(body))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("X-Break-Glass", "true")
+	resp2, err := h.ts.Client().Do(req2)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	var dec2 engine.Decision
+	_ = json.NewDecoder(resp2.Body).Decode(&dec2)
+	_ = resp2.Body.Close()
+	if dec2.Decision != "deny" {
+		t.Fatalf("unauthorized X-Break-Glass should NOT bypass: got %s", dec2.Decision)
+	}
+
+	// 3. Admin sending X-Break-Glass with valid admin token: MUST bypass
+	req3, _ := http.NewRequest(http.MethodPost, h.ts.URL+"/v1/decide", strings.NewReader(body))
+	req3.Header.Set("Content-Type", "application/json")
+	req3.Header.Set("Authorization", "Bearer "+adminToken)
+	req3.Header.Set("X-Break-Glass", "emergency production hotfix")
+	resp3, err := h.ts.Client().Do(req3)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	var dec3 engine.Decision
+	_ = json.NewDecoder(resp3.Body).Decode(&dec3)
+	_ = resp3.Body.Close()
+	if dec3.Decision != "allow" || dec3.RuleID != "ops.break_glass" {
+		t.Fatalf("expected allow/ops.break_glass, got %s/%s (%s)", dec3.Decision, dec3.RuleID, dec3.Reason)
+	}
+
+	// 4. Test admin break-glass API window
+	bgBody := `{"key_id": "k-bad", "duration_minutes": 15, "reason": "console hotfix"}`
+	respBG := h.do(t, http.MethodPost, "/v1/admin/break-glass", "application/json", bgBody, true)
+	if respBG.StatusCode != http.StatusOK {
+		t.Fatalf("post /v1/admin/break-glass status = %d, want 200", respBG.StatusCode)
+	}
+	_ = respBG.Body.Close()
+
+	// Subsequent request during window without headers should now bypass
+	resp4 := h.do(t, http.MethodPost, "/v1/decide", "application/json", body, false)
+	var dec4 engine.Decision
+	_ = json.NewDecoder(resp4.Body).Decode(&dec4)
+	if dec4.Decision != "allow" || dec4.RuleID != "ops.break_glass" {
+		t.Fatalf("expected active window to bypass, got %s/%s", dec4.Decision, dec4.RuleID)
+	}
+
+	// Deactivate break-glass
+	respDel := h.do(t, http.MethodDelete, "/v1/admin/break-glass?key_id=k-bad", "", "", true)
+	if respDel.StatusCode != http.StatusOK {
+		t.Fatalf("delete break glass status = %d", respDel.StatusCode)
+	}
+	_ = respDel.Body.Close()
+
+	// Request is denied again
+	resp5 := h.do(t, http.MethodPost, "/v1/decide", "application/json", body, false)
+	var dec5 engine.Decision
+	_ = json.NewDecoder(resp5.Body).Decode(&dec5)
+	if dec5.Decision != "deny" {
+		t.Fatalf("expected deny after deactivation, got %s", dec5.Decision)
+	}
+}

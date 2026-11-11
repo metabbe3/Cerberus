@@ -3,7 +3,13 @@
 
   "config": {
     "bypass_unknown_teams": true,
-    "bypass_unknown_keys": true
+    "bypass_unknown_keys": true,
+    "kill_switch": {
+      "global": false,
+      "keys": {
+        "k-bad": true
+      }
+    }
   },
 
   "teams": {

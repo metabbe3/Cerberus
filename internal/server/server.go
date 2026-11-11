@@ -36,6 +36,7 @@ type Server struct {
 	log  *slog.Logger
 
 	limiter      *ratelimit.Limiter
+	breakGlass   *breakGlassManager
 	adminLimiter *rateLimiter
 	queryLimiter *rateLimiter
 
@@ -91,6 +92,7 @@ func New(d Deps) *Server {
 		deps:         d,
 		log:          slog.Default(),
 		limiter:      lim,
+		breakGlass:   newBreakGlassManager(),
 		adminLimiter: newRateLimiter(1000), // generous general admin limiter
 		queryLimiter: newRateLimiter(10),   // strict 10/min for POST /v1/query
 	}
@@ -118,6 +120,9 @@ func New(d Deps) *Server {
 	mux.HandleFunc("POST /v1/admin/bundle", s.admin(s.uploadBundle))
 	mux.HandleFunc("PUT /v1/admin/bundle", s.admin(s.uploadBundle))
 	mux.HandleFunc("POST /v1/admin/bundle/rollback", s.admin(s.rollbackBundle))
+	mux.HandleFunc("POST /v1/admin/break-glass", s.admin(s.postBreakGlass))
+	mux.HandleFunc("GET /v1/admin/break-glass", s.admin(s.getBreakGlass))
+	mux.HandleFunc("DELETE /v1/admin/break-glass", s.admin(s.deleteBreakGlass))
 
 	// SPRINT 2C REST API parity
 	mux.HandleFunc("GET /v1/policies", s.admin(s.listPolicies))

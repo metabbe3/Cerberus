@@ -56,9 +56,39 @@ stage_is_known if {
 	input.stage in known_stages
 }
 
+# ---------- kill switch ----------
+
+kill_switch_active if data.config.kill_switch.global == true
+
+kill_switch_active if {
+	some k, active in data.config.kill_switch.keys
+	k == input.key_id
+	active == true
+}
+
+kill_switch_verdict := {
+	"decision": "deny",
+	"rule_id": "ops.kill_switch",
+	"reason": "global kill switch active",
+} if {
+	data.config.kill_switch.global == true
+}
+
+kill_switch_verdict := {
+	"decision": "deny",
+	"rule_id": "ops.kill_switch",
+	"reason": sprintf("kill switch active for key %q", [input.key_id]),
+} if {
+	not data.config.kill_switch.global == true
+	some k, active in data.config.kill_switch.keys
+	k == input.key_id
+	active == true
+}
+
 # ---------- core decision ----------
 #
-# Gate order: stage gate → key gate. An unknown stage fails closed whatever the
+# Gate order: kill switch → stage gate → key gate. An active kill switch
+# denies immediately. Otherwise an unknown stage fails closed whatever the
 # key — a typo'd or not-yet-implemented stage must never ride the key gates
 # (in particular config.bypass_unknown_keys). A known stage is then gated by
 # the key gate → stage verdict.
@@ -68,12 +98,18 @@ stage_is_known if {
 # that deny stands. If the stage policy allows, it is admitted under the
 # rule_id config.bypass_unknown_keys.
 
+decision := kill_switch_verdict if {
+	kill_switch_active
+}
+
 decision := stage_decision if {
+	not kill_switch_active
 	not stage_is_known
 }
 
 # Bypass keys enabled: stage policy checks stand; if allowed, return bypass rule_id.
 decision := stage_decision if {
+	not kill_switch_active
 	stage_is_known
 	not agent
 	bypass_keys_enabled
@@ -81,6 +117,7 @@ decision := stage_decision if {
 }
 
 decision := allow_bypass_keys if {
+	not kill_switch_active
 	stage_is_known
 	not agent
 	bypass_keys_enabled
@@ -90,6 +127,7 @@ decision := allow_bypass_keys if {
 # Anything but a literal boolean true fails closed: "true", 1, null or a
 # missing flag must never match neither rule (→ internal.default) nor bypass.
 decision := deny_unknown_key if {
+	not kill_switch_active
 	stage_is_known
 	not agent
 	not bypass_keys_enabled
@@ -98,6 +136,7 @@ decision := deny_unknown_key if {
 bypass_keys_enabled if data.config.bypass_unknown_keys == true
 
 decision := stage_decision if {
+	not kill_switch_active
 	stage_is_known
 	agent
 }

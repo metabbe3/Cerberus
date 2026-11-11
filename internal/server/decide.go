@@ -33,6 +33,57 @@ func (s *Server) decide(stage string) http.HandlerFunc {
 			in.Stage = stage
 		}
 
+		// Break-glass check: header X-Break-Glass + 15 min time-window
+		// Security constraint: only from unix socket or with valid admin token.
+		var breakGlassActive bool
+		var breakGlassReason string
+		if s.breakGlass != nil {
+			breakGlassActive, breakGlassReason = s.breakGlass.IsActive(in.KeyID)
+		}
+		if h := r.Header.Get("X-Break-Glass"); h != "" {
+			if s.isPrivilegedAdmin(r) {
+				breakGlassActive = true
+				if breakGlassReason == "" {
+					breakGlassReason = h
+					if breakGlassReason == "true" || breakGlassReason == "1" {
+						breakGlassReason = "privileged admin header bypass"
+					}
+				}
+				if s.breakGlass != nil {
+					s.breakGlass.Activate(in.KeyID, 15*time.Minute, breakGlassReason)
+				}
+			} else {
+				s.log.Warn("http: unauthorized X-Break-Glass attempt ignored", "key_id", in.KeyID, "remote_addr", r.RemoteAddr)
+			}
+		}
+
+		if breakGlassActive {
+			var epoch uint64
+			if s.deps.Store != nil && s.deps.Store.Current() != nil {
+				epoch = s.deps.Store.Current().Epoch
+			}
+			d := engine.Decision{
+				Decision: "allow",
+				RuleID:   "ops.break_glass",
+				Reason:   "BREAK-GLASS EMERGENCY BYPASS: " + breakGlassReason,
+				Epoch:    epoch,
+			}
+			if s.deps.Audit != nil {
+				s.deps.Audit.Emit(audit.Event{
+					Time:     time.Now(),
+					Stage:    in.Stage,
+					KeyID:    in.KeyID,
+					Subject:  in.ToolCall,
+					Decision: "allow",
+					RuleID:   "ops.break_glass",
+					Reason:   "BREAK-GLASS EMERGENCY BYPASS: " + breakGlassReason,
+					Epoch:    epoch,
+				})
+			}
+			writeJSON(w, http.StatusOK, d)
+			return
+		}
+
 		// Rate limiting and quota check per key
 		if s.limiter != nil {
 			verdict := s.limiter.Allow(r.Context(), in.KeyID, in.Stage)

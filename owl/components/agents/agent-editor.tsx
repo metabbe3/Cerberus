@@ -1,11 +1,23 @@
 "use client";
 
-import { Plus, Save, X } from "lucide-react";
+import { Flame, History, Plus, Save, ShieldAlert, X } from "lucide-react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertCircle } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -24,7 +36,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { StringListEditor } from "@/components/editors/string-list";
-import { useSaveAgent } from "@/lib/queries";
+import { useBreakGlass, useData, useSaveAgent, useToggleKillSwitch } from "@/lib/queries";
 import type { Agent, MaskingRule } from "@/lib/schema";
 
 const TRANSFORMS = ["redact", "mask", "hash"] as const;
@@ -58,6 +70,12 @@ export function AgentEditor({
     return d;
   });
   const save = useSaveAgent();
+  const toggleKillSwitch = useToggleKillSwitch();
+  const breakGlass = useBreakGlass();
+  const { data: rawData } = useData();
+  const killSwitchConfig = (rawData?.data as any)?.config?.kill_switch;
+  const isKilled = Boolean(killSwitchConfig?.keys?.[keyId] || killSwitchConfig?.global);
+
   const [savedError, setSavedError] = useState<string | null>(null);
   const prefill = params.get("prefill");
   const llmHint = prefill?.startsWith("llm:")
@@ -78,18 +96,129 @@ export function AgentEditor({
     );
   };
 
+  const handleToggleKillSwitch = () => {
+    toggleKillSwitch.mutate(
+      { keyId, active: !isKilled },
+      {
+        onSuccess: () =>
+          toast.success(
+            !isKilled
+              ? `Kill Switch ACTIVATED for ${keyId}`
+              : `Kill Switch DEACTIVATED for ${keyId}`,
+          ),
+        onError: (e) => toast.error(`Failed to update kill switch: ${e.message}`),
+      },
+    );
+  };
+
+  const handleBreakGlass = () => {
+    breakGlass.mutate(
+      { keyId, reason: `Emergency break-glass for ${keyId} from Owl Console`, durationMinutes: 15 },
+      {
+        onSuccess: () =>
+          toast.success(`Break-Glass bypass active for 15 minutes on ${keyId}`),
+        onError: (e) => toast.error(`Break-Glass failed: ${e.message}`),
+      },
+    );
+  };
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="truncate font-mono text-lg">{keyId}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="truncate font-mono text-lg">{keyId}</h1>
+            {isKilled && (
+              <span className="rounded bg-destructive/15 px-2 py-0.5 text-xs font-semibold text-destructive">
+                KILL SWITCH ACTIVE
+              </span>
+            )}
+          </div>
           <p className="text-sm text-muted-foreground">
             {draft.description ?? "No description"}
           </p>
         </div>
-        <Button onClick={onSave} disabled={save.isPending}>
-          <Save aria-hidden /> Save
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Audit Trail Button */}
+          <Button variant="outline" size="sm" asChild>
+            <Link href={`/decisions?key_id=${encodeURIComponent(keyId)}`}>
+              <History className="size-4" /> Audit Trail
+            </Link>
+          </Button>
+
+          {/* Kill Switch with Confirm Dialog */}
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant={isKilled ? "destructive" : "outline"}
+                size="sm"
+                className={isKilled ? "animate-pulse" : ""}
+                disabled={toggleKillSwitch.isPending}
+              >
+                <ShieldAlert className="size-4" />
+                {isKilled ? "Deactivate Kill Switch" : "Kill Switch"}
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  {isKilled
+                    ? `Deactivate Kill Switch for ${keyId}?`
+                    : `Activate Kill Switch for ${keyId}?`}
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  {isKilled
+                    ? `This will restore normal policy evaluations for agent ${keyId}.`
+                    : `CRITICAL ACTION: This will immediately deny ALL traffic for agent key ${keyId} with rule_id ops.kill_switch.`}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={handleToggleKillSwitch}
+                  className={isKilled ? "" : "bg-destructive text-destructive-foreground hover:bg-destructive/90"}
+                >
+                  {isKilled ? "Restore Agent" : "Confirm Kill"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
+          {/* Break Glass with Confirm Dialog */}
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={breakGlass.isPending}
+              >
+                <Flame className="size-4" /> Break Glass (15m)
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Trigger Emergency Break-Glass for {keyId}?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  WARNING: This will bypass ALL policy constraints for key {keyId} for a 15-minute emergency time-window. An urgent real-time security alert will be streamed to all monitoring dashboards.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={handleBreakGlass}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  Confirm Break-Glass Bypass
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
+          {/* Save Button */}
+          <Button onClick={onSave} disabled={save.isPending}>
+            <Save aria-hidden /> Save
+          </Button>
+        </div>
       </div>
 
       {llmHint ? (

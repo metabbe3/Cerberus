@@ -40,6 +40,32 @@ test_unknown_stage_denied if {
 	out.rule_id == "internal.unknown_stage"
 }
 
+test_kill_switch_per_key if {
+	out := decide({"stage": "llm", "key_id": "k-bad", "model": "m1"})
+	out.decision == "deny"
+	out.rule_id == "ops.kill_switch"
+	out.reason == "kill switch active for key \"k-bad\""
+}
+
+test_kill_switch_global if {
+	global_cfg := object.union(data.testdata.config, {"kill_switch": {"global": true}})
+	out := decision with input as {"stage": "llm", "key_id": "k-open", "model": "m1"}
+		with data.config as global_cfg
+		with data.teams as data.testdata.teams
+		with data.agents as data.testdata.agents
+		with data.blocked_patterns as data.testdata.blocked_patterns
+		with data.domains as data.testdata.domains
+		with data.prod_shield as data.testdata.prod_shield
+	out.decision == "deny"
+	out.rule_id == "ops.kill_switch"
+	out.reason == "global kill switch active"
+}
+
+test_unaffected_key_allowed if {
+	out := decide({"stage": "llm", "key_id": "k-open", "model": "m1"})
+	out.decision == "allow"
+}
+
 test_missing_stage_denied if {
 	out := decide({"key_id": "k-open"})
 	out.rule_id == "internal.unknown_stage"

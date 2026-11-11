@@ -118,6 +118,18 @@ export async function getStatus(): Promise<EngineStatus> {
   return (await res.json()) as EngineStatus;
 }
 
+export async function postBreakGlass(data: {
+  key_id?: string;
+  duration_minutes?: number;
+  reason?: string;
+}): Promise<unknown> {
+  const res = await engineFetch("/v1/admin/break-glass", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+  return await res.json();
+}
+
 // Raw upstream response for the SSE proxy — the route streams res.body
 // straight to the client (no buffering layer of our own). The caller's
 // abort signal (the browser disconnect) must reach the upstream fetch, or

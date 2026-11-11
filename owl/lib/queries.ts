@@ -70,6 +70,43 @@ export function useSaveAgent() {
   });
 }
 
+export function useToggleKillSwitch() {
+  const { data: current } = useData();
+  const put = usePutData();
+  return useMutation({
+    mutationFn: async ({ keyId, active }: { keyId: string; active: boolean }) => {
+      if (!current) throw new Error("no data loaded");
+      const next = structuredClone(current.data) as any;
+      if (!next.config) next.config = {};
+      if (!next.config.kill_switch) next.config.kill_switch = {};
+      if (!next.config.kill_switch.keys) next.config.kill_switch.keys = {};
+      if (active) {
+        next.config.kill_switch.keys[keyId] = true;
+      } else {
+        delete next.config.kill_switch.keys[keyId];
+      }
+      return put.mutateAsync(next);
+    },
+  });
+}
+
+export function useBreakGlass() {
+  return useMutation({
+    mutationFn: async ({ keyId, reason, durationMinutes }: { keyId: string; reason: string; durationMinutes?: number }) => {
+      const res = await fetch("/api/admin/break-glass", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key_id: keyId, reason, duration_minutes: durationMinutes ?? 15 }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Failed to activate break glass");
+      }
+      return res.json();
+    },
+  });
+}
+
 // Live + history, newest-first. The engine replays its last-50 ring on every
 // (re)connect and the history page already contains those rows, so duplicates
 // are dropped by id — first occurrence wins (live rows sit ahead of history).
