@@ -155,6 +155,9 @@ export const CerberusDataSchema = z
     blocked_patterns: z.array(z.string()).optional(),
     domains: z.record(z.string(), z.unknown()).optional(),
     prod_shield: ProdShieldSchema.optional(),
+    // New stages (e.g. ssh from sprint 8) may add top-level data sections;
+    // accept-and-passthrough so dashboards on newer engines keep working.
+    ssh: z.record(z.string(), z.unknown()).optional(),
   });
 
 export type CerberusData = z.infer<typeof CerberusDataSchema>;
