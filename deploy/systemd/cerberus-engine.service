@@ -1,0 +1,28 @@
+[Unit]
+Description=Cerberus Policy Engine
+Documentation=https://github.com/metabbe3/cerberus
+After=network.target
+
+[Service]
+Type=simple
+User=cerberus
+Group=cerberus
+EnvironmentFile=-/etc/cerberus/cerberus-engine.env
+ExecStart=/usr/local/bin/cerberus
+Restart=always
+RestartSec=5s
+
+# Security Hardening
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/cerberus /etc/cerberus/data
+
+# Resource Limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

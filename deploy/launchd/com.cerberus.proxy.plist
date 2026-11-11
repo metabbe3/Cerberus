@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cerberus.proxy</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/cerberus-proxy</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>CERBERUS_PROXY_LISTEN</key>
+        <string>127.0.0.1:2375</string>
+        <key>CERBERUS_PROXY_EGRESS</key>
+        <string>127.0.0.1:8088</string>
+        <key>CERBERUS_ENGINE_URL</key>
+        <string>http://127.0.0.1:8089</string>
+        <key>CERBERUS_LOG_LEVEL</key>
+        <string>info</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/var/log/cerberus/proxy.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/cerberus/proxy.err</string>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65536</integer>
+    </dict>
+</dict>
+</plist>

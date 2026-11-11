@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cerberus.engine</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/cerberus</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>CERBERUS_ADDR</key>
+        <string>127.0.0.1:8089</string>
+        <key>CERBERUS_POLICY_DIR</key>
+        <string>/etc/cerberus/policies</string>
+        <key>CERBERUS_DATA_FILE</key>
+        <string>/etc/cerberus/data/prod.json</string>
+        <key>CERBERUS_AUDIT_DB</key>
+        <string>/var/lib/cerberus/cerberus.db</string>
+        <key>CERBERUS_LOG_LEVEL</key>
+        <string>info</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/var/log/cerberus/engine.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/cerberus/engine.err</string>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65536</integer>
+    </dict>
+</dict>
+</plist>
