@@ -38,12 +38,12 @@ describe("safeNext (post-login redirect)", () => {
   test.each([
     ["/agents", "/agents"],
     ["/agents/abc?prefill=x", "/agents/abc?prefill=x"],
-    [null, "/"],
-    ["", "/"],
-    ["https://evil.example", "/"],
-    ["//evil.example/x", "/"],
-    ["/\\evil.example", "/"],
-    ["agents", "/"],
+    [null, "/overview"],
+    ["", "/overview"],
+    ["https://evil.example", "/overview"],
+    ["//evil.example/x", "/overview"],
+    ["/\\evil.example", "/overview"],
+    ["agents", "/overview"],
   ])("%s → %s", (input, out) => {
     expect(safeNext(input)).toBe(out);
   });

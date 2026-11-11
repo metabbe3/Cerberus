@@ -4,7 +4,8 @@ import { SESSION_COOKIE, authEnv, verifySession } from "@/lib/session";
 // Every page and /api route needs a valid session, except /login, public landing (/),
 // and the auth endpoints (see matcher). Pages redirect; APIs answer 401 JSON.
 export async function middleware(req: NextRequest) {
-  if (req.nextUrl.pathname === "/") {
+  // Public routes: landing root and public docs intro — no session required.
+  if (req.nextUrl.pathname === "/" || req.nextUrl.pathname.startsWith("/docs-intro")) {
     return NextResponse.next();
   }
   const env = authEnv();

@@ -43,6 +43,17 @@ export const ToolConstraintSchema = z.union([
 
 export type ToolConstraint = z.infer<typeof ToolConstraintSchema>;
 
+export const RateLimitSchema = z
+  .object({
+    requests_per_minute: z.number().optional(),
+    bursts: z.number().optional(),
+    tool_calls_per_hour: z.number().optional(),
+    daily_tool_calls: z.number().optional(),
+  })
+  .loose();
+
+export type RateLimit = z.infer<typeof RateLimitSchema>;
+
 // log_level / risk_tier are display-only metadata (authz.rego never reads
 // them), so they stay plain strings here rather than an enum that would
 // reject documents the engine accepts.
@@ -64,6 +75,7 @@ export const AgentSchema = z
     log_level: z.string().optional(),
     prod_access: z.boolean().optional(),
     masking: z.array(MaskingRuleSchema).optional(),
+    rate_limit: RateLimitSchema.optional(),
   })
   .loose();
 

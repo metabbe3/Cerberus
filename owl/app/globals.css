@@ -139,3 +139,256 @@
     font-variant-numeric: tabular-nums;
   }
 }
+
+/* =========================================================================
+   OWL SPRINT 12 — CLAYMORPHISM DESIGN SYSTEM (.site-clay)
+   Anti AI-slop: puffy cards, tactile pressed states, soft organic blobs
+   ========================================================================= */
+
+.site-clay,
+.dark .site-clay {
+  --clay-bg: #F6F1E9;
+  --clay-surface: #FFFFFF;
+  --clay-accent: #FF7847;
+  --clay-ink: #2D2A26;
+  --clay-ink-muted: #665F55;
+  --clay-mint: #BFE8D9;
+  --clay-lilac: #E3DBFF;
+  --clay-butter: #FFEFC2;
+  --clay-coral-soft: #FFD9CC;
+  --clay-border: rgba(45, 42, 38, 0.08);
+
+  background-color: var(--clay-bg);
+  color: var(--clay-ink);
+  color-scheme: light;
+}
+
+/* Scoped Puffy Card (radius 28px, double shadow puffy, bg surface) */
+.site-clay .clay-card {
+  background-color: var(--clay-surface);
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow:
+    inset -6px -6px 12px rgba(255, 255, 255, 0.75),
+    inset 6px 6px 12px rgba(190, 180, 165, 0.35),
+    12px 16px 32px rgba(190, 180, 165, 0.45),
+    2px 4px 10px rgba(190, 180, 165, 0.2);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Pressed Card State: shadow inset flip + scale(0.98) */
+.site-clay .clay-card-press {
+  cursor: pointer;
+  user-select: none;
+}
+
+.site-clay .clay-card-press:active {
+  transform: scale(0.98);
+  box-shadow:
+    inset 6px 6px 12px rgba(190, 180, 165, 0.5),
+    inset -4px -4px 8px rgba(255, 255, 255, 0.8),
+    0 4px 12px rgba(190, 180, 165, 0.25);
+}
+
+/* Scoped Buttons (pill radius, shadow puffy kecil, hover naik 2px, active tekan) */
+.site-clay .clay-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 9999px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.15s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.15s ease;
+  user-select: none;
+}
+
+.site-clay .clay-btn:hover {
+  transform: translateY(-2px);
+}
+
+.site-clay .clay-btn:active {
+  transform: translateY(1px) scale(0.98);
+}
+
+/* Variant Accent: bg accent, teks putih, ukuran teks >=16px semi-bold */
+.site-clay .clay-btn-accent {
+  background-color: var(--clay-accent);
+  color: #FFFFFF;
+  font-size: 16px;
+  line-height: 1.5;
+  padding: 0.75rem 1.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow:
+    inset 2px 2px 5px rgba(255, 255, 255, 0.6),
+    inset -2px -2px 6px rgba(180, 50, 15, 0.35),
+    0 8px 20px rgba(255, 120, 71, 0.38),
+    0 2px 4px rgba(255, 120, 71, 0.2);
+}
+
+.site-clay .clay-btn-accent:hover {
+  box-shadow:
+    inset 2px 2px 5px rgba(255, 255, 255, 0.7),
+    inset -2px -2px 6px rgba(180, 50, 15, 0.45),
+    0 12px 24px rgba(255, 120, 71, 0.45),
+    0 4px 8px rgba(255, 120, 71, 0.25);
+}
+
+.site-clay .clay-btn-accent:active {
+  box-shadow:
+    inset 4px 4px 8px rgba(160, 40, 10, 0.55),
+    inset -2px -2px 4px rgba(255, 255, 255, 0.3),
+    0 2px 6px rgba(255, 120, 71, 0.25);
+}
+
+/* Variant Ghost */
+.site-clay .clay-btn-ghost {
+  background-color: var(--clay-surface);
+  color: var(--clay-ink);
+  font-size: 15px;
+  padding: 0.75rem 1.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  box-shadow:
+    inset 2px 2px 4px rgba(255, 255, 255, 0.9),
+    inset -2px -2px 4px rgba(190, 180, 165, 0.3),
+    0 6px 16px rgba(190, 180, 165, 0.32);
+}
+
+.site-clay .clay-btn-ghost:hover {
+  background-color: #FFFFFF;
+  box-shadow:
+    inset 2px 2px 4px rgba(255, 255, 255, 1),
+    inset -2px -2px 4px rgba(190, 180, 165, 0.35),
+    0 10px 20px rgba(190, 180, 165, 0.38);
+}
+
+.site-clay .clay-btn-ghost:active {
+  box-shadow:
+    inset 3px 3px 6px rgba(190, 180, 165, 0.45),
+    inset -2px -2px 4px rgba(255, 255, 255, 0.7),
+    0 2px 4px rgba(190, 180, 165, 0.2);
+}
+
+.site-clay .clay-btn-sm {
+  font-size: 13px;
+  padding: 0.45rem 1.1rem;
+}
+
+/* Scoped Pressed-in Chips */
+.site-clay .clay-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  box-shadow:
+    inset 2px 2px 4px rgba(45, 42, 38, 0.14),
+    inset -2px -2px 4px rgba(255, 255, 255, 0.75);
+}
+
+.site-clay .clay-chip-mint {
+  background-color: var(--clay-mint);
+  color: #174E3A;
+}
+
+.site-clay .clay-chip-lilac {
+  background-color: var(--clay-lilac);
+  color: #382B68;
+}
+
+.site-clay .clay-chip-butter {
+  background-color: var(--clay-butter);
+  color: #634E14;
+}
+
+.site-clay .clay-chip-coral {
+  background-color: var(--clay-coral-soft);
+  color: #8C2C0B;
+}
+
+.site-clay .clay-chip-surface {
+  background-color: var(--clay-surface);
+  color: var(--clay-ink);
+}
+
+/* Capsule Nav pill */
+.site-clay .clay-capsule {
+  border-radius: 9999px;
+  background-color: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  box-shadow:
+    inset 2px 2px 6px rgba(255, 255, 255, 0.9),
+    inset -2px -2px 6px rgba(190, 180, 165, 0.25),
+    0 10px 28px rgba(190, 180, 165, 0.35);
+}
+
+/* Footer rounded-top band */
+.site-clay .clay-footer {
+  border-top-left-radius: 2.5rem;
+  border-top-right-radius: 2.5rem;
+  background-color: #ECE5DA;
+  border-top: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow:
+    inset 0 4px 8px rgba(255, 255, 255, 0.65),
+    0 -8px 24px rgba(190, 180, 165, 0.2);
+}
+
+/* Organik Blob Drift Animation (Transform Only) */
+@keyframes clayBlobDrift1 {
+  0% {
+    transform: translate(0px, 0px) scale(1) rotate(0deg);
+  }
+  33% {
+    transform: translate(30px, -24px) scale(1.06) rotate(6deg);
+  }
+  66% {
+    transform: translate(-24px, 20px) scale(0.95) rotate(-5deg);
+  }
+  100% {
+    transform: translate(0px, 0px) scale(1) rotate(0deg);
+  }
+}
+
+@keyframes clayBlobDrift2 {
+  0% {
+    transform: translate(0px, 0px) scale(1) rotate(0deg);
+  }
+  33% {
+    transform: translate(-28px, 22px) scale(0.96) rotate(-7deg);
+  }
+  66% {
+    transform: translate(26px, -18px) scale(1.05) rotate(5deg);
+  }
+  100% {
+    transform: translate(0px, 0px) scale(1) rotate(0deg);
+  }
+}
+
+.site-clay .clay-blob {
+  border-radius: 60% 40% 30% 70% / 60% 30% 70% 40%;
+  pointer-events: none;
+  animation: clayBlobDrift1 10s ease-in-out infinite;
+  will-change: transform;
+}
+
+.site-clay .clay-blob-2 {
+  border-radius: 40% 60% 70% 30% / 50% 60% 40% 50%;
+  pointer-events: none;
+  animation: clayBlobDrift2 12s ease-in-out infinite;
+  will-change: transform;
+}
+
+/* Accessibility: Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+  .site-clay .clay-blob,
+  .site-clay .clay-blob-2 {
+    animation: none !important;
+  }
+  .site-clay .clay-card,
+  .site-clay .clay-card-press,
+  .site-clay .clay-btn {
+    transition: none !important;
+  }
+}
