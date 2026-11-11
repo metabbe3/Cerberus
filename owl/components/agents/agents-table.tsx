@@ -35,7 +35,16 @@ export const agentColumns: ColumnDef<AgentRow, unknown>[] = [
     header: "Risk",
     cell: ({ row }) =>
       row.original.risk_tier ? (
-        <Badge variant={row.original.risk_tier === "high" ? "destructive" : "secondary"}>
+        <Badge
+          variant={row.original.risk_tier === "high" ? "destructive" : "secondary"}
+          className={
+            row.original.risk_tier === "low"
+              ? "bg-success/15 text-success"
+              : row.original.risk_tier === "medium"
+                ? "bg-primary/15 text-primary"
+                : undefined
+          }
+        >
           {row.original.risk_tier}
         </Badge>
       ) : null,

@@ -14,7 +14,8 @@ export function KeyCell({ id }: { id: string }) {
       className="flex items-center gap-1 font-mono text-xs text-muted-foreground hover:text-foreground"
       onClick={(e) => {
         e.stopPropagation();
-        navigator.clipboard.writeText(id).then(() => {
+        // clipboard is undefined on plain-http non-localhost origins.
+        navigator.clipboard?.writeText(id).then(() => {
           setCopied(true);
           setTimeout(() => setCopied(false), 1200);
         });

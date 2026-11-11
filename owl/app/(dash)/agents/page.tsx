@@ -6,6 +6,7 @@ import { AlertCircle } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DataTable } from "@/components/data-table";
 import { EmptyState } from "@/components/empty-state";
+import { PageHeader } from "@/components/page-header";
 import { agentColumns, type AgentRow } from "@/components/agents/agents-table";
 import { useData } from "@/lib/queries";
 
@@ -39,7 +40,10 @@ export default function AgentsPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-semibold">Agents</h1>
+      <PageHeader
+        title="Agents"
+        description="Registered keys and the policy each one runs under. Click a row to edit."
+      />
       {rows.length === 0 ? (
         <EmptyState
           title="No agents registered"

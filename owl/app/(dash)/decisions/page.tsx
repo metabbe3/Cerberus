@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { AuditTable } from "@/components/decisions/audit-table";
 import { useDecisionStream } from "@/components/decisions/stream";
 import { EmptyState } from "@/components/empty-state";
+import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertCircle, Radio } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -60,18 +61,25 @@ export default function DecisionsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="flex items-center gap-2 text-2xl font-semibold">
-          Decisions
-          <Badge variant="outline" className="gap-1.5">
-            <Radio className={connected ? "size-3" : "size-3 text-muted-foreground"} aria-hidden />
-            {connected ? "live" : "offline"}
-          </Badge>
-        </h1>
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+      <PageHeader
+        title={
+          <>
+            Decisions
+            <Badge
+              variant="outline"
+              className={connected ? "gap-1.5 border-success/40 text-success" : "gap-1.5"}
+            >
+              <Radio className={connected ? "size-3 animate-pulse" : "size-3"} aria-hidden />
+              {connected ? "live" : "offline"}
+            </Badge>
+          </>
+        }
+        description="Every allow/deny the gateway makes, streamed as it happens."
+      >
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
           Live <Switch checked={live} onCheckedChange={setLive} />
-        </div>
-      </div>
+        </label>
+      </PageHeader>
 
       <div className="flex flex-wrap items-center gap-2">
         <Select value={stage} onValueChange={setStage}>

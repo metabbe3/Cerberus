@@ -22,7 +22,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { PageHeader } from "@/components/page-header";
 import { useData, usePutData } from "@/lib/queries";
 
 type FlagKey = "teams" | "keys";
@@ -71,7 +73,14 @@ export default function SettingsPage() {
     });
   };
 
-  if (isPending) return null;
+  if (isPending) {
+    return (
+      <div className="max-w-2xl space-y-4">
+        <Skeleton className="h-8 w-40" />
+        <Skeleton className="h-48 w-full" />
+      </div>
+    );
+  }
   if (isError) {
     return (
       <Alert variant="destructive">
@@ -94,7 +103,10 @@ export default function SettingsPage() {
 
   return (
     <div className="max-w-2xl space-y-4">
-      <h1 className="text-2xl font-semibold">Settings</h1>
+      <PageHeader
+        title="Settings"
+        description="Gateway-wide switches. Changes take effect on save (epoch +1)."
+      />
 
       {savedError ? (
         <Alert variant="destructive">

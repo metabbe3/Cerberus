@@ -25,7 +25,10 @@ const columns = (onCreateRule: (ev: AuditEvent) => void): ColumnDef<AuditEvent, 
     accessorKey: "decision",
     header: "Decision",
     cell: ({ row }) => (
-      <Badge variant={row.original.decision === "allow" ? "secondary" : "destructive"}>
+      <Badge
+        variant={row.original.decision === "allow" ? "secondary" : "destructive"}
+        className={row.original.decision === "allow" ? "bg-success/15 text-success" : undefined}
+      >
         {row.original.decision}
       </Badge>
     ),

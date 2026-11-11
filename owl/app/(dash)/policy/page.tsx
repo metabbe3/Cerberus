@@ -1,5 +1,6 @@
 "use client";
 
+import { PageHeader } from "@/components/page-header";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -59,7 +60,10 @@ export default function PolicyPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Policy</h1>
+      <PageHeader
+        title="Policy"
+        description="Read the Rego the engine runs and validate a module before deploying it."
+      />
 
       {policy.isPending ? <Skeleton className="h-64 w-full" /> : null}
       {policy.isError ? (
