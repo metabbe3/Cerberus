@@ -13,46 +13,41 @@ export default function DocsIntroPage() {
   return (
     <div className="flex flex-col min-h-screen">
       {/* Capsule Nav Pill */}
-      <header className="sticky top-4 z-50 px-4 w-full">
-        <div className="clay-capsule max-w-4xl mx-auto px-4 py-2 sm:px-6 sm:py-2.5 flex items-center justify-between gap-3">
-          <Link href="/" className="flex items-center gap-2 select-none group">
-            <span className="clay-chip clay-chip-coral text-base size-8 transition-transform group-hover:scale-105">
-              🦉
+      <header className="sticky top-4 z-50 px-4">
+        <nav className="max-w-5xl mx-auto clay-card px-4 py-2.5 flex items-center justify-between gap-3">
+          <Link href="/" className="flex items-center gap-2.5 min-w-0">
+            <span className="clay-chip clay-chip-coral size-9 text-lg shrink-0">🦉</span>
+            <span className="font-extrabold text-base sm:text-lg tracking-tight text-[var(--clay-ink)]">
+              Cerberus
             </span>
-            <div className="flex items-baseline gap-1.5">
-              <span className="font-bold text-base tracking-tight text-[var(--clay-ink)]">
-                Cerberus
-              </span>
-              <span className="text-[11px] font-mono font-medium text-[var(--clay-ink-muted)]">
-                Docs
-              </span>
-            </div>
+            <span className="hidden sm:inline text-xs font-semibold text-[var(--clay-ink-muted)] truncate">
+              Docs
+            </span>
           </Link>
-
-          <div className="flex items-center gap-2 sm:gap-4">
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             <Link
               href="/"
-              className="text-xs sm:text-sm font-semibold text-[var(--clay-ink-muted)] hover:text-[var(--clay-ink)] transition-colors px-2 py-1"
+              className="clay-btn clay-btn-ghost clay-btn-sm px-2.5 sm:px-3 text-[13px] sm:text-sm font-semibold whitespace-nowrap"
             >
               Beranda
             </Link>
             <Link
               href="/login"
-              className="text-xs sm:text-sm font-semibold text-[var(--clay-ink-muted)] hover:text-[var(--clay-ink)] transition-colors px-2 py-1"
+              className="clay-btn clay-btn-ghost clay-btn-sm px-2.5 sm:px-3 text-[13px] sm:text-sm font-semibold whitespace-nowrap"
             >
-              Live Dashboard
+              Dashboard
             </Link>
             <a
               href="https://github.com/metabbe3/Cerberus"
               target="_blank"
               rel="noreferrer"
-              className="clay-btn clay-btn-ghost clay-btn-sm font-semibold text-xs gap-1.5 hidden sm:inline-flex"
+              title="GitHub"
+              className="clay-btn clay-btn-accent clay-btn-sm px-2.5 sm:px-3 text-[13px] sm:text-sm font-semibold whitespace-nowrap"
             >
-              GitHub
-              <ExternalLink className="size-3 opacity-70" />
+              GH
             </a>
           </div>
-        </div>
+        </nav>
       </header>
 
       {/* Main Content */}
@@ -208,7 +203,7 @@ export default function DocsIntroPage() {
               </a>
               :
             </p>
-            <pre className="p-4 rounded-2xl bg-[#2D2A26] text-[#F6F1E9] font-mono text-xs leading-relaxed overflow-x-auto">{`# Go
+            <pre className="p-4 rounded-2xl bg-[#2D2A26] text-[#F6F1E9] font-mono text-[13px] sm:text-sm leading-relaxed whitespace-pre-wrap break-words">{`# Go
 go get github.com/metabbe3/cerberus/sdk/go
 
 # Python (copy single-file package, zero dependency)
@@ -221,7 +216,7 @@ npm install github:metabbe3/Cerberus#main --prefix .  # atau copy sdk/ts/src`}</
       </main>
 
       {/* Footer rounded-top */}
-      <footer className="clay-footer px-6 py-10 sm:py-12 mt-16">
+      <footer className="clay-footer px-6 py-12 sm:py-14 mt-auto">
         <div className="max-w-4xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-6 text-center sm:text-left">
           <div className="space-y-1">
             <div className="flex items-center justify-center sm:justify-start gap-2">
@@ -231,7 +226,7 @@ npm install github:metabbe3/Cerberus#main --prefix .  # atau copy sdk/ts/src`}</
               </span>
             </div>
             <p className="text-xs text-[var(--clay-ink-muted)]">
-              Cerberus v1.0 &bull; Mac Mini M4 benchmark (~85.000 TPS @2048 conc) &bull; Fail-closed architecture
+              Cerberus v1.0 &bull; Policy engine untuk AI agent &bull; Fail-closed by design
             </p>
           </div>
 
