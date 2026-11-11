@@ -20,12 +20,12 @@ import (
 type samp struct{ lat float64 }
 
 var (
-	url      = flag.String("url", "http://127.0.0.1:18089/v1/decide", "decide endpoint")
-	token    = flag.String("token", "", "admin bearer token")
-	dur      = flag.Duration("dur", 15*time.Second, "duration per concurrency level")
-	levels   = flag.Int("levels", 8, "concurrency levels: 1,2,4,...2^(levels-1)")
-	start    = flag.Int("start", 1, "starting concurrency (must be power of 2)")
-	verbose  = flag.Bool("v", false, "print per-1s TPS")
+	url     = flag.String("url", "http://127.0.0.1:18089/v1/decide", "decide endpoint")
+	token   = flag.String("token", "", "admin bearer token")
+	dur     = flag.Duration("dur", 15*time.Second, "duration per concurrency level")
+	levels  = flag.Int("levels", 8, "concurrency levels: 1,2,4,...2^(levels-1)")
+	start   = flag.Int("start", 1, "starting concurrency (must be power of 2)")
+	verbose = flag.Bool("v", false, "print per-1s TPS")
 )
 
 func main() {
@@ -45,9 +45,9 @@ func main() {
 
 	mkBody := func(r *rand.Rand, i uint64) []byte {
 		in := map[string]any{
-			"stage":  stages[r.Intn(len(stages))],
-			"key_id": "k-open",
-			"action": actions[r.Intn(len(actions))],
+			"stage":    stages[r.Intn(len(stages))],
+			"key_id":   "k-open",
+			"action":   actions[r.Intn(len(actions))],
 			"resource": fmt.Sprintf("%s-%d", resources[r.Intn(len(resources))], i%7),
 		}
 		switch in["stage"] {

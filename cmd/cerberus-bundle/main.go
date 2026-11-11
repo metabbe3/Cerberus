@@ -219,4 +219,3 @@ func runCoverage(args []string) error {
 	}
 	return nil
 }
-

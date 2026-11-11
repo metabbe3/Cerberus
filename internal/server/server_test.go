@@ -1232,4 +1232,3 @@ func TestDecide_SSHStageEndToEnd(t *testing.T) {
 		t.Fatalf("expected rule_id ssh.host_not_allowed, got %q", decDeny.RuleID)
 	}
 }
-

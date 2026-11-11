@@ -2,8 +2,8 @@ package store
 
 import (
 	"context"
-	"strings"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -69,8 +69,8 @@ func TestRoundTripSaveLoad(t *testing.T) {
 
 	// Removal semantics: agent b dropped from doc -> disabled (absent on load).
 	doc2 := map[string]any{
-		"config":          map[string]any{"bypass_unknown_keys": false},
-		"agents":          map[string]any{"k-pgtest-a": map[string]any{"name": "pg-a"}},
+		"config":           map[string]any{"bypass_unknown_keys": false},
+		"agents":           map[string]any{"k-pgtest-a": map[string]any{"name": "pg-a"}},
 		"blocked_patterns": []any{"jailbreak"},
 	}
 	if err := p.SaveData(ctx, doc2); err != nil {

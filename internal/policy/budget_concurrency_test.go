@@ -54,9 +54,9 @@ func TestBudgetConcurrency_NoOvershoot(t *testing.T) {
 	spentUS.Store(initialSpentUS)
 
 	var (
-		wg          sync.WaitGroup
-		allowed     atomic.Int64
-		denied      atomic.Int64
+		wg            sync.WaitGroup
+		allowed       atomic.Int64
+		denied        atomic.Int64
 		totalAdmitted atomic.Int64
 	)
 
