@@ -21,6 +21,9 @@ import (
 // ErrNoRollback is returned when rollback is requested but no previous snapshot is available.
 var ErrNoRollback = errors.New("bundle: no previous snapshot available for rollback")
 
+// ErrFutureRevision is returned when bundle revision or timestamp is from the future (clock skew).
+var ErrFutureRevision = errors.New("bundle: revision timestamp is from the future (clock skew detected)")
+
 // Manifest represents an OPA bundle manifest.
 type Manifest struct {
 	Revision string   `json:"revision"`
@@ -221,6 +224,48 @@ func mergeDataSubtree(dataMap map[string]any, path string, content []byte) error
 	return nil
 }
 
+func isFutureRevision(rev string, manifestRaw []byte) bool {
+	maxAllowed := time.Now().Add(2 * time.Minute)
+
+	if len(manifestRaw) > 0 {
+		var mf map[string]any
+		if json.Unmarshal(manifestRaw, &mf) == nil {
+			for _, k := range []string{"timestamp", "created_at", "created", "time"} {
+				if v, ok := mf[k]; ok {
+					switch val := v.(type) {
+					case string:
+						if t, err := time.Parse(time.RFC3339, val); err == nil && t.After(maxAllowed) {
+							return true
+						}
+					case float64:
+						t := time.Unix(int64(val), 0)
+						if t.After(maxAllowed) {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	trimmed := strings.TrimPrefix(rev, "rev-")
+	trimmed = strings.TrimPrefix(trimmed, "bundle-")
+	if t, err := time.Parse(time.RFC3339, trimmed); err == nil && t.After(maxAllowed) {
+		return true
+	}
+	if len(trimmed) >= 10 {
+		if t, err := time.Parse("2006-01-02", trimmed[:10]); err == nil && t.After(maxAllowed) {
+			return true
+		}
+	}
+	if len(trimmed) >= 8 {
+		if t, err := time.Parse("20060102", trimmed[:8]); err == nil && t.After(maxAllowed) {
+			return true
+		}
+	}
+	return false
+}
+
 // copyDir copies all files from src to dst.
 func copyDir(src, dst string) error {
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
@@ -312,6 +357,12 @@ func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, err
 	b, err := ReadBundle(bytes.NewReader(bundleGz))
 	if err != nil {
 		return nil, err
+	}
+
+	// Clock skew validation: reject revisions from the future
+	if isFutureRevision(b.Revision, b.Manifest) {
+		slog.Warn("bundle rejected: revision timestamp is from the future (clock skew)", "revision", b.Revision)
+		return nil, ErrFutureRevision
 	}
 
 	// Signature verification: if a verification key is configured on the store,

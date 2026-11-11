@@ -30,6 +30,7 @@ type SyncPayload struct {
 // ClusterConfig configures multi-node peering and sync.
 type ClusterConfig struct {
 	NodeID       string
+	StartedAt    int64
 	Peers        []string
 	SyncInterval time.Duration
 }
@@ -50,12 +51,16 @@ func newClusterManager(srv *Server, cfg ClusterConfig) *ClusterManager {
 	if cfg.NodeID == "" {
 		cfg.NodeID = fmt.Sprintf("node-%s", newRequestID())
 	}
+	startedAt := cfg.StartedAt
+	if startedAt == 0 {
+		startedAt = time.Now().Unix()
+	}
 	if cfg.SyncInterval <= 0 {
 		cfg.SyncInterval = 60 * time.Second
 	}
 	cm := &ClusterManager{
 		nodeID:       cfg.NodeID,
-		startedAt:    time.Now().Unix(),
+		startedAt:    startedAt,
 		peers:        cleanPeers(cfg.Peers),
 		syncInterval: cfg.SyncInterval,
 		srv:          srv,

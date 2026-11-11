@@ -39,10 +39,10 @@ func TestCluster_GossipSync_PullFromAuthoritativePeer(t *testing.T) {
 		Version:    "test-1",
 		Cluster: ClusterConfig{
 			NodeID:       "node-1",
+			StartedAt:    1000,
 			SyncInterval: time.Hour, // manual sync in test
 		},
 	})
-	srv1.cluster.startedAt = 1000 // earlier timestamp (older node)
 	ts1 := httptest.NewServer(srv1)
 	defer ts1.Close()
 
@@ -93,11 +93,11 @@ func TestCluster_GossipSync_PullFromAuthoritativePeer(t *testing.T) {
 		Version:    "test-2",
 		Cluster: ClusterConfig{
 			NodeID:       "node-2",
+			StartedAt:    2000,
 			Peers:        []string{ts1.URL},
 			SyncInterval: time.Hour,
 		},
 	})
-	srv2.cluster.startedAt = 2000 // later timestamp (younger node)
 	ts2 := httptest.NewServer(srv2)
 	defer ts2.Close()
 

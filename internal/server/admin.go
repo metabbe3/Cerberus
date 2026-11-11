@@ -77,6 +77,7 @@ func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 func writeStoreErr(w http.ResponseWriter, op string, err error) {
 	if errors.Is(err, policy.ErrData) || errors.Is(err, policy.ErrCompile) ||
 		errors.Is(err, policy.ErrInvalidSignature) || errors.Is(err, policy.ErrMissingSignature) ||
+		errors.Is(err, policy.ErrFutureRevision) ||
 		strings.Contains(err.Error(), "smoke test failed") {
 		writeErr(w, http.StatusUnprocessableEntity, stripPaths(err.Error()))
 		return
