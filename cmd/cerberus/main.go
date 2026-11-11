@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -21,6 +22,7 @@ import (
 	"github.com/metabbe3/cerberus/internal/masking"
 	"github.com/metabbe3/cerberus/internal/policy"
 	"github.com/metabbe3/cerberus/internal/server"
+	pgstore "github.com/metabbe3/cerberus/internal/store"
 	"github.com/metabbe3/cerberus/internal/util"
 )
 
@@ -83,6 +85,28 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("cerberus: load policy: %w", err)
 	}
+	// PostgreSQL system of record: when a DSN is set, boot data comes from PG
+	// (falling back to the file only when PG is unreachable), and every admin
+	// data PUT persists to PG after the file write.
+	var pgStore *pgstore.PG
+	if cfg.PGDSN != "" {
+		pgStore, err = pgstore.Open(ctx, cfg.PGDSN)
+		if err != nil {
+			slog.Warn("cerberus: pg unavailable, using flat file", "err", err)
+		} else {
+			defer pgStore.Close()
+			if data, lerr := pgStore.LoadData(ctx); lerr == nil {
+				dataJSON, _ := json.Marshal(data)
+				if snap, serr := store.ReplaceData(ctx, dataJSON); serr != nil {
+					slog.Warn("cerberus: pg data rejected, keeping file", "err", serr)
+				} else {
+					slog.Info("cerberus: booted from postgres", "epoch", snap.Epoch, "agents", len(data["agents"].(map[string]any)))
+				}
+			} else {
+				slog.Warn("cerberus: pg load failed, using flat file", "err", lerr)
+			}
+		}
+	}
 	auditLog, err := audit.Open(ctx, cfg.AuditDB, audit.Options{
 		RetentionDays: cfg.AuditRetentionDays,
 		ShipURL:       cfg.ShipURL,
@@ -107,7 +131,7 @@ func run() error {
 	stopHUP := watchHUP(ctx, store, log)
 	defer stopHUP()
 
-	api := server.New(server.Deps{Engine: eng, Store: store, Audit: auditLog, AdminToken: cfg.AdminToken, Version: version})
+	api := server.New(server.Deps{Engine: eng, Store: store, Audit: auditLog, PGMirror: pgStore, AdminToken: cfg.AdminToken, Version: version})
 	srv := newHTTPServer(cfg.Addr, api)
 	// End SSE streams when shutdown begins; the events handler otherwise ends
 	// only on client disconnect or audit close (below), and Shutdown would wait

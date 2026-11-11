@@ -15,15 +15,19 @@ import (
 	"github.com/metabbe3/cerberus/internal/engine"
 	"github.com/metabbe3/cerberus/internal/policy"
 	"github.com/metabbe3/cerberus/internal/ratelimit"
+	"github.com/metabbe3/cerberus/internal/store"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // Deps are the collaborators the handlers need. Engine may be nil in tests
 // that only exercise health/ready/panic paths.
 type Deps struct {
-	Engine     *engine.Engine
-	Store      *policy.Store
-	Audit      *audit.Logger
+	Engine *engine.Engine
+	Store  *policy.Store
+	Audit  *audit.Logger
+	// PGMirror, when non-nil, persists every successful data PUT to
+	// PostgreSQL (system of record) after the flat-file write.
+	PGMirror   *store.PG
 	Limiter    *ratelimit.Limiter
 	Cluster    ClusterConfig
 	AdminToken string
@@ -110,6 +114,10 @@ func New(d Deps) *Server {
 	mux.HandleFunc("POST /v1/decide", s.decide(""))
 	mux.HandleFunc("POST /v1/decide/llm", s.decide("llm"))
 	mux.HandleFunc("POST /v1/decide/tool", s.decide("tool"))
+
+	mux.HandleFunc("GET /v1/admin/templates", s.admin(s.listTemplates))
+	mux.HandleFunc("PUT /v1/admin/templates", s.admin(s.putTemplate))
+	mux.HandleFunc("DELETE /v1/admin/templates/{id}", s.admin(s.deleteTemplate))
 
 	mux.HandleFunc("GET /v1/admin/data", s.admin(s.getData))
 	mux.HandleFunc("PUT /v1/admin/data", s.admin(s.putData))

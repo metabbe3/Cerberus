@@ -30,6 +30,7 @@ type Config struct {
 	AuditRetentionDays int
 	ShipURL            string
 	AdminToken         string
+	PGDSN              string
 	LogLevel           string
 	CacheSize          int
 	EvalTimeout        time.Duration
@@ -55,6 +56,7 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 		PolicyDir:          firstNonEmpty(getenv("CERBERUS_POLICY_DIR"), "policies"),
 		DataFile:           firstNonEmpty(getenv("CERBERUS_DATA_FILE"), "data/prod.json"),
 		AuditDB:            firstNonEmpty(getenv("CERBERUS_AUDIT_DB"), "cerberus.db"),
+		PGDSN:              getenv("CERBERUS_PG_DSN"),
 		AuditRetentionDays: retentionDays,
 		ShipURL:            firstNonEmpty(getenv("CERBERUS_DECISION_LOG_SHIP_URL"), getenv("CERBERUS_SHIP_URL")),
 		AdminToken:         getenv("CERBERUS_ADMIN_TOKEN"),
@@ -68,6 +70,7 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	fs.StringVar(&c.PolicyDir, "policy-dir", c.PolicyDir, "Rego bundle directory ($CERBERUS_POLICY_DIR)")
 	fs.StringVar(&c.DataFile, "data-file", c.DataFile, "policy data JSON ($CERBERUS_DATA_FILE)")
 	fs.StringVar(&c.AuditDB, "audit-db", c.AuditDB, "audit SQLite path ($CERBERUS_AUDIT_DB)")
+	fs.StringVar(&c.PGDSN, "pg-dsn", c.PGDSN, "PostgreSQL DSN — system of record for gateway data ($CERBERUS_PG_DSN); empty = flat file only")
 	fs.IntVar(&c.AuditRetentionDays, "audit-retention-days", c.AuditRetentionDays, "days to retain daily audit SQLite logs ($CERBERUS_AUDIT_RETENTION_DAYS)")
 	fs.StringVar(&c.ShipURL, "ship-url", c.ShipURL, "endpoint for shipping decision logs ($CERBERUS_DECISION_LOG_SHIP_URL)")
 	// No -admin-token flag: a secret on argv is readable by any local user via

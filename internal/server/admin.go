@@ -71,6 +71,14 @@ func (s *Server) putData(w http.ResponseWriter, r *http.Request) {
 		writeStoreErr(w, "put data", err)
 		return
 	}
+	if s.deps.PGMirror != nil {
+		var doc map[string]any
+		if jerr := json.Unmarshal(body, &doc); jerr == nil {
+			if perr := s.deps.PGMirror.SaveData(r.Context(), doc); perr != nil {
+				slog.Error("pg mirror persist failed", "err", perr)
+			}
+		}
+	}
 
 	author := r.Header.Get("X-Admin-User")
 	if author == "" {
