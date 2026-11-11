@@ -3,6 +3,7 @@ package engine
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	dto "github.com/prometheus/client_model/go"
 )
 
 // Engine metrics, registered once on prometheus.DefaultRegisterer at package
@@ -39,3 +40,16 @@ var (
 		Help: "Epoch of the currently live policy snapshot.",
 	})
 )
+
+// EngineStats returns the current cache hits and misses totals from metrics.
+func EngineStats() (hits uint64, misses uint64) {
+	var m1 dto.Metric
+	if err := cacheHitsTotal.Write(&m1); err == nil && m1.Counter != nil {
+		hits = uint64(m1.Counter.GetValue())
+	}
+	var m2 dto.Metric
+	if err := cacheMissesTotal.Write(&m2); err == nil && m2.Counter != nil {
+		misses = uint64(m2.Counter.GetValue())
+	}
+	return hits, misses
+}

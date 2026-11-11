@@ -185,3 +185,148 @@ func (s *Server) queryAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, events)
 }
+
+type eraseRequest struct {
+	ID        any   `json:"id"`
+	IDs       []any `json:"ids"`
+	RequestID any   `json:"request_id"`
+}
+
+type eraseResponse struct {
+	OK      bool   `json:"ok"`
+	Erased  int    `json:"erased"`
+	Message string `json:"message,omitempty"`
+}
+
+func (s *Server) eraseDecision(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Audit == nil {
+		writeErr(w, http.StatusServiceUnavailable, "audit unavailable")
+		return
+	}
+	body, ok := readBody(w, r)
+	if !ok {
+		return
+	}
+	var req eraseRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+
+	parseID := func(v any) (int64, bool) {
+		switch n := v.(type) {
+		case float64:
+			return int64(n), true
+		case int:
+			return int64(n), true
+		case int64:
+			return n, true
+		case string:
+			parsed, err := strconv.ParseInt(n, 10, 64)
+			return parsed, err == nil
+		default:
+			return 0, false
+		}
+	}
+
+	var ids []int64
+	if req.ID != nil {
+		if id, ok := parseID(req.ID); ok {
+			ids = append(ids, id)
+		}
+	}
+	if req.RequestID != nil {
+		if id, ok := parseID(req.RequestID); ok {
+			ids = append(ids, id)
+		}
+	}
+	for _, item := range req.IDs {
+		if id, ok := parseID(item); ok {
+			ids = append(ids, id)
+		}
+	}
+
+	if len(ids) == 0 {
+		writeErr(w, http.StatusBadRequest, "missing or invalid id")
+		return
+	}
+
+	erasedCount := 0
+	for _, id := range ids {
+		ok, err := s.deps.Audit.Erase(r.Context(), id)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if ok {
+			erasedCount++
+		}
+	}
+
+	if erasedCount == 0 && len(ids) == 1 {
+		writeJSON(w, http.StatusNotFound, eraseResponse{OK: false, Message: "decision not found"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, eraseResponse{OK: true, Erased: erasedCount})
+}
+
+// uploadBundle handles POST/PUT /v1/admin/bundle for uploading a bundle.tar.gz.
+func (s *Server) uploadBundle(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Store == nil {
+		writeErr(w, http.StatusServiceUnavailable, "store unavailable")
+		return
+	}
+	body, ok := readBody(w, r)
+	if !ok {
+		return
+	}
+	snap, err := s.deps.Store.LoadBundle(r.Context(), body)
+	if err != nil {
+		writeStoreErr(w, "load bundle", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, epochResponse{Epoch: snap.Epoch})
+}
+
+type statusResponse struct {
+	BundleEpoch       uint64  `json:"bundle_epoch"`
+	PoliciesLoadedAt  string  `json:"policies_loaded_at"`
+	LastReload        string  `json:"last_reload"`
+	EvalTotal24hSlash uint64  `json:"eval_total/24h"`
+	EvalTotal24h      uint64  `json:"eval_total_24h"`
+	CacheHitRate      float64 `json:"cache_hit_rate"`
+	AuditQueueDepth   int     `json:"audit_queue_depth"`
+}
+
+// getStatus returns runtime status metrics (bundle epoch, evals, cache hit rate, audit queue).
+func (s *Server) getStatus(w http.ResponseWriter, _ *http.Request) {
+	if s.deps.Store == nil || s.deps.Store.Current() == nil {
+		writeErr(w, http.StatusServiceUnavailable, "not ready")
+		return
+	}
+	snap := s.deps.Store.Current()
+	var hits, misses uint64
+	if s.deps.Engine != nil {
+		hits, misses = s.deps.Engine.Stats()
+	}
+	total := hits + misses
+	var hitRate float64
+	if total > 0 {
+		hitRate = float64(hits) / float64(total)
+	}
+	queueDepth := 0
+	if s.deps.Audit != nil {
+		queueDepth = s.deps.Audit.QueueDepth()
+	}
+	resp := statusResponse{
+		BundleEpoch:       snap.Epoch,
+		PoliciesLoadedAt:  snap.Loaded.UTC().Format(time.RFC3339),
+		LastReload:        snap.Loaded.UTC().Format(time.RFC3339),
+		EvalTotal24hSlash: total,
+		EvalTotal24h:      total,
+		CacheHitRate:      hitRate,
+		AuditQueueDepth:   queueDepth,
+	}
+	writeJSON(w, http.StatusOK, resp)
+}

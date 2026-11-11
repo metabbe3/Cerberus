@@ -84,6 +84,58 @@ func TestLogger_EmitFlushQuery(t *testing.T) {
 	}
 }
 
+func TestLogger_EraseAndSince(t *testing.T) {
+	t.Parallel()
+	db := filepath.Join(t.TempDir(), "audit.db")
+	ctx := context.Background()
+
+	l, err := Open(ctx, db, Options{BatchSize: 1, FlushEvery: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("audit: Open: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+
+	l.Emit(Event{Stage: "llm", Decision: "allow", Args: map[string]any{"secret": "sensitive1"}})
+	l.Emit(Event{Stage: "llm", Decision: "deny", Args: map[string]any{"secret": "sensitive2"}})
+
+	time.Sleep(50 * time.Millisecond)
+
+	recent := l.Recent(2)
+	if len(recent) != 2 {
+		t.Fatalf("Recent len = %d, want 2", len(recent))
+	}
+	idToErase := recent[0].ID
+	if idToErase <= 0 {
+		t.Fatalf("Event ID = %d, want > 0", idToErase)
+	}
+
+	ok, err := l.Erase(ctx, idToErase)
+	if err != nil || !ok {
+		t.Fatalf("Erase(%d) ok=%v err=%v", idToErase, ok, err)
+	}
+
+	// Verify erased in ring
+	ringEvs := l.Recent(2)
+	var foundErased bool
+	for _, e := range ringEvs {
+		if e.ID == idToErase {
+			if e.Args["_erased"] != true {
+				t.Fatalf("ring event not erased: %+v", e.Args)
+			}
+			foundErased = true
+		}
+	}
+	if !foundErased {
+		t.Fatalf("erased event %d not found in ring", idToErase)
+	}
+
+	// Verify Since
+	sinceEvs := l.Since(recent[1].ID)
+	if len(sinceEvs) != 1 || sinceEvs[0].ID != idToErase {
+		t.Fatalf("Since(%d) = %+v, want 1 event with ID %d", recent[1].ID, sinceEvs, idToErase)
+	}
+}
+
 func TestLogger_FullChannelDrops(t *testing.T) {
 	t.Parallel()
 	db := filepath.Join(t.TempDir(), "audit.db")

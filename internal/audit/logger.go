@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -35,6 +36,7 @@ type Logger struct {
 	db   *sql.DB
 	opts Options
 	ch   chan Event
+	seq  atomic.Int64
 
 	mu     sync.Mutex
 	ring   *ring
@@ -68,6 +70,11 @@ func Open(ctx context.Context, dbPath string, opts Options) (*Logger, error) {
 	if err != nil {
 		return nil, err
 	}
+	maxID, err := maxEventID(context.Background(), db)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	l := &Logger{
 		db:   db,
 		opts: opts,
@@ -77,6 +84,7 @@ func Open(ctx context.Context, dbPath string, opts Options) (*Logger, error) {
 		stop: make(chan struct{}),
 		done: make(chan struct{}),
 	}
+	l.seq.Store(maxID)
 	go l.run(ctx)
 	return l, nil
 }
@@ -89,6 +97,9 @@ func Open(ctx context.Context, dbPath string, opts Options) (*Logger, error) {
 func (l *Logger) Emit(ev Event) {
 	if ev.Time.IsZero() {
 		ev.Time = time.Now()
+	}
+	if ev.ID <= 0 {
+		ev.ID = l.seq.Add(1)
 	}
 
 	select {
@@ -153,6 +164,30 @@ type Filter struct {
 // Query runs a filtered, newest-first read against SQLite.
 func (l *Logger) Query(ctx context.Context, f Filter) ([]Event, error) {
 	return queryEvents(ctx, l.db, f)
+}
+
+// Erase masks out args for the given decision event ID in SQLite and the ring buffer.
+func (l *Logger) Erase(ctx context.Context, id int64) (bool, error) {
+	ok, err := eraseEvent(ctx, l.db, id)
+	if err != nil {
+		return false, err
+	}
+	l.mu.Lock()
+	l.ring.erase(id)
+	l.mu.Unlock()
+	return ok, nil
+}
+
+// Since returns all events in the ring buffer with ID > lastID in chronological order.
+func (l *Logger) Since(lastID int64) []Event {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.ring.since(lastID)
+}
+
+// QueueDepth returns the number of pending events waiting in the audit channel.
+func (l *Logger) QueueDepth() int {
+	return len(l.ch)
 }
 
 // Close flushes the pending batch, stops the writer goroutine, closes any

@@ -81,8 +81,11 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 
 // needsJSONBody reports whether the request carries a body that must be JSON:
 // POST/PUT with a declared (or chunked) body. Bodyless POSTs — e.g. reload —
-// are exempt.
+// and binary uploads like /v1/admin/bundle are exempt.
 func needsJSONBody(r *http.Request) bool {
+	if r.URL.Path == "/v1/admin/bundle" {
+		return false
+	}
 	return (r.Method == http.MethodPost || r.Method == http.MethodPut) && r.ContentLength != 0
 }
 

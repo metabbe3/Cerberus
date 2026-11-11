@@ -1,9 +1,13 @@
 package server
 
 import (
+	"archive/tar"
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -673,5 +677,222 @@ func TestRecover_PanicBecomes500(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", resp.StatusCode)
+	}
+}
+
+func TestAdmin_EraseDecision(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+
+	// Make a decision
+	h.do(t, http.MethodPost, "/v1/decide", "application/json", decideAllowBody, false)
+	time.Sleep(50 * time.Millisecond)
+
+	// Query audit to get the event
+	resp := h.do(t, http.MethodGet, "/v1/audit", "", "", true)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("audit status = %d, want 200", resp.StatusCode)
+	}
+	var evs []audit.Event
+	if err := json.NewDecoder(resp.Body).Decode(&evs); err != nil {
+		t.Fatalf("decode audit: %v", err)
+	}
+	if len(evs) == 0 {
+		t.Fatal("audit events empty")
+	}
+	targetID := evs[0].ID
+
+	// Call erase endpoint
+	eraseBody := fmt.Sprintf(`{"id": %d}`, targetID)
+	eraseResp := h.do(t, http.MethodPost, "/v1/admin/decisions/erase", "application/json", eraseBody, true)
+	if eraseResp.StatusCode != http.StatusOK {
+		t.Fatalf("erase status = %d, want 200", eraseResp.StatusCode)
+	}
+	var res map[string]any
+	if err := json.NewDecoder(eraseResp.Body).Decode(&res); err != nil {
+		t.Fatalf("decode erase response: %v", err)
+	}
+	if res["ok"] != true || res["erased"] != float64(1) {
+		t.Fatalf("erase response = %+v, want ok=true, erased=1", res)
+	}
+
+	// Verify in audit that args was erased
+	resp2 := h.do(t, http.MethodGet, "/v1/audit", "", "", true)
+	var evs2 []audit.Event
+	if err := json.NewDecoder(resp2.Body).Decode(&evs2); err != nil {
+		t.Fatalf("decode audit 2: %v", err)
+	}
+	var found bool
+	for _, e := range evs2 {
+		if e.ID == targetID {
+			found = true
+			if e.Args["_erased"] != true {
+				t.Fatalf("event args not erased: %+v", e.Args)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("event %d not found after erase", targetID)
+	}
+
+	// Erase non-existent ID -> 404
+	erase404Resp := h.do(t, http.MethodPost, "/v1/admin/decisions/erase", "application/json", `{"id": 999999}`, true)
+	if erase404Resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("erase non-existent status = %d, want 404", erase404Resp.StatusCode)
+	}
+}
+
+func TestAdmin_Status(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+
+	// Make a decision so stats are non-zero
+	h.do(t, http.MethodPost, "/v1/decide", "application/json", decideAllowBody, false)
+
+	resp := h.do(t, http.MethodGet, "/v1/status", "", "", false)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var st map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	for _, key := range []string{"bundle_epoch", "policies_loaded_at", "last_reload", "eval_total/24h", "cache_hit_rate", "audit_queue_depth"} {
+		if _, ok := st[key]; !ok {
+			t.Errorf("status missing key %q: %+v", key, st)
+		}
+	}
+	if st["bundle_epoch"].(float64) < 1 {
+		t.Errorf("bundle_epoch = %v, want >= 1", st["bundle_epoch"])
+	}
+}
+
+func TestEvents_LastEventIDReconnect(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+
+	// Make 2 decisions
+	h.do(t, http.MethodPost, "/v1/decide", "application/json", decideAllowBody, false)
+	h.do(t, http.MethodPost, "/v1/decide", "application/json", decideAllowBody, false)
+	time.Sleep(50 * time.Millisecond)
+
+	recent := h.auditLog.Recent(2)
+	if len(recent) < 2 {
+		t.Fatalf("recent len = %d, want >= 2", len(recent))
+	}
+	firstID := recent[1].ID
+	lastID := recent[0].ID
+
+	// Connect with Last-Event-ID header set to firstID
+	req, err := http.NewRequest(http.MethodGet, h.ts.URL+"/v1/events", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Last-Event-ID", strconv.FormatInt(firstID, 10))
+
+	resp, err := h.ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("get events: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	sc := bufio.NewScanner(resp.Body)
+	var foundID, foundData bool
+	for sc.Scan() {
+		line := sc.Text()
+		if strings.HasPrefix(line, "id: ") {
+			idStr := strings.TrimPrefix(line, "id: ")
+			id, _ := strconv.ParseInt(idStr, 10, 64)
+			if id == lastID {
+				foundID = true
+			}
+		}
+		if strings.HasPrefix(line, "data: ") && foundID {
+			foundData = true
+			break
+		}
+	}
+	if !foundID || !foundData {
+		t.Fatalf("did not replay event %d: foundID=%v foundData=%v", lastID, foundID, foundData)
+	}
+}
+
+func TestAdmin_UploadBundle(t *testing.T) {
+	t.Parallel()
+	h := newHarnessCopy(t)
+
+	// Create a valid bundle.tar.gz with updated data.json
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	manifest := []byte(`{"roots":["gateway","stages"]}`)
+	_ = tw.WriteHeader(&tar.Header{Name: ".manifest", Size: int64(len(manifest)), Mode: 0o600})
+	_, _ = tw.Write(manifest)
+
+	// Update agent k-open with budget_limit = 5
+	updatedData := []byte(`{
+		"config": {"bypass_unknown_keys": true, "bypass_unknown_teams": true},
+		"teams": {},
+		"agents": {
+			"k-open": {"name": "open-agent", "budget_limit": 5}
+		},
+		"blocked_patterns": ["jailbreak"],
+		"domains": {}
+	}`)
+	_ = tw.WriteHeader(&tar.Header{Name: "data.json", Size: int64(len(updatedData)), Mode: 0o600})
+	_, _ = tw.Write(updatedData)
+
+	// Include current rego files
+	for _, rel := range []string{"gateway/authz.rego", "stages/ai.rego", "stages/llm.rego", "stages/tool.rego"} {
+		content, err := os.ReadFile(filepath.Join(h.policies, rel))
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		_ = tw.WriteHeader(&tar.Header{Name: "policies/" + rel, Size: int64(len(content)), Mode: 0o600})
+		_, _ = tw.Write(content)
+	}
+	_ = tw.Close()
+	_ = gw.Close()
+
+	// Upload bundle via POST /v1/admin/bundle
+	req, err := http.NewRequest(http.MethodPost, h.ts.URL+"/v1/admin/bundle", &buf)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/gzip")
+
+	resp, err := h.ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("upload bundle: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("bundle upload status = %d (%s), want 200", resp.StatusCode, b)
+	}
+
+	var res epochResponse
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatalf("decode epoch response: %v", err)
+	}
+	if res.Epoch != 2 {
+		t.Fatalf("epoch = %d, want 2", res.Epoch)
+	}
+
+	// Verify decision changed: k-open with spend_usd=10 exceeds new budget_limit=5
+	spendBody := `{"stage": "llm", "key_id": "k-open", "model": "m1", "context": {"spend_usd": 10}}`
+	decResp := h.do(t, http.MethodPost, "/v1/decide", "application/json", spendBody, false)
+	if decResp.StatusCode != http.StatusOK {
+		t.Fatalf("decide status = %d, want 200", decResp.StatusCode)
+	}
+	var dec engine.Decision
+	if err := json.NewDecoder(decResp.Body).Decode(&dec); err != nil {
+		t.Fatalf("decode decision: %v", err)
+	}
+	if dec.Decision != "deny" || dec.RuleID != "ai.llm.budget_exceeded" {
+		t.Fatalf("decision = %s/%s, want deny/ai.llm.budget_exceeded", dec.Decision, dec.RuleID)
 	}
 }

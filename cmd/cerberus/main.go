@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -27,6 +28,34 @@ var version = "dev"
 func main() {
 	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "version") {
 		fmt.Printf("cerberus %s\n", version)
+		os.Exit(0)
+	}
+	if len(os.Args) > 2 && os.Args[1] == "--erase" {
+		id, err := strconv.ParseInt(os.Args[2], 10, 64)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid id: %v\n", err)
+			os.Exit(1)
+		}
+		dbPath := "cerberus.db"
+		if v := os.Getenv("CERBERUS_AUDIT_DB"); v != "" {
+			dbPath = v
+		}
+		al, err := audit.Open(context.Background(), dbPath, audit.Options{})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "open audit db: %v\n", err)
+			os.Exit(1)
+		}
+		defer func() { _ = al.Close() }()
+		ok, err := al.Erase(context.Background(), id)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "erase error: %v\n", err)
+			os.Exit(1)
+		}
+		if !ok {
+			fmt.Printf("event %d not found\n", id)
+			os.Exit(1)
+		}
+		fmt.Printf("event %d erased\n", id)
 		os.Exit(0)
 	}
 	if err := run(); err != nil {

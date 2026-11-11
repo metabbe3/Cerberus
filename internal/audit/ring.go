@@ -38,3 +38,28 @@ func (r *ring) recent(n int) []Event {
 	}
 	return out
 }
+
+// since returns events with ID > lastID in chronological order (oldest first).
+func (r *ring) since(lastID int64) []Event {
+	count := r.next
+	if r.full {
+		count = len(r.buf)
+	}
+	out := make([]Event, 0, count)
+	start := (r.next - count + len(r.buf)) % len(r.buf)
+	for i := 0; i < count; i++ {
+		ev := r.buf[(start+i)%len(r.buf)]
+		if ev.ID > lastID {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+func (r *ring) erase(id int64) {
+	for i := range r.buf {
+		if r.buf[i].ID == id {
+			r.buf[i].Args = map[string]any{"_erased": true}
+		}
+	}
+}

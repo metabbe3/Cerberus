@@ -259,3 +259,8 @@ func str(v any) string {
 	s, _ := v.(string)
 	return s
 }
+
+// Stats returns the cache hits and misses totals recorded by the engine.
+func (e *Engine) Stats() (hits uint64, misses uint64) {
+	return EngineStats()
+}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/metabbe3/cerberus/internal/audit"
@@ -29,10 +30,23 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 
-	// Replay what is already in the ring, oldest → newest.
-	recent := s.deps.Audit.Recent(50)
-	for i := len(recent) - 1; i >= 0; i-- {
-		if !writeFrame(w, recent[i]) {
+	// Replay: if Last-Event-ID header is present, replay ring events since that ID.
+	// Otherwise, replay the last 50 ring events, oldest → newest.
+	var replay []audit.Event
+	if lastIDStr := r.Header.Get("Last-Event-ID"); lastIDStr != "" {
+		if lastID, err := strconv.ParseInt(lastIDStr, 10, 64); err == nil && lastID > 0 {
+			replay = s.deps.Audit.Since(lastID)
+		}
+	}
+	if replay == nil {
+		recent := s.deps.Audit.Recent(50)
+		replay = make([]audit.Event, len(recent))
+		for i := range recent {
+			replay[i] = recent[len(recent)-1-i]
+		}
+	}
+	for _, ev := range replay {
+		if !writeFrame(w, ev) {
 			return
 		}
 	}
@@ -79,6 +93,10 @@ func writeFrame(w io.Writer, ev audit.Event) bool {
 	if err != nil {
 		return true
 	}
-	_, err = fmt.Fprintf(w, "event: decision\ndata: %s\n\n", b)
+	if ev.ID > 0 {
+		_, err = fmt.Fprintf(w, "id: %d\nevent: decision\ndata: %s\n\n", ev.ID, b)
+	} else {
+		_, err = fmt.Fprintf(w, "event: decision\ndata: %s\n\n", b)
+	}
 	return err == nil
 }

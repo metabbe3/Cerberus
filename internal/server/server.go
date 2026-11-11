@@ -59,6 +59,11 @@ func New(d Deps) *Server {
 	mux.HandleFunc("POST /v1/admin/policy/validate", s.admin(s.validatePolicy))
 	mux.HandleFunc("GET /v1/audit", s.admin(s.queryAudit))
 	mux.HandleFunc("GET /v1/events", s.admin(s.events))
+	mux.HandleFunc("GET /v1/status", s.getStatus)
+	mux.HandleFunc("GET /v1/admin/status", s.admin(s.getStatus))
+	mux.HandleFunc("POST /v1/admin/decisions/erase", s.admin(s.eraseDecision))
+	mux.HandleFunc("POST /v1/admin/bundle", s.admin(s.uploadBundle))
+	mux.HandleFunc("PUT /v1/admin/bundle", s.admin(s.uploadBundle))
 
 	s.handler = s.withMiddleware(mux)
 	return s

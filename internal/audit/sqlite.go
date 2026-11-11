@@ -58,8 +58,8 @@ func insertBatch(ctx context.Context, db *sql.DB, batch []Event) error {
 		return fmt.Errorf("audit: begin: %w", err)
 	}
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO events
-		(time, stage, key_id, subject, decision, rule_id, reason, epoch, cached, latency_us, args)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		(id, time, stage, key_id, subject, decision, rule_id, reason, epoch, cached, latency_us, args)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("audit: prepare: %w", err)
@@ -71,7 +71,7 @@ func insertBatch(ctx context.Context, db *sql.DB, batch []Event) error {
 		if err != nil {
 			args = nil
 		}
-		if _, err := stmt.ExecContext(ctx, ev.Time.UnixNano(), ev.Stage, ev.KeyID, ev.Subject,
+		if _, err := stmt.ExecContext(ctx, ev.ID, ev.Time.UnixNano(), ev.Stage, ev.KeyID, ev.Subject,
 			ev.Decision, ev.RuleID, ev.Reason, int64(ev.Epoch), // #nosec G115 -- epoch is a reload counter, never near MaxInt64
 			boolInt(ev.Cached), ev.LatencyUS,
 			nullableJSON(args)); err != nil {
@@ -83,6 +83,27 @@ func insertBatch(ctx context.Context, db *sql.DB, batch []Event) error {
 		return fmt.Errorf("audit: commit: %w", err)
 	}
 	return nil
+}
+
+func maxEventID(ctx context.Context, db *sql.DB) (int64, error) {
+	var maxID sql.NullInt64
+	err := db.QueryRowContext(ctx, "SELECT MAX(id) FROM events").Scan(&maxID)
+	if err != nil && !strings.Contains(err.Error(), "no such table") {
+		return 0, err
+	}
+	return maxID.Int64, nil
+}
+
+func eraseEvent(ctx context.Context, db *sql.DB, id int64) (bool, error) {
+	res, err := db.ExecContext(ctx, `UPDATE events SET args = '{"_erased":true}' WHERE id = ?`, id)
+	if err != nil {
+		return false, fmt.Errorf("audit: erase: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 func boolInt(b bool) int64 {
