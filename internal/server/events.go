@@ -109,5 +109,4 @@ func writeFrame(w io.Writer, ev audit.Event) bool {
 		}
 	}
 	return err == nil
-	return err == nil
 }
