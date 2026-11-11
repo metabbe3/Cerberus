@@ -274,7 +274,9 @@ func (m *dbManager) query(ctx context.Context, f Filter) ([]Event, error) {
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(files)))
 
-	var allEvents []Event
+	// Non-nil even when empty so JSON encoding yields [] (not null) —
+	// clients (Owl Zod array schemas) fail on null.
+	allEvents := []Event{}
 	for _, fn := range files {
 		// If filtering by Since, check if file is before Since
 		if strings.HasPrefix(fn, "audit-") && !f.Since.IsZero() {
