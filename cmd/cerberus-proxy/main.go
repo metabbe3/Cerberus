@@ -154,9 +154,32 @@ func run() error {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	serveErr := make(chan error, 1)
+	serveErr := make(chan error, 2)
 	go func() { serveErr <- srv.Serve(listener) }()
 	log.Info("cerberus-proxy listening", "network", network, "addr", bindPath, "docker_host", dockerHost)
+
+	var egressSrv *http.Server
+	if egressAddr != "" {
+		ep, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+			FallbackKeyID: defaultKey,
+		})
+		if err != nil {
+			return fmt.Errorf("cerberus-proxy: init egress proxy: %w", err)
+		}
+		egressListener, err := net.Listen("tcp", egressAddr)
+		if err != nil {
+			return fmt.Errorf("cerberus-proxy: egress listen on %s: %w", egressAddr, err)
+		}
+		defer func() { _ = egressListener.Close() }()
+
+		egressSrv = &http.Server{
+			Handler:           ep,
+			ReadHeaderTimeout: 5 * time.Second,
+			IdleTimeout:       120 * time.Second,
+		}
+		go func() { serveErr <- egressSrv.Serve(egressListener) }()
+		log.Info("cerberus-proxy egress proxy listening", "addr", egressAddr)
+	}
 
 	_ = adminToken
 	select {
@@ -169,6 +192,9 @@ func run() error {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if egressSrv != nil {
+		_ = egressSrv.Shutdown(shutdownCtx)
+	}
 	return srv.Shutdown(shutdownCtx)
 }
 
