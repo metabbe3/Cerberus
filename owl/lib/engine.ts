@@ -95,6 +95,25 @@ export async function validatePolicy(
   }
 }
 
+// Raw upstream response for the SSE proxy — the route streams res.body
+// straight to the client (no buffering layer of our own).
+export async function openEventStream(): Promise<Response> {
+  const { url, token } = engineEnv();
+  let res: Response;
+  try {
+    res = await fetch(`${url}/v1/events`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+  } catch {
+    throw new EngineError(502, "Engine unreachable");
+  }
+  if (!res.ok) {
+    throw new EngineError(res.status, engineMessage(res.status, await res.text()));
+  }
+  return res;
+}
+
 // Query params pass through verbatim (key_id, stage, decision, rule_id,
 // since RFC3339, limit) — Owl is not a second query language.
 export async function queryAudit(params: URLSearchParams): Promise<AuditEvent[]> {
