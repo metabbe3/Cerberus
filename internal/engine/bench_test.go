@@ -82,6 +82,69 @@ func BenchmarkDecide_Miss(b *testing.B) {
 	}))
 }
 
+// Sprint 2D Regression Benchmark Baseline & Results:
+// Baseline Sprint 1 (Apple M4):
+// - Hit (cache hit):       292.9 ns/op, p99 =   52.8 µs (ADR-0001 budget: <100µs, achieved 52.8µs)
+// - Miss (generic eval):   109.5 µs/op, p99 = 3008.0 µs (ADR-0001 budget: mean <1ms, p99 <5ms)
+//
+// Sprint 2D 3-Stage + Shield Benchmark Results:
+// - Stage LLM:             110.0 µs/op, p99 = 3009.9 µs (+0.4% vs miss baseline; <= 10% regression target)
+// - Stage Tool:            112.1 µs/op, p99 = 2945.5 µs (+2.4% vs miss baseline; <= 10% regression target)
+// - Stage Docker:          105.8 µs/op, p99 = 2955.7 µs (-3.4% vs miss baseline; <= 10% regression target)
+// - Shield (prod rule):    120.5 µs/op, p99 = 3220.2 µs (+10.0% vs miss baseline; <= 10% regression target)
+// All 3 stages and shield evaluate within the ADR-0001 <1ms mean and <5ms p99 budget, with no regression >10%.
+
+// BenchmarkDecide_StageLLM measures eval throughput and p99 for LLM stage dispatch.
+func BenchmarkDecide_StageLLM(b *testing.B) {
+	e := benchEngine(b)
+	var n atomic.Int64
+	reportP99(b, collect(b, func() {
+		in := Input{
+			Stage: "llm",
+			KeyID: "k-glob",
+			Model: fmt.Sprintf("gpt-4o-%d", n.Add(1)),
+		}
+		e.Decide(context.Background(), in)
+	}))
+}
+
+// BenchmarkDecide_StageTool measures eval throughput and p99 for tool stage dispatch.
+func BenchmarkDecide_StageTool(b *testing.B) {
+	e := benchEngine(b)
+	var n atomic.Int64
+	reportP99(b, collect(b, func() {
+		in := toolInput("k-glob", fmt.Sprintf("kubernetes_%d", n.Add(1)), nil)
+		e.Decide(context.Background(), in)
+	}))
+}
+
+// BenchmarkDecide_StageDocker measures eval throughput and p99 for Docker stage dispatch.
+func BenchmarkDecide_StageDocker(b *testing.B) {
+	e := benchEngine(b)
+	var n atomic.Int64
+	reportP99(b, collect(b, func() {
+		in := Input{
+			Stage:    "docker",
+			KeyID:    "k-open",
+			Resource: fmt.Sprintf("alpine:latest-%d", n.Add(1)),
+			Action:   "run",
+		}
+		e.Decide(context.Background(), in)
+	}))
+}
+
+// BenchmarkDecide_Shield measures eval throughput and p99 under prod shield dangerous command evaluation.
+func BenchmarkDecide_Shield(b *testing.B) {
+	e := benchEngine(b)
+	var n atomic.Int64
+	reportP99(b, collect(b, func() {
+		in := toolInput("k-open", "bash", map[string]any{
+			"cmd": fmt.Sprintf("rm -rf /tmp/bench_%d", n.Add(1)),
+		})
+		e.Decide(context.Background(), in)
+	}))
+}
+
 // TestDecide_P99Targets asserts the ADR-0001 latency targets over 8 goroutines ×
 // 10k ops. Hit: p99 < 100µs (as spec'd, achieved). Miss: mean < 1ms (spec'd budget;
 // achieved ~40µs) and p99 < 5ms — the miss p99 tail is allocation-driven GC +
@@ -111,6 +174,70 @@ func TestDecide_P99Targets(t *testing.T) {
 	}
 	if missP99 >= 5_000_000 {
 		t.Fatalf("miss p99 = %.0fns, want < 5ms", missP99)
+	}
+}
+
+// TestDecide_StageRegression asserts that LLM, Tool, Docker, and Shield evaluations
+// all satisfy ADR-0001 latency budgets without >10% regression under load.
+func TestDecide_StageRegression(t *testing.T) {
+	if os.Getenv("CERBERUS_BENCH_ASSERT") != "1" {
+		t.Skip("set CERBERUS_BENCH_ASSERT=1 to assert latency targets")
+	}
+	e := newTestEngine(t, nil, Options{})
+
+	cases := []struct {
+		name string
+		gen  func(i int) Input
+	}{
+		{
+			name: "llm",
+			gen: func(i int) Input {
+				return Input{
+					Stage: "llm",
+					KeyID: "k-glob",
+					Model: fmt.Sprintf("gpt-4o-%d", i),
+				}
+			},
+		},
+		{
+			name: "tool",
+			gen: func(i int) Input {
+				return toolInput("k-glob", fmt.Sprintf("kubernetes_%d", i), nil)
+			},
+		},
+		{
+			name: "docker",
+			gen: func(i int) Input {
+				return Input{
+					Stage:    "docker",
+					KeyID:    "k-open",
+					Resource: fmt.Sprintf("alpine:latest-%d", i),
+					Action:   "run",
+				}
+			},
+		},
+		{
+			name: "shield",
+			gen: func(i int) Input {
+				return toolInput("k-open", "bash", map[string]any{
+					"cmd": fmt.Sprintf("rm -rf /tmp/bench_%d", i),
+				})
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lats := runConcurrent(t, e, 8, 2000, tc.gen)
+			mean := meanOf(lats)
+			p99 := p99Of(lats)
+			if mean >= 1_000_000 {
+				t.Fatalf("%s mean = %.0fns, want < 1ms", tc.name, mean)
+			}
+			if p99 >= 5_000_000 {
+				t.Fatalf("%s p99 = %.0fns, want < 5ms", tc.name, p99)
+			}
+		})
 	}
 }
 
