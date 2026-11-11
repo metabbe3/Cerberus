@@ -1,9 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE, authEnv, verifySession } from "@/lib/session";
 
-// Every page and /api route needs a valid session, except /login and the
-// auth endpoints (see matcher). Pages redirect; APIs answer 401 JSON.
+// Every page and /api route needs a valid session, except /login, public landing (/),
+// and the auth endpoints (see matcher). Pages redirect; APIs answer 401 JSON.
 export async function middleware(req: NextRequest) {
+  if (req.nextUrl.pathname === "/") {
+    return NextResponse.next();
+  }
   const env = authEnv();
   const ok = env !== null && (await verifySession(req.cookies.get(SESSION_COOKIE)?.value, env.secret));
   if (ok) return NextResponse.next();
@@ -27,5 +30,5 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|login|api/auth/).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|login|api/auth/|$).*)"],
 };

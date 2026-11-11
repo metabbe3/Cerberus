@@ -1,0 +1,26 @@
+{
+  "name": "cerberus-sdk",
+  "version": "0.1.0",
+  "description": "Lightweight TypeScript client SDK for Cerberus AI policy engine",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./src/index.ts",
+      "types": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test test/"
+  },
+  "keywords": [
+    "cerberus",
+    "policy",
+    "agent",
+    "security"
+  ],
+  "author": "Cerberus Contributors",
+  "license": "MIT"
+}

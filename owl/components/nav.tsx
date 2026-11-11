@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 const links = [
-  { href: "/", label: "Overview", icon: LayoutDashboard },
+  { href: "/overview", label: "Overview", icon: LayoutDashboard },
   { href: "/agents", label: "Agents", icon: Bot },
   { href: "/decisions", label: "Decisions", icon: Radio },
   { href: "/shield", label: "Shield", icon: ShieldAlert },

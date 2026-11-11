@@ -70,8 +70,8 @@ export async function checkPassword(input: string, expected: string): Promise<bo
 // Post-login redirect target: same-origin paths only. "//host" and "/\host"
 // are protocol-relative in browsers, so they're refused (open redirect).
 export function safeNext(next: string | null | undefined): string {
-  if (!next || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/\\")) {
-    return "/";
+  if (!next || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/\\") || next === "/") {
+    return "/overview";
   }
   return next;
 }
