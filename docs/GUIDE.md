@@ -155,6 +155,32 @@ Bearer `Authorization: Bearer $CERBERUS_ADMIN_TOKEN` on all of these:
 - `GET /v1/audit?key_id&stage&rule_id&since&limit` — query decisions.
 - `GET /v1/events` — SSE stream of live decisions.
 
+## Owl dashboard 🦉
+
+Next.js 15 app in `owl/` — agents table + editor (tools, argument constraints,
+masking, models/budget), live decision stream, Rego viewer + validate, settings.
+The browser never talks to the engine: Owl proxies every call through its own
+route handlers, so the admin token lives only in Owl's server env.
+
+- **Env** (in `owl/.env.local`, gitignored — see `owl/.env.example`):
+  `CERBERUS_URL` (default `http://localhost:8089`) and `CERBERUS_ADMIN_TOKEN`
+  (no token → every page shows "Engine unreachable").
+- **Dev**: `cd owl && cp .env.example .env.local && npm install && npm run dev`
+  → http://localhost:3000. All engine reads/writes go through `/api/*` proxies
+  (`/api/data`, `/api/audit`, `/api/events`, `/api/policy*`).
+- **Compose**: `CERBERUS_ADMIN_TOKEN=smoke docker compose -f
+  deploy/docker-compose.yml --profile owl up` → engine :8089, Owl :3000 with
+  the same token; `data/` and `policies/` are bind-mounted into both.
+- **Policy viewer ceiling**: the engine has no "read policy" endpoint, so the
+  `/policy` page reads Rego files from `OWL_POLICY_DIR` (default: the repo's
+  `../policies` relative to `owl/`) on Owl's server. Outside compose, point
+  `OWL_POLICY_DIR` at a checkout of the same policies the engine loads, or the
+  viewer will show nothing; Validate always round-trips to the real engine.
+- **Edits from the UI install whole documents**: every save PUTs the full data
+  JSON (epoch +1); a 422 shows the engine's message verbatim and changes
+  nothing. Tests: `npm run test` (vitest) + `npx playwright test` (needs a Go
+  toolchain; starts its own engine + dev server on :3100).
+
 ## Adding a stage (3 touches)
 
 Example for the future `docker` stage:

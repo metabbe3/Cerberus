@@ -5,7 +5,7 @@
 > dashboard, tanpa recompile.
 
 ## Status
-**Phase 1 implemented** — core engine live: `POST /v1/decide/{llm,tool}` dengan cache + masking + audit SQLite + SSE + hot-reload data. Owner: Nicholas. Dibangun oleh Hermes Agent.
+**Phase 1 + 2 implemented** — core engine live (`POST /v1/decide/{llm,tool}`, cache + masking + audit SQLite + SSE + hot-reload data), and **Owl 🦉** (Next.js 15 dashboard under `owl/`): agents table + editor, live decision stream, Rego viewer + validate, settings. Owner: Nicholas. Dibangun oleh Hermes Agent.
 
 ## Quickstart
 
@@ -14,6 +14,10 @@ make build
 export CERBERUS_ADMIN_TOKEN=change-me
 ./bin/cerberus                       # :8089 — panduan lengkap: docs/GUIDE.md
 
+# Owl dashboard (separate server, proxied — token never reaches the browser):
+cd owl && cp .env.example .env.local  # fill CERBERUS_ADMIN_TOKEN
+npm install && npm run dev            # http://localhost:3000
+
 curl -s -X POST localhost:8089/v1/decide/tool -H 'Content-Type: application/json' \
   -d '{"key_id":"k-glob","tool_call":"kubernetes_get_pods","args":{"cmd":"kubectl get pods"}}'
 ```
@@ -21,6 +25,7 @@ curl -s -X POST localhost:8089/v1/decide/tool -H 'Content-Type: application/json
 - Arah & fase: [docs/ROADMAP.md](docs/ROADMAP.md)
 - Aturan kode (Go/Rego/TS): [docs/CONVENTIONS.md](docs/CONVENTIONS.md)
 - Plan eksekusi Phase 1 (core engine): [docs/superpowers/plans/2026-11-10-phase1-core-engine.md](docs/superpowers/plans/2026-11-10-phase1-core-engine.md)
+- Plan eksekusi Phase 2 (Owl): [docs/superpowers/plans/2026-11-11-phase2-owl.md](docs/superpowers/plans/2026-11-11-phase2-owl.md)
 
 ## Konsep inti (dari diskusi owner, 10-11 Nov 2026)
 
