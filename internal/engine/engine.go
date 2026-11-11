@@ -111,15 +111,19 @@ type TraceEntry struct {
 
 // Decision is the public decision contract (golden-tested in Task 7).
 type Decision struct {
-	Decision    string         `json:"decision"`
-	RuleID      string         `json:"rule_id"`
-	Reason      string         `json:"reason"`
-	MaskedArgs  map[string]any `json:"masked_args"` // null when no rule changed a string
-	Epoch       uint64         `json:"epoch"`
-	Cached      bool           `json:"cached"`
-	LatencyUS   int64          `json:"-"`
-	Trace       []TraceEntry   `json:"trace,omitempty"`
-	PrettyTrace string         `json:"pretty_trace,omitempty"`
+	Decision   string         `json:"decision"`
+	RuleID     string         `json:"rule_id"`
+	Reason     string         `json:"reason"`
+	MaskedArgs map[string]any `json:"masked_args"` // null when no rule changed a string
+	// MaskedPrompt carries the LLM conversation (messages + prompt) with
+	// masking rules applied — secrets an agent pasted into a prompt never
+	// reach the audit log or the API response in clear.
+	MaskedPrompt any          `json:"masked_prompt,omitempty"`
+	Epoch        uint64       `json:"epoch"`
+	Cached       bool         `json:"cached"`
+	LatencyUS    int64        `json:"-"`
+	Trace        []TraceEntry `json:"trace,omitempty"`
+	PrettyTrace  string       `json:"pretty_trace,omitempty"`
 }
 
 // Allowed reports whether the decision is "allow".
@@ -191,7 +195,7 @@ func (e *Engine) Decide(ctx context.Context, in Input) Decision {
 		Epoch:     d.Epoch,
 		Cached:    d.Cached,
 		LatencyUS: d.LatencyUS,
-		Args:      d.MaskedArgs,
+		Args:      auditArgsFor(in.Stage, d),
 	})
 	return d
 }
@@ -287,8 +291,47 @@ func (e *Engine) Explain(ctx context.Context, in Input) Decision {
 	}
 	d.Trace = entries
 	d.MaskedArgs = applyMasking(snap, in.KeyID, in.Args)
+	d.MaskedPrompt = applyPromptMasking(snap, in.KeyID, in)
 	d.LatencyUS = time.Since(start).Microseconds()
 	return d
+}
+
+// applyPromptMasking applies per-key masking rules to the LLM conversation:
+// input.messages (every role, including tool results pasted back) and the
+// legacy input.prompt. Replies are covered the same way — the caller sends
+// the assistant turn back through decide on the next round-trip, and the
+// audit Args field carries MaskedPrompt for stage llm.
+func applyPromptMasking(snap *policy.Snapshot, keyID string, in Input) any {
+	rules := snap.Maskers[keyID]
+	if len(rules) == 0 {
+		return nil
+	}
+	changed := false
+	doc := map[string]any{}
+	if len(in.Messages) > 0 {
+		msgs := make([]any, 0, len(in.Messages))
+		for _, m := range in.Messages {
+			cp := map[string]any{}
+			for k, v := range m {
+				cp[k] = v
+			}
+			msgs = append(msgs, cp)
+		}
+		if masked, mchg := masking.Apply(rules, "response", msgs); mchg {
+			doc["messages"] = masked
+			changed = true
+		}
+	}
+	if in.Prompt != "" {
+		if masked, pchg := masking.Apply(rules, "response", map[string]any{"prompt": in.Prompt}); pchg {
+			doc["prompt"] = masked.(map[string]any)["prompt"]
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return doc
 }
 
 // EvalSnapshot evaluates an input against the given policy Snapshot directly
@@ -332,13 +375,27 @@ func (e *Engine) eval(ctx context.Context, snap *policy.Snapshot, in Input) Deci
 	}
 
 	d := Decision{
-		Decision:   str(val["decision"]),
-		RuleID:     str(val["rule_id"]),
-		Reason:     str(val["reason"]),
-		Epoch:      snap.Epoch,
-		MaskedArgs: applyMasking(snap, in.KeyID, in.Args),
+		Decision:     str(val["decision"]),
+		RuleID:       str(val["rule_id"]),
+		Reason:       str(val["reason"]),
+		Epoch:        snap.Epoch,
+		MaskedArgs:   applyMasking(snap, in.KeyID, in.Args),
+		MaskedPrompt: applyPromptMasking(snap, in.KeyID, in),
 	}
 	return d
+}
+
+// auditArgsFor picks what lands in the audit Args column: tool stages carry
+// masked args; the llm stage carries the masked conversation so a secret in a
+// prompt is never stored in clear, while still recording what was asked.
+func auditArgsFor(stage string, d Decision) map[string]any {
+	if stage == "llm" {
+		if mp, ok := d.MaskedPrompt.(map[string]any); ok && len(mp) > 0 {
+			return mp
+		}
+		return nil
+	}
+	return d.MaskedArgs
 }
 
 // applyMasking applies per-key masking rules to args map.

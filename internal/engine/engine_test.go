@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -498,5 +499,50 @@ func TestMetrics_ObservabilityStageAndEpoch(t *testing.T) {
 	afterHits := testutil.ToFloat64(cacheHitsEpoch.WithLabelValues(epochStr))
 	if afterHits <= beforeHits {
 		t.Fatalf("cacheHitsEpoch did not increase: %v -> %v", beforeHits, afterHits)
+	}
+}
+
+func TestLLMPromptMasking(t *testing.T) {
+	data := map[string]any{
+		"config": map[string]any{"bypass_unknown_keys": true},
+		"agents": map[string]any{
+			"k-mask-test": map[string]any{
+				"allowed_models": []any{"glm-*"},
+				"masking": []any{
+					map[string]any{"pattern": "sk-[A-Za-z0-9]{8,}", "transform": "redact", "scope": ""},
+					map[string]any{"pattern": `10\.0\.\d+\.\d+`, "transform": "mask", "scope": ""},
+				},
+			},
+		},
+	}
+	dj, _ := json.Marshal(data)
+	polDir := "../../policies"
+	if _, statErr := os.Stat(polDir); statErr != nil {
+		t.Skipf("policies dir not found: %v", statErr)
+	}
+	snap, err := policy.Load(context.Background(), polDir, dj, 1)
+	if err != nil {
+		t.Fatalf("policy load: %v", err)
+	}
+	eng, err := New(policy.NewStoreWithSnapshot(snap), nil, Options{})
+	if err != nil {
+		t.Fatalf("engine new: %v", err)
+	}
+	d := eng.Decide(context.Background(), Input{
+		Stage: "llm", KeyID: "k-mask-test", Model: "glm-4.5-flash",
+		Messages: []map[string]any{{"role": "user", "content": "analyze api key sk-abc123def456 at 10.0.3.7"}},
+	})
+	mp, ok := d.MaskedPrompt.(map[string]any)
+	if !ok {
+		t.Fatalf("expected masked_prompt, got %v", d.MaskedPrompt)
+	}
+	msgs, _ := mp["messages"].([]any)
+	first, _ := msgs[0].(map[string]any)
+	c, _ := first["content"].(string)
+	if strings.Contains(c, "sk-abc123def456") {
+		t.Fatalf("api key leaked: %s", c)
+	}
+	if !strings.Contains(c, "10***") {
+		t.Fatalf("ip not masked: %s", c)
 	}
 }
