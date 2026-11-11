@@ -9,14 +9,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"log/slog"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/golang-lru/v2"
@@ -133,8 +134,11 @@ func (e *Engine) Decide(ctx context.Context, in Input) Decision {
 	start := time.Now()
 	snap := e.store.Current()
 	sum := cacheKey(snap.Epoch, in)
-	key := hex.EncodeToString(sum[:])
-	epochStr := strconv.FormatUint(snap.Epoch, 10)
+	key := string(sum[:])
+	epochStr := snap.EpochStr
+	if epochStr == "" {
+		epochStr = strconv.FormatUint(snap.Epoch, 10)
+	}
 
 	var d Decision
 	if hit, ok := e.cache.Get(key); ok {
@@ -368,10 +372,15 @@ func subject(in Input) string {
 	}
 }
 
+var shaPool = sync.Pool{
+	New: func() any {
+		return sha256.New()
+	},
+}
+
 // cacheKey is sha256(epoch ‖ json.Marshal(in)) — the epoch invalidates the
 // whole cache on reload, and json.Marshal sorts map keys so equal inputs hash
 // equally.
-// ponytail: json.Marshal for cache key — hand-rolled hasher only if bench shows it dominating.
 func cacheKey(epoch uint64, in Input) [32]byte {
 	b, err := json.Marshal(in)
 	if err != nil {
@@ -379,11 +388,13 @@ func cacheKey(epoch uint64, in Input) [32]byte {
 	}
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], epoch)
-	h := sha256.New()
+	h := shaPool.Get().(hash.Hash)
+	h.Reset()
 	h.Write(buf[:])
 	h.Write(b)
 	var out [32]byte
-	copy(out[:], h.Sum(nil))
+	h.Sum(out[:0])
+	shaPool.Put(h)
 	return out
 }
 

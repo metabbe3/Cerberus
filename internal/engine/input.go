@@ -19,7 +19,7 @@ type Input struct {
 // nil maps are omitted, mirroring the JSON omitempty tags, so policy sees
 // exactly the wire shape of POST /v1/decide.
 func regoInput(in Input) map[string]any {
-	m := make(map[string]any, 4)
+	m := make(map[string]any, 9)
 	m["stage"] = in.Stage
 	m["key_id"] = in.KeyID
 	if in.Action != "" {

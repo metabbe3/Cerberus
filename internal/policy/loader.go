@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -67,11 +68,12 @@ func Load(ctx context.Context, policyDir string, dataJSON []byte, epoch uint64) 
 	}
 
 	return &Snapshot{
-		Epoch:   epoch,
-		Query:   query,
-		Data:    data,
-		Maskers: maskers,
-		Loaded:  time.Now(),
+		Epoch:    epoch,
+		EpochStr: strconv.FormatUint(epoch, 10),
+		Query:    query,
+		Data:     data,
+		Maskers:  maskers,
+		Loaded:   time.Now(),
 	}, nil
 }
 

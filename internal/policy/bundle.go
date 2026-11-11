@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -468,6 +469,7 @@ func (s *Store) Rollback(ctx context.Context) (*Snapshot, error) {
 	} else if s.prevSnapshot != nil {
 		rolledBack = &Snapshot{
 			Epoch:    old.Epoch + 1,
+			EpochStr: strconv.FormatUint(old.Epoch+1, 10),
 			Revision: s.prevSnapshot.Revision,
 			Query:    s.prevSnapshot.Query,
 			Data:     s.prevSnapshot.Data,

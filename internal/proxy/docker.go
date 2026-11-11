@@ -31,6 +31,15 @@ var (
 	execSubpath      = regexp.MustCompile(`^/exec/([^/]+)(?:/(.+))?$`)
 )
 
+func stripAPIVersion(path string) string {
+	if strings.HasPrefix(path, "/v") {
+		if loc := apiVersionRegex.FindStringIndex(path); loc != nil && loc[0] == 0 {
+			return path[loc[1]:]
+		}
+	}
+	return path
+}
+
 // ContainerLabelResolver resolves the cerberus.policy-key label for a container.
 type ContainerLabelResolver func(ctx context.Context, containerID string) (string, error)
 
@@ -175,7 +184,7 @@ func (p *DockerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *DockerProxy) parseRequest(r *http.Request) (engine.Input, error) {
-	cleanPath := apiVersionRegex.ReplaceAllString(r.URL.Path, "")
+	cleanPath := stripAPIVersion(r.URL.Path)
 	if cleanPath == "" {
 		cleanPath = "/"
 	}
@@ -196,7 +205,7 @@ func (p *DockerProxy) parseRequest(r *http.Request) (engine.Input, error) {
 
 	action := strings.ToLower(r.Method)
 	resource := ""
-	args := make(map[string]any)
+	args := make(map[string]any, 4)
 
 	// Container endpoints: /containers/{id}/start, /containers/{id}/stop, etc.
 	if m := containerSubpath.FindStringSubmatch(cleanPath); len(m) > 1 {
