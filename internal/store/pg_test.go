@@ -2,17 +2,24 @@ package store
 
 import (
 	"context"
+	"strings"
 	"os"
 	"testing"
 )
 
 // Integration test against a live PostgreSQL. Skipped when
 // CERBERUS_TEST_PG_DSN is unset so CI without PG stays green.
+// The DSN MUST point at a throwaway database (name must start with
+// "cerberus_test"): this test writes and deletes rows and once clobbered a
+// live table by mistake. Live databases are refused, not assumed safe.
 func testPG(t *testing.T) *PG {
 	t.Helper()
 	dsn := os.Getenv("CERBERUS_TEST_PG_DSN")
 	if dsn == "" {
 		t.Skip("CERBERUS_TEST_PG_DSN not set")
+	}
+	if !strings.Contains(dsn, "/cerberus_test") {
+		t.Skipf("refusing to run against a non-test database (dsn must target /cerberus_test)")
 	}
 	p, err := Open(context.Background(), dsn)
 	if err != nil {
