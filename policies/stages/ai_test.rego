@@ -17,6 +17,7 @@ decide(inp) := out if {
 		with data.agents as data.testdata.agents
 		with data.blocked_patterns as data.testdata.blocked_patterns
 		with data.domains as data.testdata.domains
+		with data.prod_shield as data.testdata.prod_shield
 }
 
 # ---------- tool ----------
@@ -40,7 +41,7 @@ test_tool_not_allowed if {
 }
 
 test_tool_arg_violation_regex_allow if {
-	out := decide({"stage": "tool", "key_id": "k-exact", "tool_call": "bash", "args": {"cmd": "rm -rf /"}})
+	out := decide({"stage": "tool", "key_id": "k-exact", "tool_call": "bash", "args": {"cmd": "pwd"}})
 	out.decision == "deny"
 	out.rule_id == "ai.tool.arg_violation"
 }
@@ -136,7 +137,7 @@ test_llm_blocked_pattern if {
 # Two violated args in one call must still yield one decision, not an
 # eval_conflict_error (which the engine maps to internal.eval_error).
 test_tool_two_arg_violations_single_decision if {
-	out := decide({"stage": "tool", "key_id": "k-exact", "tool_call": "bash", "args": {"cmd": "rm -rf /", "timeout": 999}})
+	out := decide({"stage": "tool", "key_id": "k-exact", "tool_call": "bash", "args": {"cmd": "pwd", "timeout": 999}})
 	out.decision == "deny"
 	out.rule_id == "ai.tool.arg_violation"
 }
@@ -168,7 +169,7 @@ test_llm_missing_model_open_agent_allows if {
 # A case variant of a constrained tool passes a case-insensitive glob allow-list,
 # so its argument constraints must apply too (k-case allows "Shell*").
 test_tool_case_variant_still_constrained if {
-	out := decide({"stage": "tool", "key_id": "k-case", "tool_call": "SHELL_run", "args": {"cmd": "rm -rf /"}})
+	out := decide({"stage": "tool", "key_id": "k-case", "tool_call": "SHELL_run", "args": {"cmd": "pwd"}})
 	out.decision == "deny"
 	out.rule_id == "ai.tool.arg_violation"
 }

@@ -6,6 +6,7 @@ package stages.docker
 import rego.v1
 
 import data.gateway.authz
+import data.shield.prod
 
 decision := docker_decision
 
@@ -18,6 +19,19 @@ args := object.get(input, "args", {})
 # ---------- docker decision else-chain ----------
 
 docker_decision := {
+	"decision": "allow",
+	"rule_id": "shield.exempt",
+	"reason": "shield_exempt",
+} if {
+	docker_container_protected
+	prod.exempt(input.key_id)
+} else := {
+	"decision": "deny",
+	"rule_id": "shield.container.protected",
+	"reason": sprintf("container %s is protected", [image]),
+} if {
+	docker_container_protected
+} else := {
 	"decision": "deny",
 	"rule_id": "docker.mount_forbidden",
 	"reason": "mounting docker.sock is forbidden",
@@ -122,3 +136,25 @@ image_matches(pattern, img) if glob.match(pattern, [":"], img)
 image_matches(pattern, img) if authz.call_matches_pattern(pattern, img)
 
 image_matches(pattern, img) if lower(pattern) == lower(img)
+
+# ---------- shield container checks (P0.4) ----------
+
+docker_container_protected if {
+	docker_delete_action
+	docker_protected_target
+}
+
+docker_delete_action if action in ["rm", "rmi", "delete", "down"]
+
+docker_delete_action if prod.is_container_delete_call(action)
+
+docker_protected_target if {
+	image != ""
+	prod.touches_protected_container(image)
+}
+
+docker_protected_target if {
+	some arg_val in prod.all_arg_strings(args)
+	prod.touches_protected_container(arg_val)
+}
+

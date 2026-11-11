@@ -18,6 +18,7 @@ decide(inp) := out if {
 		with data.agents as data.testdata.agents
 		with data.blocked_patterns as data.testdata.blocked_patterns
 		with data.domains as data.testdata.domains
+		with data.prod_shield as data.testdata.prod_shield
 }
 
 # Fail-closed variant of the fixture: both bypass flags off.
@@ -30,6 +31,7 @@ decide_closed(inp) := out if {
 		with data.agents as data.testdata.agents
 		with data.blocked_patterns as data.testdata.blocked_patterns
 		with data.domains as data.testdata.domains
+		with data.prod_shield as data.testdata.prod_shield
 }
 
 test_unknown_stage_denied if {

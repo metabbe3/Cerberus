@@ -62,6 +62,7 @@ export const AgentSchema = z
     budget_limit: z.number().optional(),
     risk_tier: z.string().optional(),
     log_level: z.string().optional(),
+    prod_access: z.boolean().optional(),
     masking: z.array(MaskingRuleSchema).optional(),
   })
   .loose();
@@ -118,6 +119,7 @@ export const CerberusDataSchema = z
     agents: z.record(z.string(), AgentSchema),
     blocked_patterns: z.array(z.string()).optional(),
     domains: z.record(z.string(), z.unknown()).optional(),
+    prod_shield: z.record(z.string(), z.unknown()).optional(),
   });
 
 export type CerberusData = z.infer<typeof CerberusDataSchema>;

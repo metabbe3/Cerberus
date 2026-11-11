@@ -13,6 +13,7 @@ decide(inp) := out if {
 		with data.agents as fixture_agents
 		with data.blocked_patterns as data.testdata.blocked_patterns
 		with data.domains as data.testdata.domains
+		with data.prod_shield as data.testdata.prod_shield
 }
 
 no_bypass_config := object.union(data.testdata.config, {"bypass_unknown_keys": false, "bypass_unknown_teams": false})
@@ -24,6 +25,7 @@ decide_closed(inp) := out if {
 		with data.agents as fixture_agents
 		with data.blocked_patterns as data.testdata.blocked_patterns
 		with data.domains as data.testdata.domains
+		with data.prod_shield as data.testdata.prod_shield
 }
 
 fixture_teams := {

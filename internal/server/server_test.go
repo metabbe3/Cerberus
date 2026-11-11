@@ -845,7 +845,7 @@ func TestAdmin_UploadBundle(t *testing.T) {
 	_, _ = tw.Write(updatedData)
 
 	// Include current rego files
-	for _, rel := range []string{"gateway/authz.rego", "stages/ai.rego", "stages/llm.rego", "stages/tool.rego"} {
+	for _, rel := range []string{"gateway/authz.rego", "stages/ai.rego", "stages/llm.rego", "stages/tool.rego", "shield/prod.rego"} {
 		content, err := os.ReadFile(filepath.Join(h.policies, rel))
 		if err != nil {
 			t.Fatalf("read %s: %v", rel, err)

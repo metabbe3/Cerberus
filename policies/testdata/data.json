@@ -42,6 +42,7 @@
       "name": "exact-agent",
       "team_id": "nope",
       "allowed_tools": ["bash"],
+      "prod_access": true,
       "tool_argument_constraints": {
         "bash": {
           "cmd": {"type": "regex_allow", "patterns": ["^ls( .*)?$"]},
@@ -49,6 +50,13 @@
           "env": ["prod", "dev"]
         }
       }
+    },
+    "k-owner": {
+      "name": "owner-agent"
+    },
+    "k-prod": {
+      "name": "prod-agent",
+      "prod_access": true
     },
     "k-open": {
       "name": "open-agent"
@@ -78,5 +86,26 @@
 
   "blocked_patterns": ["jailbreak"],
 
-  "domains": {}
+  "domains": {},
+
+  "prod_shield": {
+    "cidrs": [
+      "10.0.0.0/8",
+      "172.16.0.0/12",
+      "192.168.0.0/16",
+      "103.22.201.0/24"
+    ],
+    "host_keywords": ["prod", "production"],
+    "db_keywords": ["prod-db", "postgres-prod"],
+    "protected_containers": ["teknikalidnew-db-1"],
+    "protected_paths": ["/etc", "/var/lib", "~/.ssh", "/Users/*/Documents/teknikal-agent/.env*"],
+    "dangerous_cmd_patterns": [
+      {"id": "grep_wildcard_dump", "regex": "grep\\s+[^|]*(\\*|wildcard)[^|]*(/passwd|/etc|\\.env|id_rsa)"},
+      {"id": "rm_rf", "regex": "rm\\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)"},
+      {"id": "curl_pipe_sh", "regex": "curl[^|]*\\|\\s*(/bin/)?(ba)?sh"},
+      {"id": "chmod_777", "regex": "chmod\\s+777"},
+      {"id": "dd_disk", "regex": "dd\\s+.*of=/dev/"}
+    ],
+    "exempt_keys": ["k-owner"]
+  }
 }

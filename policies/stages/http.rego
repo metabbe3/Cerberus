@@ -5,6 +5,7 @@ package stages.http
 import rego.v1
 
 import data.gateway.authz
+import data.shield.prod
 
 decision := http_decision
 
@@ -30,6 +31,25 @@ method := upper(object.get(args, "method", object.get(input, "action", "GET")))
 # ---------- http decision else-chain ----------
 
 http_decision := {
+	"decision": "allow",
+	"rule_id": "shield.exempt",
+	"reason": "shield_exempt",
+} if {
+	http_shield_target
+	prod.exempt(input.key_id)
+} else := {
+	"decision": "deny",
+	"rule_id": "shield.prod.ip_blocked",
+	"reason": sprintf("http request to prod IP %q blocked", [req_host]),
+} if {
+	http_prod_ip_blocked
+} else := {
+	"decision": "deny",
+	"rule_id": "shield.prod.no_access",
+	"reason": sprintf("http request to prod resource %q denied without prod_access", [req_host]),
+} if {
+	http_prod_no_access
+} else := {
 	"decision": "deny",
 	"rule_id": "http.host_denied",
 	"reason": sprintf("host %q is denied", [req_host]),
@@ -109,3 +129,29 @@ method_allowed if {
 	some m in authz.team.allowed_methods
 	upper(m) == method
 }
+
+# ---------- shield prod checks (P0.3) ----------
+
+agent_has_prod_access if authz.agent.prod_access == true
+
+http_prod_ip_blocked if {
+	not agent_has_prod_access
+	prod.prod_ip(req_host)
+}
+
+http_prod_no_access if {
+	not agent_has_prod_access
+	prod.touches_prod(req_host)
+}
+
+http_prod_no_access if {
+	not agent_has_prod_access
+	prod.touches_prod(resource)
+}
+
+http_shield_target if prod.prod_ip(req_host)
+
+http_shield_target if prod.touches_prod(req_host)
+
+http_shield_target if prod.touches_prod(resource)
+

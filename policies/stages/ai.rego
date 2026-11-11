@@ -7,6 +7,7 @@ package stages.ai
 import rego.v1
 
 import data.gateway.authz
+import data.shield.prod
 
 decision := llm_decision if input.stage == "llm"
 
@@ -46,6 +47,20 @@ llm_decision := {
 	"reason": "prompt contains blocked pattern",
 } if {
 	blocked_prompt
+} else := {
+	"decision": "allow",
+	"rule_id": "shield.exempt",
+	"reason": "shield_exempt",
+} if {
+	llm_target_prod
+	prod.exempt(input.key_id)
+} else := {
+	"decision": "deny",
+	"rule_id": "shield.prod.llm_target",
+	"reason": llm_target_reason,
+} if {
+	llm_target_prod
+	not agent_has_prod_access
 } else := {
 	"decision": "deny",
 	"rule_id": "ai.llm.model_not_allowed",
@@ -151,6 +166,37 @@ tool_decision := {
 	"reason": "tool call contains blocked pattern",
 } if {
 	tool_blocked_pattern
+} else := {
+	"decision": "allow",
+	"rule_id": "shield.exempt",
+	"reason": "shield_exempt",
+} if {
+	shield_triggered
+	prod.exempt(input.key_id)
+} else := {
+	"decision": "deny",
+	"rule_id": "shield.container.protected",
+	"reason": shield_container_reason,
+} if {
+	shield_container_protected
+} else := {
+	"decision": "deny",
+	"rule_id": "shield.cmd.dangerous",
+	"reason": shield_cmd_reason,
+} if {
+	shield_cmd_dangerous
+} else := {
+	"decision": "deny",
+	"rule_id": "shield.prod.ip_blocked",
+	"reason": shield_ip_reason,
+} if {
+	shield_prod_ip_blocked
+} else := {
+	"decision": "deny",
+	"rule_id": "shield.prod.no_access",
+	"reason": shield_no_access_reason,
+} if {
+	shield_prod_no_access
 } else := {
 	"decision": "deny",
 	"rule_id": "ai.tool.arg_violation",
@@ -271,3 +317,143 @@ arg_ok(constraint, value) if {
 	value >= constraint.min
 	value <= constraint.max
 }
+
+# ---------- prod shield helpers (P0.3, P0.4, P0.5) ----------
+
+agent_has_prod_access if authz.agent.prod_access == true
+
+# LLM prod shield target checks
+target_host := object.get(object.get(input, "context", {}), "target_host", "")
+
+llm_target_prod if {
+	target_host != ""
+	prod.prod_ip(target_host)
+}
+
+llm_target_prod if {
+	target_host != ""
+	prod.touches_prod(target_host)
+}
+
+llm_target_prod if {
+	is_string(input.prompt)
+	prod.touches_prod(input.prompt)
+}
+
+llm_target_prod if {
+	is_string(input.prompt)
+	prod.prod_ip(input.prompt)
+}
+
+llm_target_reason := sprintf("target host %q is a protected production resource", [target_host]) if {
+	target_host != ""
+} else := "prompt targets protected production resource"
+
+# Tool prod shield checks
+shield_strings := array.concat([tool_call], prod.all_arg_strings(object.get(input, "args", {})))
+
+# Protected container check
+shield_container_protected if {
+	is_container_operation
+	is_container_protected_target
+}
+
+is_container_operation if prod.is_container_delete_call(tool_call)
+
+is_container_operation if {
+	some arg_name in ["cmd", "command", "script"]
+	cmd_val := object.get(object.get(input, "args", {}), arg_name, "")
+	prod.is_container_delete_call(cmd_val)
+}
+
+is_container_protected_target if {
+	some str in shield_strings
+	prod.touches_protected_container(str)
+}
+
+first_protected_container_hit := [str |
+	some str in shield_strings
+	prod.touches_protected_container(str)
+][0]
+
+shield_container_reason := sprintf("container %s is protected", [first_protected_container_hit]) if {
+	first_protected_container_hit
+} else := "container is protected"
+
+# Dangerous command patterns check
+shield_cmd_dangerous if {
+	count(dangerous_cmd_hits) > 0
+}
+
+dangerous_cmd_hits contains id if {
+	some arg_name in ["cmd", "command", "script"]
+	cmd_val := object.get(object.get(input, "args", {}), arg_name, "")
+	some id in prod.dangerous_cmd(cmd_val)
+}
+
+dangerous_cmd_hits contains id if {
+	some id in prod.dangerous_cmd(tool_call)
+}
+
+dangerous_cmd_hits contains id if {
+	some str in prod.all_arg_strings(object.get(input, "args", {}))
+	some id in prod.dangerous_cmd(str)
+}
+
+first_dangerous_pattern_id := sort(dangerous_cmd_hits)[0] if count(dangerous_cmd_hits) > 0
+
+shield_cmd_reason := sprintf("command matches dangerous pattern %q", [first_dangerous_pattern_id]) if {
+	first_dangerous_pattern_id
+} else := "command matches dangerous pattern"
+
+# Prod IP blocked check
+shield_prod_ip_blocked if {
+	not agent_has_prod_access
+	count(prod_ip_hits) > 0
+}
+
+prod_ip_hits contains str if {
+	some str in prod.all_arg_strings(object.get(input, "args", {}))
+	prod.prod_ip(str)
+}
+
+prod_ip_hits contains tool_call if {
+	prod.prod_ip(tool_call)
+}
+
+first_prod_ip_hit := sort(prod_ip_hits)[0] if count(prod_ip_hits) > 0
+
+shield_ip_reason := sprintf("access to prod IP in %q blocked", [first_prod_ip_hit]) if {
+	first_prod_ip_hit
+} else := "access to prod IP blocked"
+
+# Touches prod without prod access
+shield_prod_no_access if {
+	not agent_has_prod_access
+	count(prod_touch_hits) > 0
+}
+
+prod_touch_hits contains str if {
+	some str in prod.all_arg_strings(object.get(input, "args", {}))
+	prod.touches_prod(str)
+}
+
+prod_touch_hits contains tool_call if {
+	prod.touches_prod(tool_call)
+}
+
+first_prod_touch_hit := sort(prod_touch_hits)[0] if count(prod_touch_hits) > 0
+
+shield_no_access_reason := sprintf("access to prod resource %q denied without prod_access", [first_prod_touch_hit]) if {
+	first_prod_touch_hit
+} else := "access to prod resource denied without prod_access"
+
+# Aggregate shield trigger flag for exempt key evaluation
+shield_triggered if shield_container_protected
+
+shield_triggered if shield_cmd_dangerous
+
+shield_triggered if shield_prod_ip_blocked
+
+shield_triggered if shield_prod_no_access
+

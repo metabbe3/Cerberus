@@ -112,6 +112,10 @@ func TestStore_LoadBundleAndReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read tool: %v", err)
 	}
+	shieldRego, err := os.ReadFile(filepath.Join(policyDir, "shield/prod.rego"))
+	if err != nil {
+		t.Fatalf("read shield: %v", err)
+	}
 
 	// Change agent k-open's budget_limit in data
 	newData := []byte(`{
@@ -129,6 +133,7 @@ func TestStore_LoadBundleAndReload(t *testing.T) {
 		"policies/stages/ai.rego":     string(aiRego),
 		"policies/stages/llm.rego":    string(llmRego),
 		"policies/stages/tool.rego":   string(toolRego),
+		"policies/shield/prod.rego":   string(shieldRego),
 	})
 
 	bundleFile := filepath.Join(tmpDir, "bundle.tar.gz")
