@@ -29,7 +29,7 @@ var (
 var allowedTopKeys = map[string]bool{
 	"config": true, "teams": true, "agents": true,
 	"blocked_patterns": true, "domains": true, "_comment": true,
-	"prod_shield": true,
+	"prod_shield": true, "ssh": true,
 }
 
 // Load compiles the Rego files under policyDir together with dataJSON into a
