@@ -92,6 +92,7 @@ func New(d Deps) *Server {
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("GET /metrics", promhttp.Handler().ServeHTTP)
+	mux.HandleFunc("GET /v1/metrics", promhttp.Handler().ServeHTTP)
 
 	mux.HandleFunc("POST /v1/decide", s.decide(""))
 	mux.HandleFunc("POST /v1/decide/llm", s.decide("llm"))

@@ -30,6 +30,27 @@ var (
 		Buckets: []float64{0.000025, 0.000050, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01},
 	})
 
+	evalDurationStage = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "cerberus_eval_duration_stage_seconds",
+		Help:    "OPA eval duration per decision per stage (cache misses only).",
+		Buckets: []float64{0.000025, 0.000050, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01},
+	}, []string{"stage"})
+
+	cacheHitsEpoch = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cerberus_cache_hits_epoch_total",
+		Help: "Decisions that skipped fresh eval per epoch.",
+	}, []string{"epoch"})
+
+	cacheMissesEpoch = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cerberus_cache_misses_epoch_total",
+		Help: "Decisions that required fresh eval per epoch.",
+	}, []string{"epoch"})
+
+	bundleRevisionGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "cerberus_bundle_revision",
+		Help: "Current active bundle revision indicator.",
+	}, []string{"revision"})
+
 	evalTimeoutsTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "cerberus_eval_timeouts_total",
 		Help: "Evals that exceeded the eval timeout and were denied fail-closed.",
@@ -40,6 +61,12 @@ var (
 		Help: "Epoch of the currently live policy snapshot.",
 	})
 )
+
+// SetBundleRevision updates the bundle revision gauge to reflect the active bundle revision.
+func SetBundleRevision(rev string) {
+	bundleRevisionGauge.Reset()
+	bundleRevisionGauge.WithLabelValues(rev).Set(1)
+}
 
 // EngineStats returns the current cache hits and misses totals from metrics.
 func EngineStats() (hits uint64, misses uint64) {

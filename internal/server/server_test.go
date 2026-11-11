@@ -642,16 +642,42 @@ func TestMetrics(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	h.do(t, http.MethodPost, "/v1/decide", "application/json", decideAllowBody, false)
-	resp := h.do(t, http.MethodGet, "/metrics", "", "", false)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
+
+	// Layer 1: Happy path - verify /metrics and /v1/metrics both return 200 and all observability metrics
+	for _, path := range []string{"/metrics", "/v1/metrics"} {
+		resp := h.do(t, http.MethodGet, path, "", "", false)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s status = %d, want 200", path, resp.StatusCode)
+		}
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		bodyStr := string(b)
+		for _, want := range []string{
+			"cerberus_decisions_total",
+			"cerberus_eval_duration_stage_seconds",
+			"cerberus_cache_misses_epoch_total",
+			"cerberus_bundle_revision",
+			"cerberus_audit_queue_depth",
+			"cerberus_ship_drops_total",
+		} {
+			if !strings.Contains(bodyStr, want) {
+				t.Fatalf("%s missing metric %q:\n%s", path, want, bodyStr)
+			}
+		}
 	}
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read body: %v", err)
+
+	// Layer 2: Tamper / method not allowed
+	badMethodResp := h.do(t, http.MethodPost, "/v1/metrics", "", "", false)
+	if badMethodResp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /v1/metrics status = %d, want 405", badMethodResp.StatusCode)
 	}
-	if !strings.Contains(string(b), "cerberus_decisions_total") {
-		t.Fatalf("/metrics missing cerberus_decisions_total:\n%s", b)
+
+	// Layer 3: Fail-closed / robustness - unauthenticated caller can scrape metrics without crashing
+	unauthResp := h.do(t, http.MethodGet, "/v1/metrics", "", "", false)
+	if unauthResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /v1/metrics status = %d, want 200", unauthResp.StatusCode)
 	}
 }
 

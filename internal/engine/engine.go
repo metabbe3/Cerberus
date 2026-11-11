@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -84,8 +85,12 @@ func New(store *policy.Store, sink Sink, opts Options) (*Engine, error) {
 	// The gauge lives at the swap, not in Decide: a reload with no traffic
 	// must still move it, and an old in-flight request must never drag it
 	// backwards.
-	store.OnSwap(func(snap *policy.Snapshot) { policyEpoch.Set(float64(snap.Epoch)) })
+	store.OnSwap(func(snap *policy.Snapshot) {
+		policyEpoch.Set(float64(snap.Epoch))
+		SetBundleRevision(snap.Revision)
+	})
 	policyEpoch.Set(float64(store.Current().Epoch))
+	SetBundleRevision(store.Current().Revision)
 	return &Engine{store: store, sink: sink, opts: opts, cache: cache}, nil
 }
 
@@ -108,10 +113,12 @@ func (e *Engine) Decide(ctx context.Context, in Input) Decision {
 	snap := e.store.Current()
 	sum := cacheKey(snap.Epoch, in)
 	key := hex.EncodeToString(sum[:])
+	epochStr := strconv.FormatUint(snap.Epoch, 10)
 
 	var d Decision
 	if hit, ok := e.cache.Get(key); ok {
 		cacheHitsTotal.Inc()
+		cacheHitsEpoch.WithLabelValues(epochStr).Inc()
 		hit.Cached = true
 		d = hit
 	} else {
@@ -128,6 +135,7 @@ func (e *Engine) Decide(ctx context.Context, in Input) Decision {
 			}
 			evaled = true
 			cacheMissesTotal.Inc()
+			cacheMissesEpoch.WithLabelValues(epochStr).Inc()
 			// Detach from the leader's request ctx: one client's disconnect
 			// must not fail-closed the eval for every waiter on the flight.
 			// EvalTimeout still bounds the work.
@@ -140,6 +148,7 @@ func (e *Engine) Decide(ctx context.Context, in Input) Decision {
 		d = res.(Decision)
 		if !evaled { // waiter on a shared flight, or leader whose re-check found the cache filled
 			cacheHitsTotal.Inc()
+			cacheHitsEpoch.WithLabelValues(epochStr).Inc()
 			d.Cached = true
 		}
 	}
@@ -173,7 +182,9 @@ func (e *Engine) eval(ctx context.Context, snap *policy.Snapshot, in Input) Deci
 	}
 	t0 := time.Now()
 	rs, err := snap.Query.Eval(evalCtx, rego.EvalInput(regoInput(in)))
-	evalDuration.Observe(time.Since(t0).Seconds())
+	dur := time.Since(t0).Seconds()
+	evalDuration.Observe(dur)
+	evalDurationStage.WithLabelValues(metricStage(in.Stage)).Observe(dur)
 
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -215,7 +226,7 @@ func denyInternal(snap *policy.Snapshot, ruleID, reason string) Decision {
 // time series (label cardinality = memory on an unauthenticated endpoint).
 func metricStage(stage string) string {
 	switch stage {
-	case "llm", "tool":
+	case "llm", "tool", "http", "docker":
 		return stage
 	default:
 		return "other"

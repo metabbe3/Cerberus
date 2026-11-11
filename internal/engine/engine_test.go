@@ -462,3 +462,38 @@ func TestDecide_ProdShield(t *testing.T) {
 		})
 	}
 }
+
+func TestMetrics_ObservabilityStageAndEpoch(t *testing.T) {
+	e := newTestEngine(t, &recSink{}, Options{})
+	ctx := context.Background()
+
+	// 1. Initial bundle revision gauge
+	snap := e.store.Current()
+	if got := testutil.ToFloat64(bundleRevisionGauge.WithLabelValues(snap.Revision)); got != 1 {
+		t.Fatalf("bundle revision gauge for %q = %v, want 1", snap.Revision, got)
+	}
+
+	// 2. Miss eval updates cacheMissesEpoch and evalDurationStage
+	epochStr := "1"
+	beforeMisses := testutil.ToFloat64(cacheMissesEpoch.WithLabelValues(epochStr))
+	in := toolInput("k-glob", "kubernetes_unique_metric_check", nil)
+	d1 := e.Decide(ctx, in)
+	if d1.Decision != "allow" {
+		t.Fatalf("d1 = %s/%s, want allow", d1.Decision, d1.RuleID)
+	}
+	afterMisses := testutil.ToFloat64(cacheMissesEpoch.WithLabelValues(epochStr))
+	if afterMisses <= beforeMisses {
+		t.Fatalf("cacheMissesEpoch did not increase: %v -> %v", beforeMisses, afterMisses)
+	}
+
+	// 3. Cache hit updates cacheHitsEpoch
+	beforeHits := testutil.ToFloat64(cacheHitsEpoch.WithLabelValues(epochStr))
+	d2 := e.Decide(ctx, in)
+	if !d2.Cached {
+		t.Fatalf("d2 was not cached")
+	}
+	afterHits := testutil.ToFloat64(cacheHitsEpoch.WithLabelValues(epochStr))
+	if afterHits <= beforeHits {
+		t.Fatalf("cacheHitsEpoch did not increase: %v -> %v", beforeHits, afterHits)
+	}
+}

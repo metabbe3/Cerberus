@@ -27,6 +27,26 @@ var ShipDropCount = promauto.NewCounter(prometheus.CounterOpts{
 	Help: "Audit events dropped by the shipper because the ship queue was full.",
 })
 
+// AuditShipDroppedTotal is an alias counter matching Prometheus naming convention.
+var AuditShipDroppedTotal = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "cerberus_audit_ship_dropped_total",
+	Help: "Audit events dropped by the shipper because the ship queue was full.",
+})
+
+var (
+	activeLogger atomic.Pointer[Logger]
+
+	auditQueueDepth = promauto.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "cerberus_audit_queue_depth",
+		Help: "Current number of pending events waiting in the audit channel buffer.",
+	}, func() float64 {
+		if l := activeLogger.Load(); l != nil {
+			return float64(l.QueueDepth())
+		}
+		return 0
+	})
+)
+
 // Options configures a Logger.
 type Options struct {
 	ChanSize      int
@@ -113,6 +133,7 @@ func Open(ctx context.Context, dbPath string, opts Options) (*Logger, error) {
 	}
 
 	go l.run(ctx)
+	activeLogger.Store(l)
 	return l, nil
 }
 
@@ -149,6 +170,7 @@ func (l *Logger) Emit(ev Event) {
 		case l.shipCh <- ev:
 		default:
 			ShipDropCount.Inc()
+			AuditShipDroppedTotal.Inc()
 		}
 	}
 }
@@ -231,6 +253,7 @@ func (l *Logger) QueueDepth() int {
 
 // Close flushes pending batches, stops writer & shipper, and closes SQLite.
 func (l *Logger) Close() error {
+	activeLogger.CompareAndSwap(l, nil)
 	l.closeOnce.Do(func() { close(l.stop) })
 	<-l.done
 	if l.shipDone != nil {
