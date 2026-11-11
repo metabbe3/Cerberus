@@ -5,6 +5,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -13,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -21,7 +23,9 @@ import (
 	"github.com/metabbe3/cerberus/internal/masking"
 	"github.com/metabbe3/cerberus/internal/policy"
 	"github.com/hashicorp/golang-lru/v2"
+	"github.com/open-policy-agent/opa/v1/ast"
 	"github.com/open-policy-agent/opa/v1/rego"
+	"github.com/open-policy-agent/opa/v1/topdown"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -94,15 +98,25 @@ func New(store *policy.Store, sink Sink, opts Options) (*Engine, error) {
 	return &Engine{store: store, sink: sink, opts: opts, cache: cache}, nil
 }
 
+// TraceEntry captures one rule or expression evaluation in an explain trace.
+type TraceEntry struct {
+	Op       string `json:"op"`
+	Rule     string `json:"rule,omitempty"`
+	Location string `json:"location,omitempty"`
+	Result   string `json:"result,omitempty"`
+}
+
 // Decision is the public decision contract (golden-tested in Task 7).
 type Decision struct {
-	Decision   string         `json:"decision"`
-	RuleID     string         `json:"rule_id"`
-	Reason     string         `json:"reason"`
-	MaskedArgs map[string]any `json:"masked_args"` // null when no rule changed a string
-	Epoch      uint64         `json:"epoch"`
-	Cached     bool           `json:"cached"`
-	LatencyUS  int64          `json:"-"`
+	Decision    string         `json:"decision"`
+	RuleID      string         `json:"rule_id"`
+	Reason      string         `json:"reason"`
+	MaskedArgs  map[string]any `json:"masked_args"` // null when no rule changed a string
+	Epoch       uint64         `json:"epoch"`
+	Cached      bool           `json:"cached"`
+	LatencyUS   int64          `json:"-"`
+	Trace       []TraceEntry   `json:"trace,omitempty"`
+	PrettyTrace string         `json:"pretty_trace,omitempty"`
 }
 
 // Allowed reports whether the decision is "allow".
@@ -173,6 +187,106 @@ func (e *Engine) Decide(ctx context.Context, in Input) Decision {
 		LatencyUS: d.LatencyUS,
 		Args:      d.MaskedArgs,
 	})
+	return d
+}
+
+// Explain evaluates input with full OPA query tracing enabled, bypassing cache.
+// It returns the decision along with the ordered rule trace and pretty formatted trace.
+func (e *Engine) Explain(ctx context.Context, in Input) Decision {
+	start := time.Now()
+	snap := e.store.Current()
+
+	evalCtx, cancel := context.WithTimeout(ctx, e.opts.EvalTimeout)
+	defer cancel()
+
+	tracer := topdown.NewBufferTracer()
+
+	rs, err := snap.Query.Eval(evalCtx, rego.EvalInput(regoInput(in)), rego.EvalQueryTracer(tracer))
+	if err != nil || evalCtx.Err() != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(evalCtx.Err(), context.DeadlineExceeded) {
+			d := denyInternal(snap, "internal.timeout", "policy eval exceeded timeout")
+			d.LatencyUS = time.Since(start).Microseconds()
+			return d
+		}
+		d := denyInternal(snap, "internal.eval_error", "policy evaluation failed")
+		d.LatencyUS = time.Since(start).Microseconds()
+		return d
+	}
+	if len(rs) == 0 || len(rs[0].Expressions) == 0 {
+		d := denyInternal(snap, "internal.eval_error", "policy returned no decision")
+		d.LatencyUS = time.Since(start).Microseconds()
+		return d
+	}
+	val, ok := rs[0].Expressions[0].Value.(map[string]any)
+	if !ok {
+		d := denyInternal(snap, "internal.eval_error", "policy returned unexpected shape")
+		d.LatencyUS = time.Since(start).Microseconds()
+		return d
+	}
+
+	d := Decision{
+		Decision: str(val["decision"]),
+		RuleID:   str(val["rule_id"]),
+		Reason:   str(val["reason"]),
+		Epoch:    snap.Epoch,
+		Cached:   false,
+	}
+
+	// Extract pretty trace
+	var buf bytes.Buffer
+	topdown.PrettyTrace(&buf, *tracer)
+	d.PrettyTrace = buf.String()
+
+	// Extract structured trace entries: rules evaluated in sequence + pass/fail
+	var entries []TraceEntry
+	for _, evt := range *tracer {
+		ruleName := ""
+		if r, ok := evt.Node.(*ast.Rule); ok && r != nil {
+			ruleName = r.Path().String()
+		} else if evt.Ref != nil {
+			ruleName = evt.Ref.String()
+		} else {
+			func() {
+				defer func() { _ = recover() }()
+				if expr, ok := evt.Node.(*ast.Expr); ok && expr != nil {
+					ruleName = expr.String()
+				}
+			}()
+		}
+
+		loc := ""
+		if evt.Location != nil {
+			loc = fmt.Sprintf("%s:%d", filepath.Base(evt.Location.File), evt.Location.Row)
+		}
+
+		result := ""
+		switch evt.Op {
+		case topdown.ExitOp:
+			result = "pass"
+		case topdown.FailOp:
+			result = "fail"
+		default:
+			result = evt.Message
+		}
+
+		// Filter noise: keep Enter, Exit, Fail operations with meaningful node/rule
+		if ruleName != "" && (evt.Op == topdown.EnterOp || evt.Op == topdown.ExitOp || evt.Op == topdown.FailOp) {
+			entries = append(entries, TraceEntry{
+				Op:       string(evt.Op),
+				Rule:     ruleName,
+				Location: loc,
+				Result:   result,
+			})
+		}
+	}
+	d.Trace = entries
+
+	if masked, changed := masking.Apply(snap.Maskers[in.KeyID], "args", in.Args); changed {
+		if m, ok := masked.(map[string]any); ok {
+			d.MaskedArgs = m
+		}
+	}
+	d.LatencyUS = time.Since(start).Microseconds()
 	return d
 }
 

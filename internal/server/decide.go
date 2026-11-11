@@ -116,9 +116,30 @@ func (s *Server) decide(stage string) http.HandlerFunc {
 			}
 		}
 
+		if r.URL.Query().Get("explain") == "true" {
+			d := s.deps.Engine.Explain(r.Context(), in)
+			writeJSON(w, http.StatusOK, d)
+			return
+		}
+
 		d := s.deps.Engine.Decide(r.Context(), in)
 		writeJSON(w, http.StatusOK, d)
 	}
+}
+
+// explain handles POST /v1/admin/explain (dry-run evaluation with OPA rule trace).
+func (s *Server) explain(w http.ResponseWriter, r *http.Request) {
+	body, ok := readBody(w, r)
+	if !ok {
+		return
+	}
+	var in engine.Input
+	if !isJSONObject(body) || json.Unmarshal(body, &in) != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	d := s.deps.Engine.Explain(r.Context(), in)
+	writeJSON(w, http.StatusOK, d)
 }
 
 // isJSONObject reports whether b, ignoring leading whitespace, starts an object.

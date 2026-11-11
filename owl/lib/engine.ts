@@ -194,6 +194,30 @@ export async function rollbackData(revisionId?: number): Promise<{ ok: boolean; 
   return (await res.json()) as { ok: boolean; epoch: number; revision_id: number };
 }
 
+export interface TraceEntry {
+  op: string;
+  rule?: string;
+  location?: string;
+  result?: string;
+}
+
+export interface ExplainResult {
+  decision: string;
+  rule_id: string;
+  reason: string;
+  epoch: number;
+  trace: TraceEntry[];
+  pretty_trace?: string;
+}
+
+export async function explainDecision(input: unknown): Promise<ExplainResult> {
+  const res = await engineFetch("/v1/admin/explain", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  return (await res.json()) as ExplainResult;
+}
+
 // One error mapper for every /api route: EngineError carries its status and
 // message (422 validation messages pass through verbatim), a malformed body
 // or schema failure is the client's to fix (400), anything else is ours.
