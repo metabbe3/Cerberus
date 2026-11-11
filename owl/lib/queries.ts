@@ -1,7 +1,7 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { parseData, type CerberusData } from "./schema";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { parseData, type Agent, type CerberusData } from "./schema";
 
 // The one server-state hook for the data document: every page reads the
 // engine's data through this same ["data"] cache entry, so a PUT elsewhere
@@ -17,4 +17,27 @@ async function fetchData(): Promise<OwlData> {
 
 export function useData() {
   return useQuery({ queryKey: ["data"], queryFn: fetchData });
+}
+
+// Save = clone the live document, replace one agent, zod-parse, PUT. An
+// engine 422 throws with its message verbatim; the live cache is untouched.
+export function useSaveAgent() {
+  const qc = useQueryClient();
+  const { data: current } = useData();
+  return useMutation({
+    mutationFn: async ({ keyId, agent }: { keyId: string; agent: Agent }) => {
+      if (!current) throw new Error("no data loaded");
+      const next = structuredClone(current.data);
+      next.agents[keyId] = agent;
+      const res = await fetch("/api/data", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(parseData(next)),
+      });
+      const out = (await res.json()) as { epoch?: number; error?: string };
+      if (!res.ok) throw new Error(out.error ?? `PUT /api/data failed (${res.status})`);
+      return out as { epoch: number };
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["data"] }),
+  });
 }

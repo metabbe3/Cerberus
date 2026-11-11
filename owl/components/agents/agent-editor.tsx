@@ -1,0 +1,435 @@
+"use client";
+
+import { Plus, Save, X } from "lucide-react";
+import { useState } from "react";
+import { toast } from "sonner";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { AlertCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { StringListEditor } from "@/components/editors/string-list";
+import { useSaveAgent } from "@/lib/queries";
+import type { Agent, MaskingRule } from "@/lib/schema";
+
+const TRANSFORMS = ["redact", "mask", "hash"] as const;
+const SCOPES = ["both", "args", "response"] as const;
+
+// One tab editor per concern. All tabs mutate the same draft and share one
+// Save button — the zod gate runs on PUT (parseData in useSaveAgent), and a
+// 422 from the engine surfaces here verbatim without touching the cache.
+export function AgentEditor({
+  keyId,
+  agent,
+}: {
+  keyId: string;
+  agent: Agent;
+}) {
+  const [draft, setDraft] = useState<Agent>(() => structuredClone(agent));
+  const save = useSaveAgent();
+  const [savedError, setSavedError] = useState<string | null>(null);
+
+  const set = (patch: Partial<Agent>) => setDraft((d) => ({ ...d, ...patch }));
+  const list = (field: keyof Agent) => (draft[field] as string[] | undefined) ?? [];
+
+  const onSave = () => {
+    setSavedError(null);
+    save.mutate(
+      { keyId, agent: draft },
+      {
+        onSuccess: (out) => toast.success(`Data installed (epoch ${out.epoch})`),
+        onError: (e) => setSavedError(e.message),
+      },
+    );
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h1 className="truncate font-mono text-lg">{keyId}</h1>
+          <p className="text-sm text-muted-foreground">
+            {draft.description ?? "No description"}
+          </p>
+        </div>
+        <Button onClick={onSave} disabled={save.isPending}>
+          <Save aria-hidden /> Save
+        </Button>
+      </div>
+
+      {savedError ? (
+        <Alert variant="destructive">
+          <AlertCircle />
+          <AlertTitle>Engine rejected the document — nothing was changed</AlertTitle>
+          <AlertDescription className="font-mono text-xs">
+            {savedError}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Identity</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2">
+          <label className="space-y-1.5">
+            <span className="text-sm font-medium">Name</span>
+            <Input value={draft.name ?? ""} onChange={(e) => set({ name: e.target.value })} />
+          </label>
+          <label className="space-y-1.5">
+            <span className="text-sm font-medium">Description</span>
+            <Input
+              value={draft.description ?? ""}
+              onChange={(e) => set({ description: e.target.value })}
+            />
+          </label>
+        </CardContent>
+      </Card>
+
+      <Tabs defaultValue="tools">
+        <TabsList>
+          <TabsTrigger value="tools">Tools</TabsTrigger>
+          <TabsTrigger value="constraints">Constraints</TabsTrigger>
+          <TabsTrigger value="masking">Masking</TabsTrigger>
+          <TabsTrigger value="models">Models & Budget</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="tools" className="space-y-4">
+          <StringListEditor
+            label="allowed_tools"
+            hint="exact match, case-sensitive"
+            values={list("allowed_tools")}
+            onChange={(v) => set({ allowed_tools: v })}
+          />
+          <StringListEditor
+            label="restricted_tools"
+            hint="exact match; restricted always wins"
+            values={list("restricted_tools")}
+            onChange={(v) => set({ restricted_tools: v })}
+          />
+          <StringListEditor
+            label="allowed_tool_calls"
+            hint="glob: trailing * = prefix, else substring (case-insensitive)"
+            values={list("allowed_tool_calls")}
+            onChange={(v) => set({ allowed_tool_calls: v })}
+          />
+          <StringListEditor
+            label="restricted_tool_calls"
+            hint="glob; restricted always wins"
+            values={list("restricted_tool_calls")}
+            onChange={(v) => set({ restricted_tool_calls: v })}
+          />
+        </TabsContent>
+
+        <TabsContent value="constraints">
+          <ConstraintsEditor
+            value={draft.tool_argument_constraints ?? {}}
+            onChange={(tool_argument_constraints) => set({ tool_argument_constraints })}
+          />
+        </TabsContent>
+
+        <TabsContent value="masking" className="space-y-3">
+          <MaskingEditor
+            value={draft.masking ?? []}
+            onChange={(masking) => set({ masking })}
+          />
+        </TabsContent>
+
+        <TabsContent value="models" className="space-y-4">
+          <StringListEditor
+            label="allowed_models"
+            hint="gates the llm stage alongside the team's list"
+            values={list("allowed_models")}
+            onChange={(v) => set({ allowed_models: v })}
+          />
+          <div className="grid gap-4 sm:grid-cols-3">
+            <label className="space-y-1.5">
+              <span className="text-sm font-medium">Budget limit</span>
+              <Input
+                type="number"
+                value={draft.budget_limit ?? ""}
+                onChange={(e) =>
+                  set({
+                    budget_limit:
+                      e.target.value === "" ? undefined : Number(e.target.value),
+                  })
+                }
+              />
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-sm font-medium">Risk tier</span>
+              <Select
+                value={draft.risk_tier ?? ""}
+                onValueChange={(v) => set({ risk_tier: v })}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="—" />
+                </SelectTrigger>
+                <SelectContent>
+                  {["low", "medium", "high"].map((t) => (
+                    <SelectItem key={t} value={t}>
+                      {t}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-sm font-medium">Log level</span>
+              <Select
+                value={draft.log_level ?? ""}
+                onValueChange={(v) => set({ log_level: v })}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="—" />
+                </SelectTrigger>
+                <SelectContent>
+                  {["full", "basic", "off"].map((l) => (
+                    <SelectItem key={l} value={l}>
+                      {l}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </label>
+          </div>
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+// tool → arg → constraint form. Bare arrays and the three tagged forms get
+// native editors; anything else (future form) edits as raw JSON so the
+// round-trip never loses it. Computed-key spreads widen to unknown, so the
+// two container boundaries carry a targeted cast.
+function ConstraintsEditor({
+  value,
+  onChange,
+}: {
+  value: NonNullable<Agent["tool_argument_constraints"]>;
+  onChange: (v: NonNullable<Agent["tool_argument_constraints"]>) => void;
+}) {
+  return (
+    <div className="space-y-4">
+      {Object.keys(value).length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          No constraints — every argument of every tool is unconstrained.
+        </p>
+      ) : null}
+      {Object.entries(value).map(([tool, args]) => (
+        <Card key={tool}>
+          <CardHeader>
+            <CardTitle className="font-mono text-sm">{tool}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {Object.entries(args).map(([arg, form]) => (
+              <ConstraintRow
+                key={arg}
+                arg={arg}
+                form={form}
+                onChange={(next) =>
+                  onChange({ ...value, [tool]: { ...args, [arg]: next } } as typeof value)
+                }
+                onRemove={() => {
+                  const { [arg]: _drop, ...rest } = args;
+                  onChange({ ...value, [tool]: rest } as typeof value);
+                }}
+              />
+            ))}
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+function ConstraintRow({
+  arg,
+  form,
+  onChange,
+  onRemove,
+}: {
+  arg: string;
+  form: unknown;
+  onChange: (next: unknown) => void;
+  onRemove: () => void;
+}) {
+  if (Array.isArray(form)) {
+    return (
+      <StringListEditor
+        label={arg}
+        hint="bare-array allowlist"
+        values={form}
+        onChange={onChange}
+        onRemove={onRemove}
+      />
+    );
+  }
+  const t = (form as { type?: string })?.type;
+  if (t === "allowlist" || t === "regex_allow") {
+    return (
+      <StringListEditor
+        label={arg}
+        hint={t}
+        values={(form as { values?: string[]; patterns?: string[] }).values ??
+          (form as { patterns?: string[] }).patterns ??
+          []}
+        onChange={(v) =>
+          onChange(t === "allowlist" ? { type: "allowlist", values: v } : { type: "regex_allow", patterns: v })
+        }
+        onRemove={onRemove}
+      />
+    );
+  }
+  if (t === "range") {
+    const r = form as { min: number; max: number };
+    return (
+      <div className="space-y-1.5">
+        <div className="flex items-baseline justify-between">
+          <label className="text-sm font-medium">{arg}</label>
+          <button type="button" onClick={onRemove} className="text-xs text-muted-foreground">
+            remove
+          </button>
+        </div>
+        <div className="flex items-center gap-2">
+          <Input
+            type="number"
+            value={r.min}
+            onChange={(e) => onChange({ ...r, min: Number(e.target.value) })}
+          />
+          <span className="text-muted-foreground">…</span>
+          <Input
+            type="number"
+            value={r.max}
+            onChange={(e) => onChange({ ...r, max: Number(e.target.value) })}
+          />
+        </div>
+      </div>
+    );
+  }
+  // Unknown form: raw JSON editing, engine decides what it means.
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-baseline justify-between">
+        <label className="text-sm font-medium font-mono">{arg}</label>
+        <button type="button" onClick={onRemove} className="text-xs text-muted-foreground">
+          remove
+        </button>
+      </div>
+      <Textarea
+        className="font-mono text-xs"
+        defaultValue={JSON.stringify(form, null, 2)}
+        onBlur={(e) => {
+          try {
+            onChange(JSON.parse(e.target.value));
+          } catch {
+            // keep the last valid value; invalid JSON is not saved
+          }
+        }}
+      />
+    </div>
+  );
+}
+
+function MaskingEditor({
+  value,
+  onChange,
+}: {
+  value: MaskingRule[];
+  onChange: (v: MaskingRule[]) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-muted-foreground">
+        Regex rules applied to args/response before the decision leaves the engine
+        (scope both = args + response).
+      </p>
+      {value.map((rule, i) => (
+        <div key={i} className="flex items-center gap-2">
+          <Input
+            className="font-mono flex-1"
+            value={rule.pattern}
+            aria-label="pattern"
+            onChange={(e) => {
+              const next = [...value];
+              next[i] = { ...rule, pattern: e.target.value };
+              onChange(next);
+            }}
+          />
+          <Select
+            value={rule.transform}
+            onValueChange={(v) => {
+              const next = [...value];
+              next[i] = { ...rule, transform: v as MaskingRule["transform"] };
+              onChange(next);
+            }}
+          >
+            <SelectTrigger className="w-28">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TRANSFORMS.map((t) => (
+                <SelectItem key={t} value={t}>
+                  {t}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={rule.scope === undefined || rule.scope === "" ? "both" : rule.scope}
+            onValueChange={(v) => {
+              const next = [...value];
+              // "" (both) is stored as absent — the engine treats absence
+              // and "" identically; absence round-trips cleaner.
+              const scope = v === "both" ? undefined : (v as MaskingRule["scope"]);
+              next[i] = scope ? { ...rule, scope } : { ...rule, scope: undefined };
+              onChange(next);
+            }}
+          >
+            <SelectTrigger className="w-28">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SCOPES.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {s}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Remove rule"
+            onClick={() => onChange(value.filter((_, j) => j !== i))}
+          >
+            <X aria-hidden />
+          </Button>
+        </div>
+      ))}
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => onChange([...value, { pattern: "", transform: "redact" }])}
+      >
+        <Plus aria-hidden /> Add rule
+      </Button>
+    </div>
+  );
+}
