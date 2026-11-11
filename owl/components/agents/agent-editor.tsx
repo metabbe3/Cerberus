@@ -1,9 +1,9 @@
 "use client";
 
-import { Flame, History, Plus, Save, ShieldAlert, X } from "lucide-react";
+import { Check, Copy, Flame, History, Plus, Save, ShieldAlert, Terminal, Trash2, X } from "lucide-react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertCircle } from "lucide-react";
@@ -36,7 +36,8 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { StringListEditor } from "@/components/editors/string-list";
-import { useBreakGlass, useData, useSaveAgent, useToggleKillSwitch } from "@/lib/queries";
+import { AgentDecisionsTab } from "@/components/agents/agent-decisions-tab";
+import { useBreakGlass, useData, useDeleteAgent, useSaveAgent, useToggleKillSwitch } from "@/lib/queries";
 import type { Agent, MaskingRule } from "@/lib/schema";
 
 const TRANSFORMS = ["redact", "mask", "hash"] as const;
@@ -52,6 +53,7 @@ export function AgentEditor({
   keyId: string;
   agent: Agent;
 }) {
+  const router = useRouter();
   const params = useSearchParams();
   const [draft, setDraft] = useState<Agent>(() => {
     const d = structuredClone(agent);
@@ -70,6 +72,7 @@ export function AgentEditor({
     return d;
   });
   const save = useSaveAgent();
+  const deleteAgent = useDeleteAgent();
   const toggleKillSwitch = useToggleKillSwitch();
   const breakGlass = useBreakGlass();
   const { data: rawData } = useData();
@@ -77,6 +80,7 @@ export function AgentEditor({
   const isKilled = Boolean(killSwitchConfig?.keys?.[keyId] || killSwitchConfig?.global);
 
   const [savedError, setSavedError] = useState<string | null>(null);
+  const [copiedCurl, setCopiedCurl] = useState(false);
   const prefill = params.get("prefill");
   const llmHint = prefill?.startsWith("llm:")
     ? decodeURIComponent(prefill.slice("llm:".length))
@@ -84,6 +88,34 @@ export function AgentEditor({
 
   const set = (patch: Partial<Agent>) => setDraft((d) => ({ ...d, ...patch }));
   const list = (field: keyof Agent) => (draft[field] as string[] | undefined) ?? [];
+
+  const curlSnippet = useMemo(() => {
+    return `curl -X POST $CERBERUS_URL/v1/decide/tool \\
+  -H "X-Cerberus-Key: ${keyId}" \\
+  -H "Content-Type: application/json" \\
+  -d '{"stage":"tool","key_id":"${keyId}","action":"read","resource":"x"}'`;
+  }, [keyId]);
+
+  const copyCurl = async () => {
+    try {
+      await navigator.clipboard.writeText(curlSnippet);
+      setCopiedCurl(true);
+      setTimeout(() => setCopiedCurl(false), 2000);
+      toast.success("Snippet cURL disalin ke clipboard!");
+    } catch {
+      toast.error("Gagal menyalin cURL");
+    }
+  };
+
+  const handleDeleteAgent = () => {
+    deleteAgent.mutate(keyId, {
+      onSuccess: () => {
+        toast.success(`Agent ${keyId} berhasil dihapus`);
+        router.push("/agents");
+      },
+      onError: (e) => toast.error(`Gagal menghapus agent: ${e.message}`),
+    });
+  };
 
   const onSave = () => {
     setSavedError(null);
@@ -214,6 +246,38 @@ export function AgentEditor({
             </AlertDialogContent>
           </AlertDialog>
 
+          {/* Delete Agent with Confirm Dialog */}
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                disabled={deleteAgent.isPending}
+              >
+                <Trash2 className="size-4" />
+                Hapus Agent
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Hapus Agent {keyId}?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Tindakan ini akan menghapus agent {keyId} dari konfigurasi gateway secara permanen.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Batal</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={handleDeleteAgent}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  Hapus Sekarang
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
           {/* Save Button */}
           <Button onClick={onSave} disabled={save.isPending}>
             <Save aria-hidden /> Save
@@ -243,6 +307,38 @@ export function AgentEditor({
         </Alert>
       ) : null}
 
+      {/* 9B Connect Section */}
+      <Card className="border-primary/20 bg-card">
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Terminal className="size-4 text-primary" />
+              <CardTitle className="text-sm font-semibold">Connect</CardTitle>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs gap-1"
+              onClick={copyCurl}
+            >
+              {copiedCurl ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
+              {copiedCurl ? "Tersalin" : "Salin cURL"}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-2 text-xs">
+          <p className="text-muted-foreground leading-relaxed">
+            Kredensial agen adalah <strong>Key ID</strong> (<code>{keyId}</code>). Header yang dikenali gateway:{" "}
+            <code>X-Cerberus-Key</code>, <code>X-Policy-Key</code>, <code>Proxy-Authorization</code>, atau{" "}
+            <code>Authorization: Bearer &lt;key_id&gt;</code>. Admin API menggunakan token admin (<code>CERBERUS_ADMIN_TOKEN</code>).
+          </p>
+          <pre className="rounded bg-muted/50 p-2.5 font-mono text-xs overflow-x-auto select-all text-foreground border">
+            {curlSnippet}
+          </pre>
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle>Identity</CardTitle>
@@ -268,6 +364,7 @@ export function AgentEditor({
           <TabsTrigger value="constraints">Constraints</TabsTrigger>
           <TabsTrigger value="masking">Masking</TabsTrigger>
           <TabsTrigger value="models">Models & Budget</TabsTrigger>
+          <TabsTrigger value="decisions">Decisions</TabsTrigger>
         </TabsList>
 
         <TabsContent value="tools" className="space-y-4">
@@ -369,6 +466,10 @@ export function AgentEditor({
               </Select>
             </label>
           </div>
+        </TabsContent>
+
+        <TabsContent value="decisions">
+          <AgentDecisionsTab keyId={keyId} />
         </TabsContent>
       </Tabs>
     </div>

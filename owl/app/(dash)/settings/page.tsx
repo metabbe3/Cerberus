@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { AlertCircle, ShieldAlert, ShieldCheck } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -30,13 +30,12 @@ import { useData, usePutData } from "@/lib/queries";
 type FlagKey = "teams" | "keys";
 
 // Bypass flags from config. Absent = false = fail-closed (authz.rego reads
-// `== true`). Flipping fail-open → fail-closed denies every unregistered
-// key/team, so it demands a red confirm before the draft changes.
+// `== true`).
 export default function SettingsPage() {
   const { data, isPending, isError, error } = useData();
   const put = usePutData();
   const [draft, setDraft] = useState({ teams: true, keys: true });
-  const [confirming, setConfirming] = useState<FlagKey | null>(null);
+  const [saveConfirmOpen, setSaveConfirmOpen] = useState(false);
   const [savedError, setSavedError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -49,21 +48,13 @@ export default function SettingsPage() {
   }, [data]);
 
   const flip = (key: FlagKey, value: boolean) => {
-    if (value === false && draft[key] === true) {
-      setConfirming(key);
-      return;
-    }
     setDraft((d) => ({ ...d, [key]: value }));
   };
 
-  const confirm = () => {
-    if (confirming) setDraft((d) => ({ ...d, [confirming]: false }));
-    setConfirming(null);
-  };
-
-  const save = async () => {
+  const executeSave = async () => {
     if (!data) return;
     setSavedError(null);
+    setSaveConfirmOpen(false);
     const next = structuredClone(data.data);
     next.config.bypass_unknown_teams = draft.teams;
     next.config.bypass_unknown_keys = draft.keys;
@@ -91,11 +82,13 @@ export default function SettingsPage() {
     );
   }
 
+  const isFailOpen = draft.keys || draft.teams;
+
   const flagRow = (key: FlagKey, title: string, body: string) => (
     <div className="flex items-start justify-between gap-6 py-3">
       <div>
-        <p className="font-medium">{title}</p>
-        <p className="text-sm text-muted-foreground">{body}</p>
+        <p className="font-medium text-sm">{title}</p>
+        <p className="text-xs text-muted-foreground">{body}</p>
       </div>
       <Switch checked={draft[key]} onCheckedChange={(v) => flip(key, v)} />
     </div>
@@ -124,49 +117,82 @@ export default function SettingsPage() {
             Flip both off once every key below is registered.
           </CardDescription>
         </CardHeader>
-        <CardContent className="divide-y">
-          {flagRow(
-            "keys",
-            "Bypass unknown keys",
-            draft.keys
-              ? "Unregistered key_ids are ALLOWED (fail-open)."
-              : "Unregistered key_ids are DENIED (fail-closed).",
+        <CardContent className="space-y-4">
+          {/* 9D Destructive alert when fail-open is ON; Blue alert when OFF */}
+          {isFailOpen ? (
+            <Alert variant="destructive">
+              <ShieldAlert className="size-4" />
+              <AlertTitle>Fail-open aktif</AlertTitle>
+              <AlertDescription>
+                Fail-open aktif: kunci tak dikenal LOLOS. Matikan saat semua key terdaftar.
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <Alert className="border-blue-500/30 bg-blue-500/10 text-blue-800 dark:text-blue-300">
+              <ShieldCheck className="size-4 text-blue-600 dark:text-blue-400" />
+              <AlertTitle>Fail-closed aktif</AlertTitle>
+              <AlertDescription>
+                Semua kunci tak dikenal akan ditolak. Gateway terlindungi.
+              </AlertDescription>
+            </Alert>
           )}
-          {flagRow(
-            "teams",
-            "Bypass unknown teams",
-            draft.teams
-              ? "Unregistered team_ids are ALLOWED (fail-open)."
-              : "Unregistered team_ids are DENIED (fail-closed).",
-          )}
+
+          <div className="divide-y border-t pt-1">
+            {flagRow(
+              "keys",
+              "Bypass unknown keys",
+              draft.keys
+                ? "Unregistered key_ids are ALLOWED (fail-open)."
+                : "Unregistered key_ids are DENIED (fail-closed).",
+            )}
+            {flagRow(
+              "teams",
+              "Bypass unknown teams",
+              draft.teams
+                ? "Unregistered team_ids are ALLOWED (fail-open)."
+                : "Unregistered team_ids are DENIED (fail-closed).",
+            )}
+          </div>
         </CardContent>
       </Card>
 
-      <Button onClick={save} disabled={put.isPending}>
+      {/* 9D Save flags triggers confirmation dialog */}
+      <Button onClick={() => setSaveConfirmOpen(true)} disabled={put.isPending}>
         Save flags
       </Button>
 
+      {/* 9D Confirmation Dialog */}
       <AlertDialog
-        open={confirming !== null}
-        onOpenChange={(open) => !open && setConfirming(null)}
+        open={saveConfirmOpen}
+        onOpenChange={setSaveConfirmOpen}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle className="text-destructive">
-              Turn on fail-closed?
+              Ubah mode keamanan gateway?
             </AlertDialogTitle>
-            <AlertDialogDescription>
-              Every key/team not registered in the data document will be DENIED.
-              Requests from unregistered agents start failing immediately.
+            <AlertDialogDescription className="space-y-2 text-sm">
+              <p>
+                Perubahan flag bypass akan langsung mempengaruhi seluruh evaluasi otorisasi di gateway (epoch +1).
+              </p>
+              {isFailOpen ? (
+                <span className="block font-medium text-destructive">
+                  Peringatan: Satu atau lebih flag bypass aktif (Fail-open). Permintaan dari agen yang belum terdaftar akan diloloskan.
+                </span>
+              ) : (
+                <span className="block font-medium text-foreground">
+                  Mode Fail-closed aktif: Setiap permintaan dengan key atau team yang belum terdaftar akan langsung DITOLAK.
+                </span>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-destructive text-white hover:bg-destructive/90"
-              onClick={confirm}
+              className={isFailOpen ? "bg-destructive text-destructive-foreground hover:bg-destructive/90" : ""}
+              onClick={executeSave}
             >
-              Yes, deny unknown
+              Ya, simpan perubahan
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

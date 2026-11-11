@@ -70,6 +70,20 @@ export function useSaveAgent() {
   });
 }
 
+// Delete = clone live document, remove agent key, PUT.
+export function useDeleteAgent() {
+  const { data: current } = useData();
+  const put = usePutData();
+  return useMutation({
+    mutationFn: async (keyId: string) => {
+      if (!current) throw new Error("no data loaded");
+      const next = structuredClone(current.data);
+      delete next.agents[keyId];
+      return put.mutateAsync(next);
+    },
+  });
+}
+
 export function useToggleKillSwitch() {
   const { data: current } = useData();
   const put = usePutData();
