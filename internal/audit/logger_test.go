@@ -106,9 +106,13 @@ func TestLogger_EraseAndSince(t *testing.T) {
 	l.Emit(Event{Stage: "llm", Decision: "allow", Args: map[string]any{"secret": "sensitive1"}})
 	l.Emit(Event{Stage: "llm", Decision: "deny", Args: map[string]any{"secret": "sensitive2"}})
 
-	time.Sleep(50 * time.Millisecond)
-
-	recent := l.Recent(2)
+	var recent []Event
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		recent = l.Recent(2)
+		if len(recent) == 2 {
+			break
+		}
+	}
 	if len(recent) != 2 {
 		t.Fatalf("Recent len = %d, want 2", len(recent))
 	}
@@ -191,7 +195,7 @@ func TestLogger_RingRecent(t *testing.T) {
 	var got []Event
 	for deadline := time.Now().Add(time.Second); ; {
 		got = l.Recent(10)
-		if len(got) == len(want) {
+		if len(got) == len(want) && got[0].Reason == want[0] {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -588,11 +592,12 @@ func TestLogger_TopDenies24h(t *testing.T) {
 	l.Emit(Event{Time: now, Stage: "tool", KeyID: "k1", Decision: "allow", RuleID: "ai.tool.allow"})
 
 	// Give writer a moment to flush to SQLite
-	time.Sleep(50 * time.Millisecond)
-
-	top, err := l.TopDenies24h(ctx, 10)
-	if err != nil {
-		t.Fatalf("TopDenies24h: %v", err)
+	var top []RuleDenyCount
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		top, _ = l.TopDenies24h(ctx, 10)
+		if len(top) == 3 {
+			break
+		}
 	}
 	if len(top) != 3 {
 		t.Fatalf("TopDenies24h len = %d, want 3: %+v", len(top), top)

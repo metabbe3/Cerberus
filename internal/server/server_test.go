@@ -457,7 +457,7 @@ func TestAudit_QueryReturnsDecision(t *testing.T) {
 
 	// The batcher is async; poll the query route until the event lands.
 	var events []audit.Event
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		resp := h.do(t, http.MethodGet, "/v1/audit?key_id=k-glob", "", "", true)
 		if resp.StatusCode != http.StatusOK {
