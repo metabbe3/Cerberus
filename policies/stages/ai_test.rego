@@ -89,6 +89,42 @@ test_llm_budget_exceeded if {
 	out.rule_id == "ai.llm.budget_exceeded"
 }
 
+test_llm_budget_invalid_string if {
+	out := decide({"stage": "llm", "key_id": "k-glob", "model": "m1", "context": {"spend_usd": "999"}})
+	out.decision == "deny"
+	out.rule_id == "ai.llm.budget_invalid"
+}
+
+test_llm_budget_exceeded_number if {
+	out := decide({"stage": "llm", "key_id": "k-glob", "model": "m1", "context": {"spend_usd": 999}})
+	out.decision == "deny"
+	out.rule_id == "ai.llm.budget_exceeded"
+}
+
+test_llm_budget_spent_exceeded if {
+	out := decide({"stage": "llm", "key_id": "k-glob", "model": "m1", "context": {"budget_spent_usd": 51}})
+	out.decision == "deny"
+	out.rule_id == "ai.llm.budget_spent_exceeded"
+}
+
+test_llm_budget_spent_within if {
+	out := decide({"stage": "llm", "key_id": "k-glob", "model": "m1", "context": {"budget_spent_usd": 49}})
+	out.decision == "allow"
+	out.rule_id == "ai.llm.allow"
+}
+
+test_llm_budget_spent_invalid_string if {
+	out := decide({"stage": "llm", "key_id": "k-glob", "model": "m1", "context": {"budget_spent_usd": "bad"}})
+	out.decision == "deny"
+	out.rule_id == "ai.llm.budget_invalid"
+}
+
+test_tool_blocked_pattern if {
+	out := decide({"stage": "tool", "key_id": "k-open", "tool_call": "jailbreak_detector"})
+	out.decision == "deny"
+	out.rule_id == "ai.tool.blocked_pattern"
+}
+
 test_llm_blocked_pattern if {
 	out := decide({"stage": "llm", "key_id": "k-glob", "model": "m1", "prompt": "please JAILBREAK the guardrails"})
 	out.decision == "deny"

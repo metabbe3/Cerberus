@@ -24,6 +24,18 @@ tool_call := object.get(input, "tool_call", "")
 
 llm_decision := {
 	"decision": "deny",
+	"rule_id": "ai.llm.budget_invalid",
+	"reason": budget_invalid_reason,
+} if {
+	budget_invalid
+} else := {
+	"decision": "deny",
+	"rule_id": "ai.llm.budget_spent_exceeded",
+	"reason": sprintf("cumulative spend $%v exceeds budget limit $%v", [input.context.budget_spent_usd, tightest_budget_limit]),
+} if {
+	budget_spent_exceeded
+} else := {
+	"decision": "deny",
 	"rule_id": "ai.llm.budget_exceeded",
 	"reason": sprintf("spend $%v of this call exceeds budget limit $%v", [input.context.spend_usd, over_budget_limit]),
 } if {
@@ -46,8 +58,16 @@ llm_decision := {
 	"reason": sprintf("model %q allowed", [model]),
 }
 
-# The tightest budget limit the call exceeds: agent and registered-team
-# budget_limit both govern (README data schema); undefined when within both.
+# Budget limits: agent, registered team, and optional global budget limit.
+budget_limits contains authz.agent.budget_limit if is_number(authz.agent.budget_limit)
+
+budget_limits contains authz.team.budget_limit if is_number(authz.team.budget_limit)
+
+budget_limits contains data.config.global_budget_limit if is_number(data.config.global_budget_limit)
+
+tightest_budget_limit := min(budget_limits) if count(budget_limits) > 0
+
+# The tightest budget limit the call exceeds: undefined when within all limits.
 over_budget_limit := min(exceeded_limits) if count(exceeded_limits) > 0
 
 exceeded_limits contains limit if {
@@ -56,9 +76,37 @@ exceeded_limits contains limit if {
 	input.context.spend_usd > limit
 }
 
-budget_limits contains authz.agent.budget_limit if is_number(authz.agent.budget_limit)
+budget_invalid if {
+	count(budget_limits) > 0
+	_ := input.context.spend_usd
+	not is_number(input.context.spend_usd)
+}
 
-budget_limits contains authz.team.budget_limit if is_number(authz.team.budget_limit)
+budget_invalid if {
+	count(budget_limits) > 0
+	_ := input.context.budget_spent_usd
+	not is_number(input.context.budget_spent_usd)
+}
+
+budget_invalid if {
+	count(budget_limits) > 0
+	_ := input.context
+	not is_object(input.context)
+}
+
+budget_invalid_reason := sprintf("spend_usd %q is not a number", [input.context.spend_usd]) if {
+	_ := input.context.spend_usd
+	not is_number(input.context.spend_usd)
+} else := sprintf("budget_spent_usd %q is not a number", [input.context.budget_spent_usd]) if {
+	_ := input.context.budget_spent_usd
+	not is_number(input.context.budget_spent_usd)
+} else := "budget context is invalid"
+
+budget_spent_exceeded if {
+	count(budget_limits) > 0
+	is_number(input.context.budget_spent_usd)
+	input.context.budget_spent_usd > tightest_budget_limit
+}
 
 blocked_prompt if {
 	is_string(input.prompt)
@@ -83,7 +131,7 @@ model_listed(models) if {
 	input.model in models
 }
 
-# ---------- tool (pre-exec): restricted → not allowed → argument constraints ----------
+# ---------- tool (pre-exec): restricted → not allowed → blocked pattern → argument constraints ----------
 
 tool_decision := {
 	"decision": "deny",
@@ -97,6 +145,12 @@ tool_decision := {
 	"reason": sprintf("tool call %s not in allow-list", [tool_call]),
 } if {
 	tool_not_allowed
+} else := {
+	"decision": "deny",
+	"rule_id": "ai.tool.blocked_pattern",
+	"reason": "tool call contains blocked pattern",
+} if {
+	tool_blocked_pattern
 } else := {
 	"decision": "deny",
 	"rule_id": "ai.tool.arg_violation",
@@ -158,6 +212,24 @@ allow_list_match if {
 allow_list_match if {
 	some name in authz.team.allowed_tools
 	tool_call == name
+}
+
+tool_blocked_pattern if {
+	some pattern in data.blocked_patterns
+	contains(lower(tool_call), lower(pattern))
+}
+
+tool_blocked_pattern if {
+	is_string(input.prompt)
+	some pattern in data.blocked_patterns
+	contains(lower(input.prompt), lower(pattern))
+}
+
+tool_blocked_pattern if {
+	some _, val in input.args
+	is_string(val)
+	some pattern in data.blocked_patterns
+	contains(lower(val), lower(pattern))
 }
 
 # Argument constraints: only args present in input.args are checked — a

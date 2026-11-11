@@ -126,3 +126,39 @@ test_registered_key_llm_dispatch if {
 	out.decision == "allow"
 	out.rule_id == "ai.llm.allow"
 }
+
+# Layered bypass tests: stranger key with bypass=true is policed by stage rules
+# (blocked patterns, global budget) before admitting under bypass_unknown_keys.
+test_stranger_bypass_with_jailbreak_denied if {
+	out := decide({"stage": "llm", "key_id": "stranger-key", "prompt": "please jailbreak now"})
+	out.decision == "deny"
+	out.rule_id == "ai.llm.blocked_pattern"
+}
+
+test_stranger_bypass_clean_allowed if {
+	out := decide({"stage": "llm", "key_id": "stranger-key", "prompt": "normal prompt", "model": "any"})
+	out.decision == "allow"
+	out.rule_id == "config.bypass_unknown_keys"
+}
+
+test_stranger_bypass_global_budget_exceeded if {
+	out := decision with input as {"stage": "llm", "key_id": "stranger-key", "context": {"spend_usd": 150}}
+		with data.config as object.union(data.testdata.config, {"global_budget_limit": 100})
+		with data.teams as data.testdata.teams
+		with data.agents as data.testdata.agents
+		with data.blocked_patterns as data.testdata.blocked_patterns
+		with data.domains as data.testdata.domains
+	out.decision == "deny"
+	out.rule_id == "ai.llm.budget_exceeded"
+}
+
+test_stranger_bypass_global_budget_invalid if {
+	out := decision with input as {"stage": "llm", "key_id": "stranger-key", "context": {"spend_usd": "999"}}
+		with data.config as object.union(data.testdata.config, {"global_budget_limit": 100})
+		with data.teams as data.testdata.teams
+		with data.agents as data.testdata.agents
+		with data.blocked_patterns as data.testdata.blocked_patterns
+		with data.domains as data.testdata.domains
+	out.decision == "deny"
+	out.rule_id == "ai.llm.budget_invalid"
+}

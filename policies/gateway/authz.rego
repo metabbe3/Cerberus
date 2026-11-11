@@ -1,8 +1,8 @@
 package gateway.authz
 
-# Cerberus core gate. Owns: key gate, stage dispatch, default deny.
+# Cerberus core gate. Owns: key gate, dynamic stage dispatch, default deny.
 # Per-stage verdicts live in policies/stages/<stage>.rego and are dispatched
-# through data.stages.<stage>.decision — the engine evaluates exactly
+# through data.stages[input.stage].decision — the engine evaluates exactly
 # data.gateway.authz.decision (see ADR-0002).
 
 import rego.v1
@@ -30,10 +30,15 @@ call_matches_pattern(pattern, name) if {
 
 # ---------- stage dispatch ----------
 
-known_stages := {"llm", "tool"}
+# A stage is known if a stage package under data.stages exists for it.
+# We exclude "ai" since stages.ai is the shared implementation module for llm and tool.
+known_stages contains s if {
+	some s, _ in data.stages
+	s != "ai"
+}
 
-stage_decision := data.stages.ai.decision if {
-	input.stage in known_stages
+stage_decision := data.stages[input.stage].decision if {
+	stage_is_known
 }
 
 stage_decision := {
@@ -56,20 +61,30 @@ stage_is_known if {
 # Gate order: stage gate → key gate. An unknown stage fails closed whatever the
 # key — a typo'd or not-yet-implemented stage must never ride the key gates
 # (in particular config.bypass_unknown_keys). A known stage is then gated by
-# the key gate → stage verdict. A registered key is governed by its own
-# entry alone (data/prod.json: "policed by key_id alone"): its team never blocks
-# the request — team-level lists apply only when the team is registered. The
-# config.bypass_unknown_teams / config.unknown_team_closed rule IDs stay
-# reserved for a future "require team registration" mode.
+# the key gate → stage verdict.
+#
+# For unregistered keys with bypass_unknown_keys=true, requests are policed:
+# if the stage policy produces a deny (e.g. blocked patterns, budget limits),
+# that deny stands. If the stage policy allows, it is admitted under the
+# rule_id config.bypass_unknown_keys.
 
 decision := stage_decision if {
 	not stage_is_known
+}
+
+# Bypass keys enabled: stage policy checks stand; if allowed, return bypass rule_id.
+decision := stage_decision if {
+	stage_is_known
+	not agent
+	bypass_keys_enabled
+	stage_decision.decision == "deny"
 }
 
 decision := allow_bypass_keys if {
 	stage_is_known
 	not agent
 	bypass_keys_enabled
+	stage_decision.decision == "allow"
 }
 
 # Anything but a literal boolean true fails closed: "true", 1, null or a
