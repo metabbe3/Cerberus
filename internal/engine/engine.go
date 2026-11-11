@@ -291,6 +291,15 @@ func (e *Engine) Explain(ctx context.Context, in Input) Decision {
 	return d
 }
 
+// EvalSnapshot evaluates an input against the given policy Snapshot directly
+// without emitting an audit event or mutating the cache.
+func (e *Engine) EvalSnapshot(ctx context.Context, snap *policy.Snapshot, in Input) Decision {
+	if snap == nil {
+		snap = e.store.Current()
+	}
+	return e.eval(ctx, snap, in)
+}
+
 // eval runs the prepared query under the eval timeout, maps the Rego decision
 // object to a Decision, and applies the key's masking rules to args.
 func (e *Engine) eval(ctx context.Context, snap *policy.Snapshot, in Input) Decision {

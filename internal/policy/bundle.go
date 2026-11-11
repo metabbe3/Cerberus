@@ -362,6 +362,25 @@ func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, err
 		return nil, fmt.Errorf("bundle: smoke test failed: %w", err)
 	}
 
+	// Coverage gate: bundle activation rejects if coverage drops >5 points vs active revision
+	oldCov := old.Coverage
+	if oldCov <= 0 && s.policyDir != "" {
+		if curCov, _ := ComputeCoverage(s.policyDir); curCov != nil && curCov.TotalLines > 0 {
+			oldCov = curCov.Coverage
+			old.Coverage = oldCov
+		}
+	}
+	if oldCov > 0 {
+		if newCov, _ := ComputeCoverage(tmpDir); newCov != nil && newCov.TotalLines > 0 {
+			if (oldCov - newCov.Coverage) > 5.0 {
+				slog.Warn("bundle rejected: coverage drop exceeds threshold", "old_coverage", oldCov, "new_coverage", newCov.Coverage)
+				return nil, fmt.Errorf("bundle activation rejected: coverage dropped by %.2f points (active: %.2f%%, bundle: %.2f%%, max allowed drop: 5.0%%)",
+					oldCov-newCov.Coverage, oldCov, newCov.Coverage)
+			}
+			snap.Coverage = newCov.Coverage
+		}
+	}
+
 	// If store has paths configured on disk, persist the bundle contents so
 	// reload or disk readers also observe them.
 	if s.policyDir != "" {

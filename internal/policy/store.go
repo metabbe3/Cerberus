@@ -84,6 +84,21 @@ func (s *Store) Current() *Snapshot { return s.ptr.Load() }
 // PolicyDir returns the directory the Rego bundle is compiled from.
 func (s *Store) PolicyDir() string { return s.policyDir }
 
+// Coverage computes the current test coverage across policies.
+func (s *Store) Coverage(ctx context.Context) (*CoverageReport, error) {
+	if s.policyDir == "" {
+		return &CoverageReport{}, nil
+	}
+	rep, err := ComputeCoverage(s.policyDir)
+	if err != nil {
+		return nil, err
+	}
+	if snap := s.ptr.Load(); snap != nil && rep != nil {
+		snap.Coverage = rep.Coverage
+	}
+	return rep, nil
+}
+
 // Reload recompiles the snapshot from the policy and data files on disk. On
 // error the old snapshot stays live and the epoch is unchanged.
 func (s *Store) Reload(ctx context.Context) (*Snapshot, error) {

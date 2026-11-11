@@ -9,7 +9,29 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { useData } from "@/lib/queries";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, CheckCircle2, Clock, GitCommit, Layers, RefreshCw } from "lucide-react";
+import { AlertCircle, CheckCircle2, Clock, GitCommit, Layers, RefreshCw, ShieldCheck } from "lucide-react";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+
+interface FileCoverage {
+  coverage: number;
+  covered_lines: number;
+  not_covered_lines: number;
+}
+
+interface CoverageReport {
+  coverage: number;
+  covered_lines: number;
+  not_covered_lines: number;
+  total_lines: number;
+  files: Record<string, FileCoverage>;
+}
 
 interface EngineStatus {
   bundle_epoch: number;
@@ -34,6 +56,17 @@ export default function PoliciesPage() {
       return res.json();
     },
     refetchInterval: 5000,
+  });
+
+  // Coverage report query
+  const coverageQuery = useQuery<CoverageReport>({
+    queryKey: ["coverage"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/coverage");
+      if (!res.ok) throw new Error(`GET /api/admin/coverage failed (${res.status})`);
+      return res.json();
+    },
+    refetchInterval: 15000,
   });
 
   // 2. Fetch data document for prod_shield
@@ -69,6 +102,7 @@ export default function PoliciesPage() {
       setReloadMsg(`Policy reloaded successfully (New Epoch: ${data.epoch})`);
       qc.invalidateQueries({ queryKey: ["status"] });
       qc.invalidateQueries({ queryKey: ["data"] });
+      qc.invalidateQueries({ queryKey: ["coverage"] });
       saveCurrentSnapshot();
     },
   });
@@ -137,7 +171,7 @@ export default function PoliciesPage() {
       )}
 
       {/* Revision & Epoch Information */}
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Active Revision</CardTitle>
@@ -188,6 +222,23 @@ export default function PoliciesPage() {
             <p className="text-xs text-muted-foreground mt-1">
               Loaded: {statusQuery.data?.last_reload ? new Date(statusQuery.data.last_reload).toLocaleTimeString() : "N/A"}
             </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Test Coverage</CardTitle>
+            <ShieldCheck className="size-4 text-emerald-500" />
+          </CardHeader>
+          <CardContent>
+            {coverageQuery.isLoading ? (
+              <Skeleton className="h-7 w-20" />
+            ) : (
+              <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+                {coverageQuery.data?.coverage ? `${coverageQuery.data.coverage.toFixed(1)}%` : "N/A"}
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground mt-1">Gate aktivasi: maks drop 5%</p>
           </CardContent>
         </Card>
       </div>
@@ -262,6 +313,93 @@ export default function PoliciesPage() {
                   )}
                 </div>
               ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* OPA Policy Test Coverage Report */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-base font-semibold">Laporan Coverage Kebijakan OPA</CardTitle>
+              <CardDescription>
+                Persentase baris aturan yang tersentuh oleh rangkaian pengujian Rego. Bundle baru ditolak jika coverage turun &gt;5 poin.
+              </CardDescription>
+            </div>
+            {coverageQuery.data && (
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" className="font-mono text-xs">
+                  {coverageQuery.data.covered_lines} tercover / {coverageQuery.data.total_lines} baris
+                </Badge>
+                <Badge
+                  variant={coverageQuery.data.coverage >= 90 ? "default" : "secondary"}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                >
+                  {coverageQuery.data.coverage.toFixed(1)}% Coverage
+                </Badge>
+              </div>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent>
+          {coverageQuery.isLoading ? (
+            <div className="space-y-2">
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+            </div>
+          ) : coverageQuery.isError ? (
+            <div className="text-sm text-muted-foreground py-4 text-center">
+              Gagal memuat laporan coverage: {(coverageQuery.error as Error).message}
+            </div>
+          ) : !coverageQuery.data?.files || Object.keys(coverageQuery.data.files).length === 0 ? (
+            <div className="text-sm text-muted-foreground py-4 text-center">
+              Tidak ada data coverage file.
+            </div>
+          ) : (
+            <div className="rounded-md border overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>File Kebijakan</TableHead>
+                    <TableHead className="w-[180px]">Baris Tercover</TableHead>
+                    <TableHead className="w-[140px] text-right">Coverage</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {Object.entries(coverageQuery.data.files)
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([file, stat]) => {
+                      const total = stat.covered_lines + stat.not_covered_lines;
+                      return (
+                        <TableRow key={file}>
+                          <TableCell className="font-mono text-xs font-medium">
+                            {file}
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground font-mono">
+                            {stat.covered_lines} / {total} baris
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Badge
+                              variant={
+                                stat.coverage >= 95
+                                  ? "default"
+                                  : stat.coverage >= 80
+                                  ? "secondary"
+                                  : "destructive"
+                              }
+                              className="font-mono text-xs"
+                            >
+                              {stat.coverage.toFixed(1)}%
+                            </Badge>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                </TableBody>
+              </Table>
             </div>
           )}
         </CardContent>

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/metabbe3/cerberus/internal/audit"
+	"github.com/metabbe3/cerberus/internal/engine"
 	"github.com/metabbe3/cerberus/internal/masking"
 	"github.com/metabbe3/cerberus/internal/policy"
 	"github.com/open-policy-agent/opa/v1/ast"
@@ -856,4 +858,188 @@ func (s *Server) postQuery(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"result": masked,
 	})
+}
+
+// replayDiffItem describes a difference between an audited decision and its replayed evaluation.
+type replayDiffItem struct {
+	EventID     int64     `json:"event_id"`
+	Time        time.Time `json:"time"`
+	Stage       string    `json:"stage"`
+	KeyID       string    `json:"key_id"`
+	Subject     string    `json:"subject"`
+	OldDecision string    `json:"old_decision"`
+	NewDecision string    `json:"new_decision"`
+	OldRuleID   string    `json:"old_rule_id"`
+	NewRuleID   string    `json:"new_rule_id"`
+	OldReason   string    `json:"old_reason"`
+	NewReason   string    `json:"new_reason"`
+	Shift       string    `json:"shift"` // "stricter" | "looser" | "rule_changed"
+}
+
+// replayResponse is the JSON report returned by POST /v1/admin/replay.
+type replayResponse struct {
+	TotalEvaluated   int              `json:"total_evaluated"`
+	UnchangedCount   int              `json:"unchanged_count"`
+	DiffCount        int              `json:"diff_count"`
+	StricterCount    int              `json:"stricter_count"`
+	LooserCount      int              `json:"looser_count"`
+	RuleChangedCount int              `json:"rule_changed_count"`
+	Diffs            []replayDiffItem `json:"diffs"`
+}
+
+type replayRequest struct {
+	Limit int            `json:"limit"`
+	Data  map[string]any `json:"data,omitempty"`
+}
+
+// replayAudit handles POST /v1/admin/replay.
+// Re-evaluates recent audit events (default 500) against current or draft policy data,
+// reporting verdict/rule differences and stricter/looser shifts.
+func (s *Server) replayAudit(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Store == nil || s.deps.Engine == nil || s.deps.Audit == nil {
+		writeErr(w, http.StatusServiceUnavailable, "dependencies unavailable")
+		return
+	}
+
+	limit := 500
+	var draftData map[string]any
+
+	if r.Body != nil {
+		body, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 10<<20))
+		if len(body) > 0 && isJSONObject(body) {
+			var req replayRequest
+			if err := json.Unmarshal(body, &req); err == nil {
+				if req.Limit > 0 {
+					limit = req.Limit
+				}
+				if len(req.Data) > 0 {
+					draftData = req.Data
+				}
+			}
+		}
+	}
+	if qLimit := r.URL.Query().Get("limit"); qLimit != "" {
+		if n, err := strconv.Atoi(qLimit); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	snap := s.deps.Store.Current()
+	if draftData != nil {
+		dataBytes, err := json.Marshal(draftData)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid draft data JSON")
+			return
+		}
+		draftSnap, err := policy.Load(r.Context(), s.deps.Store.PolicyDir(), dataBytes, snap.Epoch)
+		if err != nil {
+			writeErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("draft data compile error: %v", err))
+			return
+		}
+		snap = draftSnap
+	}
+
+	events, err := s.deps.Audit.Query(r.Context(), audit.Filter{Limit: limit})
+	if err != nil || len(events) == 0 {
+		events = s.deps.Audit.Recent(limit)
+	}
+
+	resp := replayResponse{
+		TotalEvaluated: len(events),
+		Diffs:          make([]replayDiffItem, 0),
+	}
+
+	for _, ev := range events {
+		in := engine.Input{
+			Stage: ev.Stage,
+			KeyID: ev.KeyID,
+			Args:  ev.Args,
+		}
+		switch ev.Stage {
+		case "llm":
+			in.Model = ev.Subject
+			if ev.Args != nil {
+				if p, ok := ev.Args["prompt"].(string); ok {
+					in.Prompt = p
+				}
+			}
+		case "tool":
+			in.ToolCall = ev.Subject
+		case "http":
+			in.Resource = ev.Subject
+			if ev.Args != nil {
+				if m, ok := ev.Args["method"].(string); ok {
+					in.Action = m
+				}
+			}
+		case "docker":
+			if ev.Args != nil {
+				if act, ok := ev.Args["action"].(string); ok {
+					in.Action = act
+					in.Resource = ev.Subject
+				} else {
+					in.Action = ev.Subject
+					if res, ok := ev.Args["resource"].(string); ok {
+						in.Resource = res
+					}
+				}
+			} else {
+				in.Action = ev.Subject
+			}
+		default:
+			in.Action = ev.Subject
+		}
+
+		dec := s.deps.Engine.EvalSnapshot(r.Context(), snap, in)
+		if ev.Decision == dec.Decision && ev.RuleID == dec.RuleID {
+			resp.UnchangedCount++
+		} else {
+			resp.DiffCount++
+			var shift string
+			if ev.Decision == "allow" && dec.Decision == "deny" {
+				shift = "stricter"
+				resp.StricterCount++
+			} else if ev.Decision == "deny" && dec.Decision == "allow" {
+				shift = "looser"
+				resp.LooserCount++
+			} else {
+				shift = "rule_changed"
+				resp.RuleChangedCount++
+			}
+
+			resp.Diffs = append(resp.Diffs, replayDiffItem{
+				EventID:     ev.ID,
+				Time:        ev.Time,
+				Stage:       ev.Stage,
+				KeyID:       ev.KeyID,
+				Subject:     ev.Subject,
+				OldDecision: ev.Decision,
+				NewDecision: dec.Decision,
+				OldRuleID:   ev.RuleID,
+				NewRuleID:   dec.RuleID,
+				OldReason:   ev.Reason,
+				NewReason:   dec.Reason,
+				Shift:       shift,
+			})
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// getCoverage handles GET /v1/admin/coverage.
+func (s *Server) getCoverage(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Store == nil {
+		writeErr(w, http.StatusServiceUnavailable, "store unavailable")
+		return
+	}
+	rep, err := s.deps.Store.Coverage(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, fmt.Sprintf("calculate coverage: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, rep)
 }

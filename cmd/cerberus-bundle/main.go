@@ -5,6 +5,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -31,6 +32,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "verify error: %v\n", err)
 			os.Exit(1)
 		}
+	case "coverage":
+		if err := runCoverage(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "coverage error: %v\n", err)
+			os.Exit(1)
+		}
 	default:
 		usage()
 		os.Exit(1)
@@ -41,6 +47,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `Usage:
   cerberus-bundle build [-k <keyfile>] -d <dir> <out.tar.gz>
   cerberus-bundle verify -k <pubkey> <bundle.tar.gz>
+  cerberus-bundle coverage [-d <dir>] [--json]
 `)
 }
 
@@ -177,3 +184,39 @@ func runVerify(args []string) error {
 	fmt.Printf("bundle signature valid (verified %d files)\n", len(b.RawFiles)-1)
 	return nil
 }
+
+func runCoverage(args []string) error {
+	fs := flag.NewFlagSet("coverage", flag.ContinueOnError)
+	var dir string
+	var jsonOutput bool
+	fs.StringVar(&dir, "d", "policies", "directory containing policies to test")
+	fs.BoolVar(&jsonOutput, "json", false, "output report as JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 && dir == "policies" {
+		dir = fs.Arg(0)
+	}
+
+	rep, err := policy.ComputeCoverage(dir)
+	if err != nil {
+		return err
+	}
+
+	if jsonOutput {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(rep)
+	}
+
+	fmt.Printf("Policy Test Coverage: %.2f%% (%d covered, %d uncovered lines across %d files)\n",
+		rep.Coverage, rep.CoveredLines, rep.NotCoveredLines, len(rep.Files))
+	fmt.Println("Files:")
+	for _, f := range rep.SortedFiles() {
+		fr := rep.Files[f]
+		fmt.Printf("  %-35s %.2f%% (%d/%d lines)\n",
+			f, fr.Coverage, fr.CoveredLines, fr.CoveredLines+fr.NotCoveredLines)
+	}
+	return nil
+}
+

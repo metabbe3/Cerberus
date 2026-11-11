@@ -218,6 +218,62 @@ export async function explainDecision(input: unknown): Promise<ExplainResult> {
   return (await res.json()) as ExplainResult;
 }
 
+export interface FileCoverage {
+  coverage: number;
+  covered_lines: number;
+  not_covered_lines: number;
+}
+
+export interface CoverageReport {
+  coverage: number;
+  covered_lines: number;
+  not_covered_lines: number;
+  total_lines: number;
+  files: Record<string, FileCoverage>;
+}
+
+export async function getCoverage(): Promise<CoverageReport> {
+  const res = await engineFetch("/v1/admin/coverage");
+  return (await res.json()) as CoverageReport;
+}
+
+export interface ReplayDiff {
+  event_id: number;
+  time: string;
+  stage: string;
+  key_id: string;
+  subject: string;
+  old_decision: string;
+  new_decision: string;
+  old_rule_id: string;
+  new_rule_id: string;
+  old_reason: string;
+  new_reason: string;
+  shift: "stricter" | "looser" | "rule_changed";
+}
+
+export interface ReplayReport {
+  total_evaluated: number;
+  unchanged_count: number;
+  diff_count: number;
+  stricter_count: number;
+  looser_count: number;
+  rule_changed_count: number;
+  diffs: ReplayDiff[];
+}
+
+export async function replayAudit(limit = 500, data?: unknown): Promise<ReplayReport> {
+  const body: Record<string, unknown> = { limit };
+  if (data !== undefined) {
+    body.data = data;
+  }
+  const res = await engineFetch("/v1/admin/replay", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  return (await res.json()) as ReplayReport;
+}
+
 // One error mapper for every /api route: EngineError carries its status and
 // message (422 validation messages pass through verbatim), a malformed body
 // or schema failure is the client's to fix (400), anything else is ours.

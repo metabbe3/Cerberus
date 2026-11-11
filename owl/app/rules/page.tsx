@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/table";
 import { useData, usePutData, useRevisions, useRollback } from "@/lib/queries";
 import type { CerberusData, DangerousCmdPattern } from "@/lib/schema";
+import { ReplayDiffDialog } from "@/components/rules/replay-diff-dialog";
 
 export default function RulesPage() {
   const { data: serverData, isLoading, refetch } = useData();
@@ -38,6 +39,7 @@ export default function RulesPage() {
   const [draft, setDraft] = useState<CerberusData | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
+  const [replayOpen, setReplayOpen] = useState(false);
 
   // Sync initial draft from server data
   useEffect(() => {
@@ -218,6 +220,16 @@ export default function RulesPage() {
           >
             <RefreshCcw className="mr-1.5 size-3.5" />
             Reset Draft
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setReplayOpen(true)}
+            className="text-blue-600 border-blue-300 hover:bg-blue-50 dark:text-blue-400 dark:border-blue-700 dark:hover:bg-blue-950/50"
+            title="Uji dampak perubahan aturan terhadap 500 audit event terakhir"
+          >
+            <RotateCcw className="mr-1.5 size-3.5" />
+            Uji Replay Diff
           </Button>
           <Button
             variant="outline"
@@ -632,6 +644,13 @@ export default function RulesPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Replay Diff Dialog */}
+      <ReplayDiffDialog
+        open={replayOpen}
+        onOpenChange={setReplayOpen}
+        draftData={draft}
+      />
     </div>
   );
 }

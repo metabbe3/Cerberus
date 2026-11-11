@@ -119,6 +119,8 @@ func New(d Deps) *Server {
 	mux.HandleFunc("GET /v1/admin/revisions", s.admin(s.listRevisions))
 	mux.HandleFunc("POST /v1/admin/rollback", s.admin(s.rollbackData))
 	mux.HandleFunc("POST /v1/admin/explain", s.admin(s.explain))
+	mux.HandleFunc("POST /v1/admin/replay", s.admin(s.replayAudit))
+	mux.HandleFunc("GET /v1/admin/coverage", s.admin(s.getCoverage))
 	mux.HandleFunc("GET /v1/audit", s.admin(s.queryAudit))
 	mux.HandleFunc("GET /v1/events", s.admin(s.events))
 	mux.HandleFunc("GET /v1/status", s.getStatus)

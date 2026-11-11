@@ -552,6 +552,72 @@ func TestStore_BundleDataSubtree(t *testing.T) {
 	}
 }
 
+func TestStore_BundleCoverageDropGate(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tmpDir := t.TempDir()
+	policyDir := filepath.Join(tmpDir, "policies")
+	if err := os.MkdirAll(policyDir, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	dataPath := filepath.Join(tmpDir, "data.json")
+	if err := os.CopyFS(policyDir, os.DirFS("../../policies")); err != nil {
+		t.Fatalf("copy: %v", err)
+	}
+	if err := os.WriteFile(dataPath, loadTestData(t), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	store, err := NewStore(ctx, policyDir, dataPath)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	// 1. Compute active coverage
+	rep, err := store.Coverage(ctx)
+	if err != nil || rep == nil {
+		t.Fatalf("store.Coverage: %v", err)
+	}
+	activeCov := rep.Coverage
+	store.Current().Coverage = activeCov
+
+	// 2. Create bundle with a large set of completely untested Rego rules
+	// to drop coverage by >5 percentage points.
+	var untestedRules strings.Builder
+	untestedRules.WriteString("package stages.untested\nimport rego.v1\n")
+	for i := 0; i < 500; i++ {
+		fmt.Fprintf(&untestedRules, "rule_%d if input.val == %d\n", i, i)
+	}
+
+	aiRego, _ := os.ReadFile(filepath.Join(policyDir, "stages/ai.rego"))
+	bDrop := createCustomBundle(t, []string{"stages"}, "rev-drop-cov", loadTestData(t), map[string]string{
+		"policies/stages/ai.rego":       string(aiRego),
+		"policies/stages/untested.rego": untestedRules.String(),
+	}, nil)
+
+	_, err = store.LoadBundle(ctx, bDrop)
+	if err == nil {
+		t.Fatal("expected bundle activation to be rejected due to coverage drop >5 points, got nil")
+	}
+	if !strings.Contains(err.Error(), "coverage dropped by") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+
+	// 3. Normal bundle that keeps coverage intact should succeed
+	bNormal := createCustomBundle(t, []string{"stages"}, "rev-good-cov", loadTestData(t), map[string]string{
+		"policies/stages/ai.rego": string(aiRego),
+	}, nil)
+
+	snap, err := store.LoadBundle(ctx, bNormal)
+	if err != nil {
+		t.Fatalf("LoadBundle with normal coverage should succeed: %v", err)
+	}
+	if snap.Revision != "rev-good-cov" {
+		t.Fatalf("snap.Revision = %q, want rev-good-cov", snap.Revision)
+	}
+}
+
 func readFile(t *testing.T, path string) string {
 	t.Helper()
 	b, err := os.ReadFile(path)

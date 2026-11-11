@@ -79,3 +79,17 @@ func TestCerberusBundle_BuildAndVerify(t *testing.T) {
 		t.Fatal("expected verify failure with wrong public key, got nil")
 	}
 }
+
+func TestCerberusBundle_Coverage(t *testing.T) {
+	// Test human-readable coverage command on actual policies
+	err := runCoverage([]string{"-d", "../../policies"})
+	if err != nil {
+		t.Fatalf("runCoverage policies: %v", err)
+	}
+
+	// Test json output coverage command
+	err = runCoverage([]string{"-d", "../../policies", "--json"})
+	if err != nil {
+		t.Fatalf("runCoverage policies --json: %v", err)
+	}
+}
