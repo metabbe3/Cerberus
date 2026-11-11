@@ -159,6 +159,41 @@ export async function queryAudit(params: URLSearchParams): Promise<AuditEvent[]>
   return AuditEventSchema.array().parse(await res.json());
 }
 
+export interface RegexTestResult {
+  valid: boolean;
+  error?: string;
+  matches: boolean;
+}
+
+export async function testRegex(regex: string, testString?: string): Promise<RegexTestResult> {
+  const res = await engineFetch("/v1/admin/regex/test", {
+    method: "POST",
+    body: JSON.stringify({ regex, test_string: testString ?? "" }),
+  });
+  return (await res.json()) as RegexTestResult;
+}
+
+export interface RevisionItem {
+  id: number;
+  time: string;
+  author: string;
+  summary: string;
+  data_json?: string;
+}
+
+export async function getRevisions(limit = 50): Promise<RevisionItem[]> {
+  const res = await engineFetch(`/v1/admin/revisions?limit=${limit}`);
+  return (await res.json()) as RevisionItem[];
+}
+
+export async function rollbackData(revisionId?: number): Promise<{ ok: boolean; epoch: number; revision_id: number }> {
+  const res = await engineFetch("/v1/admin/rollback", {
+    method: "POST",
+    body: JSON.stringify({ revision_id: revisionId ?? 0 }),
+  });
+  return (await res.json()) as { ok: boolean; epoch: number; revision_id: number };
+}
+
 // One error mapper for every /api route: EngineError carries its status and
 // message (422 validation messages pass through verbatim), a malformed body
 // or schema failure is the client's to fix (400), anything else is ours.

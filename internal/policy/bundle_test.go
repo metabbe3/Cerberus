@@ -117,8 +117,10 @@ func TestStore_LoadBundleAndReload(t *testing.T) {
 		"domains": {},
 		"prod_shield": {
 			"dangerous_cmd_patterns": [
-				{"id": "rm_rf", "regex": "rm\\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)"}
-			]
+				{"id": "rm_rf", "regex": "rm\\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)"},
+				{"id": "grep_wildcard_dump", "regex": "grep\\s+[^|]*(\\*|wildcard)[^|]*(/passwd|/etc|\\.env|id_rsa)"}
+			],
+			"protected_containers": ["teknikalidnew-db-1"]
 		}
 	}`)
 
@@ -520,8 +522,10 @@ func TestStore_BundleDataSubtree(t *testing.T) {
 		}`),
 		"data/prod_shield.json": []byte(`{
 			"dangerous_cmd_patterns": [
-				{"id": "rm_rf", "regex": "rm\\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)"}
-			]
+				{"id": "rm_rf", "regex": "rm\\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)"},
+				{"id": "grep_wildcard_dump", "regex": "grep\\s+[^|]*(\\*|wildcard)[^|]*(/passwd|/etc|\\.env|id_rsa)"}
+			],
+			"protected_containers": ["teknikalidnew-db-1"]
 		}`),
 		"policies/stages/ai.rego": []byte(readFile(t, filepath.Join(policyDir, "stages/ai.rego"))),
 	}

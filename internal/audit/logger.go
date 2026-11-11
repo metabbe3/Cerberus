@@ -451,3 +451,27 @@ func (l *Logger) runShipper() {
 		}
 	}
 }
+
+// RecordRevision stores a historical policy snapshot into SQLite revisions.
+func (l *Logger) RecordRevision(ctx context.Context, author, summary string, dataJSON []byte) (int64, error) {
+	if l == nil || l.mgr == nil {
+		return 0, nil
+	}
+	return l.mgr.recordRevision(ctx, author, summary, dataJSON)
+}
+
+// ListRevisions returns the latest configuration revisions in reverse chronological order.
+func (l *Logger) ListRevisions(ctx context.Context, limit int) ([]Revision, error) {
+	if l == nil || l.mgr == nil {
+		return nil, nil
+	}
+	return l.mgr.listRevisions(ctx, limit)
+}
+
+// GetRevision returns a specific configuration revision by ID.
+func (l *Logger) GetRevision(ctx context.Context, id int64) (*Revision, error) {
+	if l == nil || l.mgr == nil {
+		return nil, nil
+	}
+	return l.mgr.getRevision(ctx, id)
+}

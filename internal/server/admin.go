@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -51,12 +52,256 @@ func (s *Server) putData(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	oldSnap := s.deps.Store.Current()
+	var oldBytes []byte
+	var summary string
+	if oldSnap != nil && oldSnap.Data != nil {
+		oldBytes, _ = json.Marshal(oldSnap.Data)
+		var newData map[string]any
+		_ = json.Unmarshal(body, &newData)
+		summary = diffDataSummary(oldSnap.Data, newData)
+	} else {
+		summary = "initial data"
+	}
+
 	snap, err := s.deps.Store.ReplaceData(r.Context(), body)
 	if err != nil {
 		writeStoreErr(w, "put data", err)
 		return
 	}
+
+	author := r.Header.Get("X-Admin-User")
+	if author == "" {
+		author = "admin"
+	}
+
+	if s.deps.Audit != nil && len(oldBytes) > 0 {
+		_, _ = s.deps.Audit.RecordRevision(r.Context(), author, summary, oldBytes)
+		s.deps.Audit.Emit(audit.Event{
+			Time:     time.Now().UTC(),
+			Stage:    "admin",
+			KeyID:    author,
+			Subject:  "data",
+			Decision: "allow",
+			RuleID:   "admin.data.update",
+			Reason:   summary,
+			Epoch:    snap.Epoch,
+		})
+	}
+
 	writeJSON(w, http.StatusOK, epochResponse{Epoch: snap.Epoch})
+}
+
+func diffDataSummary(oldData, newData map[string]any) string {
+	var changes []string
+	keys := make(map[string]bool)
+	for k := range oldData {
+		keys[k] = true
+	}
+	for k := range newData {
+		keys[k] = true
+	}
+	sortedKeys := make([]string, 0, len(keys))
+	for k := range keys {
+		sortedKeys = append(sortedKeys, k)
+	}
+	sort.Strings(sortedKeys)
+
+	for _, k := range sortedKeys {
+		oldV, hasOld := oldData[k]
+		newV, hasNew := newData[k]
+		if !hasOld {
+			changes = append(changes, "+"+k)
+			continue
+		}
+		if !hasNew {
+			changes = append(changes, "-"+k)
+			continue
+		}
+		oldJSON, _ := json.Marshal(oldV)
+		newJSON, _ := json.Marshal(newV)
+		if string(oldJSON) != string(newJSON) {
+			if k == "prod_shield" {
+				psChanges := diffSubMap(oldV, newV)
+				if len(psChanges) > 0 {
+					changes = append(changes, "prod_shield("+strings.Join(psChanges, ", ")+")")
+				} else {
+					changes = append(changes, "prod_shield")
+				}
+			} else {
+				changes = append(changes, k)
+			}
+		}
+	}
+	if len(changes) == 0 {
+		return "no changes"
+	}
+	return "updated " + strings.Join(changes, ", ")
+}
+
+func diffSubMap(oldV, newV any) []string {
+	oldM, ok1 := oldV.(map[string]any)
+	newM, ok2 := newV.(map[string]any)
+	if !ok1 || !ok2 {
+		return nil
+	}
+	var diffs []string
+	allKeys := make(map[string]bool)
+	for k := range oldM {
+		allKeys[k] = true
+	}
+	for k := range newM {
+		allKeys[k] = true
+	}
+	for k := range allKeys {
+		oJ, _ := json.Marshal(oldM[k])
+		nJ, _ := json.Marshal(newM[k])
+		if string(oJ) != string(nJ) {
+			diffs = append(diffs, k)
+		}
+	}
+	sort.Strings(diffs)
+	return diffs
+}
+
+type regexTestRequest struct {
+	Regex      string `json:"regex"`
+	TestString string `json:"test_string"`
+}
+
+type regexTestResponse struct {
+	Valid   bool   `json:"valid"`
+	Error   string `json:"error,omitempty"`
+	Matches bool   `json:"matches"`
+}
+
+// testRegex compiles a candidate regex pattern and optionally tests it against an example input string.
+func (s *Server) testRegex(w http.ResponseWriter, r *http.Request) {
+	body, ok := readBody(w, r)
+	if !ok {
+		return
+	}
+	var req regexTestRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	re, err := regexp.Compile(req.Regex)
+	if err != nil {
+		writeJSON(w, http.StatusOK, regexTestResponse{
+			Valid:   false,
+			Error:   err.Error(),
+			Matches: false,
+		})
+		return
+	}
+	matches := false
+	if req.TestString != "" {
+		matches = re.MatchString(req.TestString)
+	}
+	writeJSON(w, http.StatusOK, regexTestResponse{
+		Valid:   true,
+		Matches: matches,
+	})
+}
+
+// listRevisions returns the configuration revision history stored in SQLite.
+func (s *Server) listRevisions(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if s.deps.Audit == nil {
+		writeJSON(w, http.StatusOK, []audit.Revision{})
+		return
+	}
+	revs, err := s.deps.Audit.ListRevisions(r.Context(), limit)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if revs == nil {
+		revs = []audit.Revision{}
+	}
+	writeJSON(w, http.StatusOK, revs)
+}
+
+type rollbackRequest struct {
+	RevisionID int64 `json:"revision_id"`
+}
+
+type rollbackResponse struct {
+	OK         bool   `json:"ok"`
+	Epoch      uint64 `json:"epoch"`
+	RevisionID int64  `json:"revision_id"`
+}
+
+// rollbackData restores a previous data configuration snapshot from SQLite revisions.
+func (s *Server) rollbackData(w http.ResponseWriter, r *http.Request) {
+	var req rollbackRequest
+	if r.Body != nil {
+		body, _ := readBody(w, r)
+		if len(body) > 0 {
+			_ = json.Unmarshal(body, &req)
+		}
+	}
+	if s.deps.Audit == nil {
+		writeErr(w, http.StatusBadRequest, "audit logger not configured")
+		return
+	}
+
+	var targetRev *audit.Revision
+	if req.RevisionID > 0 {
+		rev, err := s.deps.Audit.GetRevision(r.Context(), req.RevisionID)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, "revision not found")
+			return
+		}
+		targetRev = rev
+	} else {
+		// Take the latest revision
+		revs, err := s.deps.Audit.ListRevisions(r.Context(), 1)
+		if err != nil || len(revs) == 0 {
+			writeErr(w, http.StatusNotFound, "no revision available for rollback")
+			return
+		}
+		targetRev = &revs[0]
+	}
+
+	if targetRev.DataJSON == "" {
+		writeErr(w, http.StatusUnprocessableEntity, "target revision has empty data")
+		return
+	}
+
+	snap, err := s.deps.Store.ReplaceData(r.Context(), []byte(targetRev.DataJSON))
+	if err != nil {
+		writeStoreErr(w, "rollback data", err)
+		return
+	}
+
+	author := r.Header.Get("X-Admin-User")
+	if author == "" {
+		author = "admin"
+	}
+
+	s.deps.Audit.Emit(audit.Event{
+		Time:     time.Now().UTC(),
+		Stage:    "admin",
+		KeyID:    author,
+		Subject:  "data",
+		Decision: "allow",
+		RuleID:   "admin.data.rollback",
+		Reason:   fmt.Sprintf("rollback to revision #%d (%s)", targetRev.ID, targetRev.Summary),
+		Epoch:    snap.Epoch,
+	})
+
+	writeJSON(w, http.StatusOK, rollbackResponse{
+		OK:         true,
+		Epoch:      snap.Epoch,
+		RevisionID: targetRev.ID,
+	})
 }
 
 // reload recompiles from disk (epoch +1); same error contract as putData.

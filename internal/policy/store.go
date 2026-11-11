@@ -112,6 +112,9 @@ func (s *Store) ReplaceData(ctx context.Context, dataJSON []byte) (*Snapshot, er
 	if err != nil {
 		return nil, err
 	}
+	if err := DryRunSmoke(ctx, snap); err != nil {
+		return nil, fmt.Errorf("smoke test failed: %w", err)
+	}
 	if err := writeAtomic(s.dataPath, dataJSON); err != nil {
 		return nil, err
 	}

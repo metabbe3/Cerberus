@@ -151,7 +151,14 @@ func TestREST_DataEndpoint(t *testing.T) {
 			}
 		},
 		"blocked_patterns": ["jailbreak"],
-		"domains": {}
+		"domains": {},
+		"prod_shield": {
+			"dangerous_cmd_patterns": [
+				{"id": "rm_rf", "regex": "rm\\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)"},
+				{"id": "grep_wildcard_dump", "regex": "grep\\s+[^|]*(\\*|wildcard)[^|]*(/passwd|/etc|\\.env|id_rsa)"}
+			],
+			"protected_containers": ["teknikalidnew-db-1"]
+		}
 	}`)
 	putReq, _ := http.NewRequest(http.MethodPut, h.ts.URL+"/v1/admin/data", strings.NewReader(string(putDataWithSecret)))
 	putReq.Header.Set("Authorization", "Bearer "+adminToken)

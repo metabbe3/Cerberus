@@ -11,10 +11,16 @@ export async function middleware(req: NextRequest) {
   if (req.nextUrl.pathname.startsWith("/api/")) {
     return NextResponse.json({ error: "Not signed in" }, { status: 401 });
   }
-  const login = new URL("/login", req.url);
+  // Behind a reverse proxy (cloudflared) the standalone server ignores the
+  // Host header, so req.url carries localhost:<port> and Next anchors
+  // absolute redirects to that origin. Start from the canonical redirect,
+  // then override Location to a relative path — browsers resolve it against
+  // the host they actually used, keeping the redirect proxy-safe.
   const next = req.nextUrl.pathname + req.nextUrl.search;
-  if (next !== "/") login.searchParams.set("next", next);
-  return NextResponse.redirect(login);
+  const target = next !== "/" ? `/login?next=${encodeURIComponent(next)}` : "/login";
+  const res = NextResponse.redirect(new URL("/login", req.url));
+  res.headers.set("location", target);
+  return res;
 }
 
 export const config = {

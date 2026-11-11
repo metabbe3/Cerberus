@@ -632,3 +632,55 @@ func TestLogger_TopDenies24h(t *testing.T) {
 	}
 }
 
+func TestLogger_Revisions(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	l, err := Open(ctx, filepath.Join(t.TempDir(), "audit.db"), Options{})
+	if err != nil {
+		t.Fatalf("audit: Open: %v", err)
+	}
+	defer l.Close()
+
+	// 1. Record revision with secret in data_json -> must be masked
+	dataWithSecret := []byte(`{"agents":{"k1":{"secret":"sk-1234567890abcdef"}}}`)
+	id1, err := l.RecordRevision(ctx, "admin-1", "added k1", dataWithSecret)
+	if err != nil {
+		t.Fatalf("RecordRevision 1: %v", err)
+	}
+	if id1 <= 0 {
+		t.Fatalf("id1 = %d, want > 0", id1)
+	}
+
+	id2, err := l.RecordRevision(ctx, "admin-2", "updated k1", []byte(`{"agents":{"k1":{"active":true}}}`))
+	if err != nil {
+		t.Fatalf("RecordRevision 2: %v", err)
+	}
+
+	// 2. List revisions: newest first
+	revs, err := l.ListRevisions(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListRevisions: %v", err)
+	}
+	if len(revs) != 2 {
+		t.Fatalf("ListRevisions len = %d, want 2", len(revs))
+	}
+	if revs[0].ID != id2 || revs[1].ID != id1 {
+		t.Fatalf("unexpected order: revs[0].ID=%d, revs[1].ID=%d", revs[0].ID, revs[1].ID)
+	}
+	if revs[0].Author != "admin-2" || revs[1].Author != "admin-1" {
+		t.Fatalf("unexpected authors: %+v", revs)
+	}
+
+	// 3. Get single revision & check secret masking at-rest
+	r1, err := l.GetRevision(ctx, id1)
+	if err != nil {
+		t.Fatalf("GetRevision 1: %v", err)
+	}
+	if strings.Contains(r1.DataJSON, "sk-1234567890abcdef") {
+		t.Fatalf("secret leaked in revision data_json: %s", r1.DataJSON)
+	}
+	if !strings.Contains(r1.DataJSON, "[REDACTED]") {
+		t.Fatalf("secret not redacted in revision data_json: %s", r1.DataJSON)
+	}
+}
+

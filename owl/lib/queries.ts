@@ -76,7 +76,7 @@ export function useToggleKillSwitch() {
   return useMutation({
     mutationFn: async ({ keyId, active }: { keyId: string; active: boolean }) => {
       if (!current) throw new Error("no data loaded");
-      const next = structuredClone(current.data) as any;
+      const next = structuredClone(current.data);
       if (!next.config) next.config = {};
       if (!next.config.kill_switch) next.config.kill_switch = {};
       if (!next.config.kill_switch.keys) next.config.kill_switch.keys = {};
@@ -103,6 +103,45 @@ export function useBreakGlass() {
         throw new Error(text || "Failed to activate break glass");
       }
       return res.json();
+    },
+  });
+}
+
+export interface RevisionData {
+  id: number;
+  time: string;
+  author: string;
+  summary: string;
+  data_json?: string;
+}
+
+export function useRevisions() {
+  return useQuery({
+    queryKey: ["revisions"],
+    queryFn: async (): Promise<RevisionData[]> => {
+      const res = await fetch("/api/admin/revisions");
+      if (!res.ok) throw new Error("Gagal mengambil histori revisi");
+      return res.json();
+    },
+  });
+}
+
+export function useRollback() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (revisionId?: number) => {
+      const res = await fetch("/api/admin/rollback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ revision_id: revisionId }),
+      });
+      const data = (await res.json()) as { ok?: boolean; epoch?: number; revision_id?: number; error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Gagal rollback revisi");
+      return data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["data"] });
+      qc.invalidateQueries({ queryKey: ["revisions"] });
     },
   });
 }

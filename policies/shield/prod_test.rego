@@ -100,6 +100,19 @@ test_dangerous_cmd_safe if {
 	count(ids) == 0
 }
 
+test_dangerous_cmd_disabled_pattern if {
+	shield_with_disabled := object.union(fixture_shield, {
+		"dangerous_cmd_patterns": [
+			{"id": "rm_rf", "regex": "rm\\s+(-r|-f)", "enabled": false},
+			{"id": "dd_disk", "regex": "dd\\s+.*of=/dev/", "enabled": true},
+		],
+	})
+	ids := prod.dangerous_cmd("rm -rf /") with data.prod_shield as shield_with_disabled
+	count(ids) == 0
+	ids2 := prod.dangerous_cmd("dd if=/dev/zero of=/dev/sda") with data.prod_shield as shield_with_disabled
+	"dd_disk" in ids2
+}
+
 # ---------- exempt tests ----------
 
 test_exempt_owner if {

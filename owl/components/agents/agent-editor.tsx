@@ -73,7 +73,7 @@ export function AgentEditor({
   const toggleKillSwitch = useToggleKillSwitch();
   const breakGlass = useBreakGlass();
   const { data: rawData } = useData();
-  const killSwitchConfig = (rawData?.data as any)?.config?.kill_switch;
+  const killSwitchConfig = rawData?.data?.config?.kill_switch;
   const isKilled = Boolean(killSwitchConfig?.keys?.[keyId] || killSwitchConfig?.global);
 
   const [savedError, setSavedError] = useState<string | null>(null);

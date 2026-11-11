@@ -45,6 +45,7 @@ dangerous_cmd(cmd) := ids if {
 	is_string(cmd)
 	ids := {p.id |
 		some p in data.prod_shield.dangerous_cmd_patterns
+		object.get(p, "enabled", true) == true
 		regex.match(p.regex, cmd)
 	}
 }

@@ -905,8 +905,10 @@ func TestAdmin_UploadBundle(t *testing.T) {
 		"domains": {},
 		"prod_shield": {
 			"dangerous_cmd_patterns": [
-				{"id": "rm_rf", "regex": "rm\\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)"}
-			]
+				{"id": "rm_rf", "regex": "rm\\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)"},
+				{"id": "grep_wildcard_dump", "regex": "grep\\s+[^|]*(\\*|wildcard)[^|]*(/passwd|/etc|\\.env|id_rsa)"}
+			],
+			"protected_containers": ["teknikalidnew-db-1"]
 		}
 	}`)
 	_ = tw.WriteHeader(&tar.Header{Name: "data.json", Size: int64(len(updatedData)), Mode: 0o600})

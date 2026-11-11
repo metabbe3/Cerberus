@@ -14,8 +14,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/open-policy-agent/opa/v1/rego"
 )
 
 // ErrNoRollback is returned when rollback is requested but no previous snapshot is available.
@@ -291,53 +289,7 @@ func copyDir(src, dst string) error {
 // dryRunSmoke verifies that the candidate snapshot satisfies essential invariants:
 // prod shield protects dangerous operations and clean queries pass.
 func dryRunSmoke(ctx context.Context, snap *Snapshot) error {
-	// Smoke test 1: prod shield blocks dangerous command
-	in1 := map[string]any{
-		"stage":     "tool",
-		"key_id":    "k-stranger-smoke",
-		"tool_call": "bash",
-		"args":      map[string]any{"cmd": "rm -rf /"},
-		"bypass":    true,
-	}
-	rs1, err := snap.Query.Eval(ctx, rego.EvalInput(in1))
-	if err != nil {
-		return fmt.Errorf("smoke eval shield error: %w", err)
-	}
-	if len(rs1) == 0 || len(rs1[0].Expressions) == 0 {
-		return errors.New("smoke eval shield returned no expression")
-	}
-	val1, ok := rs1[0].Expressions[0].Value.(map[string]any)
-	if !ok {
-		return errors.New("smoke eval shield returned invalid value")
-	}
-	if strVal(val1["decision"]) != "deny" || strVal(val1["rule_id"]) != "shield.cmd.dangerous" {
-		return fmt.Errorf("smoke eval shield failed: got %v/%v, want deny/shield.cmd.dangerous", val1["decision"], val1["rule_id"])
-	}
-
-	// Smoke test 2: clean tool command with bypass allowed
-	in2 := map[string]any{
-		"stage":     "tool",
-		"key_id":    "k-stranger-smoke",
-		"tool_call": "bash",
-		"args":      map[string]any{"cmd": "echo clean"},
-		"bypass":    true,
-	}
-	rs2, err := snap.Query.Eval(ctx, rego.EvalInput(in2))
-	if err != nil {
-		return fmt.Errorf("smoke eval clean error: %w", err)
-	}
-	if len(rs2) == 0 || len(rs2[0].Expressions) == 0 {
-		return errors.New("smoke eval clean returned no expression")
-	}
-	val2, ok := rs2[0].Expressions[0].Value.(map[string]any)
-	if !ok {
-		return errors.New("smoke eval clean returned invalid value")
-	}
-	if strVal(val2["decision"]) != "allow" {
-		return fmt.Errorf("smoke eval clean failed: got %v, want allow", val2["decision"])
-	}
-
-	return nil
+	return DryRunSmoke(ctx, snap)
 }
 
 func strVal(v any) string {

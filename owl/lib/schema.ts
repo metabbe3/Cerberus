@@ -80,12 +80,22 @@ export const TeamSchema = z
 
 export type Team = z.infer<typeof TeamSchema>;
 
+export const KillSwitchSchema = z
+  .object({
+    global: z.boolean().optional(),
+    keys: z.record(z.string(), z.boolean()).optional(),
+  })
+  .loose();
+
+export type KillSwitch = z.infer<typeof KillSwitchSchema>;
+
 // authz.rego treats an absent flag as false (fail-closed); the template sets
 // both true while onboarding.
 export const ConfigSchema = z
   .object({
     bypass_unknown_teams: z.boolean().optional(),
     bypass_unknown_keys: z.boolean().optional(),
+    kill_switch: KillSwitchSchema.optional(),
   })
   .loose();
 
@@ -109,6 +119,31 @@ export const AuditEventSchema = z.object({
 
 export type AuditEvent = z.infer<typeof AuditEventSchema>;
 
+export const DangerousCmdPatternSchema = z
+  .object({
+    id: z.string(),
+    regex: z.string(),
+    description: z.string().optional(),
+    enabled: z.boolean().optional(),
+  })
+  .loose();
+
+export type DangerousCmdPattern = z.infer<typeof DangerousCmdPatternSchema>;
+
+export const ProdShieldSchema = z
+  .object({
+    dangerous_cmd_patterns: z.array(DangerousCmdPatternSchema).optional(),
+    protected_containers: z.array(z.string()).optional(),
+    cidrs: z.array(z.string()).optional(),
+    host_keywords: z.array(z.string()).optional(),
+    db_keywords: z.array(z.string()).optional(),
+    exempt_keys: z.array(z.string()).optional(),
+    protected_paths: z.array(z.string()).optional(),
+  })
+  .loose();
+
+export type ProdShield = z.infer<typeof ProdShieldSchema>;
+
 // Top level: exactly the engine's allowedTopKeys, with config and agents
 // required (decodeData refuses documents missing either).
 export const CerberusDataSchema = z
@@ -119,7 +154,7 @@ export const CerberusDataSchema = z
     agents: z.record(z.string(), AgentSchema),
     blocked_patterns: z.array(z.string()).optional(),
     domains: z.record(z.string(), z.unknown()).optional(),
-    prod_shield: z.record(z.string(), z.unknown()).optional(),
+    prod_shield: ProdShieldSchema.optional(),
   });
 
 export type CerberusData = z.infer<typeof CerberusDataSchema>;

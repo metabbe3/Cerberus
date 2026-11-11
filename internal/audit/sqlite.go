@@ -40,6 +40,15 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_time ON events (time);
 CREATE INDEX IF NOT EXISTS idx_events_key_id_time ON events (key_id, time);
 CREATE INDEX IF NOT EXISTS idx_events_decision_time ON events (decision, time);
+
+CREATE TABLE IF NOT EXISTS revisions (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	time       INTEGER,
+	author     TEXT,
+	summary    TEXT,
+	data_json  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_revisions_time ON revisions (time);
 `
 
 const eventCols = "id, time, stage, key_id, subject, decision, rule_id, reason, epoch, cached, latency_us, args"
@@ -570,4 +579,100 @@ func queryEvents(ctx context.Context, db *sql.DB, f Filter) ([]Event, error) {
 		out = append(out, ev)
 	}
 	return out, rows.Err()
+}
+
+// Revision represents a historical snapshot of Cerberus policy/data configuration.
+type Revision struct {
+	ID       int64     `json:"id"`
+	Time     time.Time `json:"time"`
+	Author   string    `json:"author"`
+	Summary  string    `json:"summary"`
+	DataJSON string    `json:"data_json,omitempty"`
+}
+
+func (m *dbManager) getRevisionsDB() (*sql.DB, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.isMemory {
+		return m.dbs["memory"], nil
+	}
+
+	if db, ok := m.dbs["revisions"]; ok {
+		return db, nil
+	}
+
+	dbPath := filepath.Join(m.baseDir, "revisions.db")
+	db, err := openSQLite(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	m.dbs["revisions"] = db
+	return db, nil
+}
+
+func (m *dbManager) recordRevision(ctx context.Context, author, summary string, dataJSON []byte) (int64, error) {
+	db, err := m.getRevisionsDB()
+	if err != nil {
+		return 0, err
+	}
+	if author == "" {
+		author = "admin"
+	}
+	// Masking at-rest: ensure secrets inside dataJSON are masked before persistence
+	var data any
+	if err := json.Unmarshal(dataJSON, &data); err == nil {
+		masked, _ := masking.Apply(defaultMaskRules, "", data)
+		if b, err := json.Marshal(masked); err == nil {
+			dataJSON = b
+		}
+	}
+	now := time.Now().UTC().UnixNano()
+	res, err := db.ExecContext(ctx, `INSERT INTO revisions (time, author, summary, data_json) VALUES (?, ?, ?, ?)`, now, author, summary, string(dataJSON))
+	if err != nil {
+		return 0, fmt.Errorf("audit: insert revision: %w", err)
+	}
+	return res.LastInsertId()
+}
+
+func (m *dbManager) listRevisions(ctx context.Context, limit int) ([]Revision, error) {
+	db, err := m.getRevisionsDB()
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	rows, err := db.QueryContext(ctx, `SELECT id, time, author, summary, data_json FROM revisions ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("audit: list revisions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var revs []Revision
+	for rows.Next() {
+		var r Revision
+		var t int64
+		if err := rows.Scan(&r.ID, &t, &r.Author, &r.Summary, &r.DataJSON); err != nil {
+			return nil, err
+		}
+		r.Time = time.Unix(0, t).UTC()
+		revs = append(revs, r)
+	}
+	return revs, rows.Err()
+}
+
+func (m *dbManager) getRevision(ctx context.Context, id int64) (*Revision, error) {
+	db, err := m.getRevisionsDB()
+	if err != nil {
+		return nil, err
+	}
+	row := db.QueryRowContext(ctx, `SELECT id, time, author, summary, data_json FROM revisions WHERE id = ?`, id)
+	var r Revision
+	var t int64
+	if err := row.Scan(&r.ID, &t, &r.Author, &r.Summary, &r.DataJSON); err != nil {
+		return nil, err
+	}
+	r.Time = time.Unix(0, t).UTC()
+	return &r, nil
 }
