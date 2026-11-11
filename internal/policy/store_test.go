@@ -3,6 +3,7 @@ package policy
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -190,5 +191,26 @@ func TestStore_ReplaceData_KeepsOldOnError(t *testing.T) {
 	}
 	if !strings.Contains(s.PolicyDir(), "policies") {
 		t.Fatalf("PolicyDir = %q", s.PolicyDir())
+	}
+}
+
+func TestStore_ReplaceData_GlobalKillSwitchAllowed(t *testing.T) {
+	s, _ := newTestStore(t)
+	raw := loadTestData(t)
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	cfg := doc["config"].(map[string]any)
+	ks := cfg["kill_switch"].(map[string]any)
+	ks["global"] = true
+	killData, _ := json.Marshal(doc)
+
+	snap, err := s.ReplaceData(context.Background(), killData)
+	if err != nil {
+		t.Fatalf("ReplaceData with global kill switch: %v", err)
+	}
+	if snap.Epoch != 2 {
+		t.Fatalf("epoch = %d, want 2", snap.Epoch)
 	}
 }

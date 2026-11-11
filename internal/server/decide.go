@@ -10,6 +10,7 @@ import (
 	"github.com/metabbe3/cerberus/internal/audit"
 	"github.com/metabbe3/cerberus/internal/config"
 	"github.com/metabbe3/cerberus/internal/engine"
+	"github.com/metabbe3/cerberus/internal/util"
 )
 
 // decide handles POST /v1/decide (stage = "") and the stage aliases
@@ -32,6 +33,21 @@ func (s *Server) decide(stage string) http.HandlerFunc {
 		}
 		if stage != "" {
 			in.Stage = stage
+		}
+
+		// Security check: unauthenticated caller cannot claim privileged/exempt keys (e.g. k-owner)
+		// or spoof a key differing from authentication header.
+		callerKey := util.ResolveKey(r)
+		isPrivAdmin := s.isPrivilegedAdmin(r)
+		if !isPrivAdmin {
+			if s.isExemptKey(in.KeyID) {
+				writeErr(w, http.StatusUnauthorized, "unauthorized: privileged key requires admin token")
+				return
+			}
+			if callerKey != "" && in.KeyID != "" && callerKey != in.KeyID {
+				writeErr(w, http.StatusUnauthorized, "unauthorized: key_id mismatch with credential")
+				return
+			}
 		}
 
 		// Break-glass check: header X-Break-Glass + 15 min time-window
@@ -147,4 +163,28 @@ func (s *Server) explain(w http.ResponseWriter, r *http.Request) {
 func isJSONObject(b []byte) bool {
 	b = bytes.TrimLeft(b, " \t\r\n")
 	return len(b) > 0 && b[0] == '{'
+}
+
+func (s *Server) isExemptKey(keyID string) bool {
+	if keyID == "" {
+		return false
+	}
+	if keyID == "k-owner" {
+		return true
+	}
+	if s.deps.Store != nil {
+		snap := s.deps.Store.Current()
+		if snap != nil && snap.Data != nil {
+			if ps, ok := snap.Data["prod_shield"].(map[string]any); ok {
+				if exempts, ok := ps["exempt_keys"].([]any); ok {
+					for _, ex := range exempts {
+						if sEx, ok := ex.(string); ok && sEx == keyID {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+	return false
 }

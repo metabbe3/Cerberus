@@ -227,6 +227,37 @@ func TestDecide_EmptyAndNullBody400(t *testing.T) {
 	}
 }
 
+func TestDecide_KeySpoof401(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+
+	// 1. Unauthenticated request claiming exempt key (k-owner) -> 401
+	bodyOwner := `{"stage":"tool","key_id":"k-owner","tool_call":"bash","args":{"cmd":"whoami"}}`
+	resp1 := h.do(t, http.MethodPost, "/v1/decide", "application/json", bodyOwner, false)
+	if resp1.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated k-owner decide status = %d, want 401", resp1.StatusCode)
+	}
+
+	// 2. Authenticated request claiming exempt key (k-owner) with admin token -> 200
+	resp2 := h.do(t, http.MethodPost, "/v1/decide", "application/json", bodyOwner, true)
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("admin k-owner decide status = %d, want 200", resp2.StatusCode)
+	}
+
+	// 3. Caller header key differs from body key without admin token -> 401
+	req, _ := http.NewRequest(http.MethodPost, h.ts.URL+"/v1/decide", strings.NewReader(`{"stage":"tool","key_id":"k-exact"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Cerberus-Key", "k-open")
+	resp3, err := h.ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("do req: %v", err)
+	}
+	defer func() { _ = resp3.Body.Close() }()
+	if resp3.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("mismatched key decide status = %d, want 401", resp3.StatusCode)
+	}
+}
+
 // A server-side write failure (here: read-only data dir) is a 500, not a 422,
 // and must not leak absolute filesystem paths to the client.
 func TestAdmin_PutData_IOFailure500NoPath(t *testing.T) {

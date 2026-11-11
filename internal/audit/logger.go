@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"os"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -107,6 +108,9 @@ func Open(ctx context.Context, dbPath string, opts Options) (*Logger, error) {
 	mgr, err := newDBManager(dbPath, opts.RetentionDays)
 	if err != nil {
 		return nil, err
+	}
+	if dbPath != ":memory:" {
+		_ = os.Chmod(dbPath, 0o640)
 	}
 
 	maxID, err := mgr.maxID(context.Background())

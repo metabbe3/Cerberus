@@ -690,3 +690,43 @@ func TestLogger_Revisions(t *testing.T) {
 		t.Fatalf("secret not redacted in revision data_json: %s", r1.DataJSON)
 	}
 }
+
+func TestLogger_FilePermissions(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "audit.db")
+
+	l, err := Open(ctx, dbPath, Options{
+		BatchSize:  1,
+		FlushEvery: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	l.Emit(Event{
+		Stage:    "tool",
+		KeyID:    "k-test",
+		Decision: "allow",
+		RuleID:   "ai.tool.allow",
+	})
+	_ = l.Close()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatalf("expected db files created in %s", dir)
+	}
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil {
+			t.Fatalf("Info: %v", err)
+		}
+		perm := info.Mode().Perm()
+		// Permissions must not grant other (world) read/write/execute
+		if perm&0o007 != 0 {
+			t.Fatalf("file %s has insecure permissions %04o (expected 0640/0600)", e.Name(), perm)
+		}
+	}
+}

@@ -98,59 +98,79 @@ func (p *EgressProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
-	host := r.Host
-	if host == "" {
-		host = r.URL.Host
-	}
-
-	hostOnly, port := util.ExtractHost(host)
-
 	keyID := p.resolveKey(r)
 
-	// 1. Evaluate stage http on destination host
-	in := engine.Input{
-		Stage:    "http",
-		KeyID:    keyID,
-		Action:   "CONNECT",
-		Resource: host,
-		Args: map[string]any{
-			"method": "CONNECT",
-			"host":   hostOnly,
-			"port":   port,
-		},
+	// Collect targets from both RequestURI/URL.Host and Host header
+	targets := make([]string, 0, 2)
+	if r.URL.Host != "" {
+		targets = append(targets, r.URL.Host)
 	}
-	dec := p.engine.Decide(r.Context(), in)
-	if !dec.Allowed() {
-		p.writeForbidden(w, dec)
+	if r.Host != "" && r.Host != r.URL.Host {
+		targets = append(targets, r.Host)
+	}
+	if len(targets) == 0 {
+		http.Error(w, "missing host in CONNECT request", http.StatusBadRequest)
 		return
 	}
 
-	// 2. DNS check: if host is not a raw IP, resolve and check each IP against prod shield
-	if net.ParseIP(hostOnly) == nil && p.cfg.LookupIP != nil {
-		if ips, err := p.cfg.LookupIP(hostOnly); err == nil {
-			for _, ip := range ips {
-				ipIn := engine.Input{
-					Stage:    "http",
-					KeyID:    keyID,
-					Action:   "CONNECT",
-					Resource: ip.String(),
-					Args: map[string]any{
-						"method": "CONNECT",
-						"host":   ip.String(),
-						"port":   port,
-					},
-				}
-				ipDec := p.engine.Decide(r.Context(), ipIn)
-				if !ipDec.Allowed() {
-					p.writeForbidden(w, ipDec)
-					return
+	for _, target := range targets {
+		hostOnly, port := util.ExtractHost(target)
+		if hostOnly == "" {
+			http.Error(w, "missing host in CONNECT request", http.StatusBadRequest)
+			return
+		}
+
+		// 1. Evaluate stage http on destination host
+		in := engine.Input{
+			Stage:    "http",
+			KeyID:    keyID,
+			Action:   "CONNECT",
+			Resource: target,
+			Args: map[string]any{
+				"method": "CONNECT",
+				"host":   hostOnly,
+				"port":   port,
+			},
+		}
+		dec := p.engine.Decide(r.Context(), in)
+		if !dec.Allowed() {
+			p.writeForbidden(w, dec)
+			return
+		}
+
+		// 2. DNS check: if host is not a raw IP, resolve and check each IP against prod shield
+		if net.ParseIP(hostOnly) == nil && p.cfg.LookupIP != nil {
+			if ips, err := p.cfg.LookupIP(hostOnly); err == nil {
+				for _, ip := range ips {
+					ipIn := engine.Input{
+						Stage:    "http",
+						KeyID:    keyID,
+						Action:   "CONNECT",
+						Resource: ip.String(),
+						Args: map[string]any{
+							"method": "CONNECT",
+							"host":   ip.String(),
+							"port":   port,
+						},
+					}
+					ipDec := p.engine.Decide(r.Context(), ipIn)
+					if !ipDec.Allowed() {
+						p.writeForbidden(w, ipDec)
+						return
+					}
 				}
 			}
 		}
 	}
 
-	// 3. Dial target host
-	targetConn, err := net.DialTimeout("tcp", net.JoinHostPort(hostOnly, port), p.cfg.DialTimeout)
+	// 3. Dial target host (prefer explicit URL.Host if set, otherwise r.Host)
+	dialTarget := r.URL.Host
+	if dialTarget == "" {
+		dialTarget = r.Host
+	}
+	dialHost, dialPort := util.ExtractHost(dialTarget)
+
+	targetConn, err := net.DialTimeout("tcp", net.JoinHostPort(dialHost, dialPort), p.cfg.DialTimeout)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
@@ -225,6 +245,31 @@ func (p *EgressProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	if !dec.Allowed() {
 		p.writeForbidden(w, dec)
 		return
+	}
+
+	// DNS check: if host is not a raw IP, resolve and check each IP against prod shield
+	hostOnly, _ := util.ExtractHost(r.Host)
+	if net.ParseIP(hostOnly) == nil && p.cfg.LookupIP != nil {
+		if ips, err := p.cfg.LookupIP(hostOnly); err == nil {
+			for _, ip := range ips {
+				ipIn := engine.Input{
+					Stage:    "http",
+					KeyID:    keyID,
+					Action:   r.Method,
+					Resource: ip.String(),
+					Args: map[string]any{
+						"method": r.Method,
+						"host":   ip.String(),
+						"path":   r.URL.Path,
+					},
+				}
+				ipDec := p.engine.Decide(r.Context(), ipIn)
+				if !ipDec.Allowed() {
+					p.writeForbidden(w, ipDec)
+					return
+				}
+			}
+		}
 	}
 
 	// Forward plain HTTP

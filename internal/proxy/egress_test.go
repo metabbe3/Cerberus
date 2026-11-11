@@ -308,3 +308,91 @@ func TestEgressProxy_RateLimit(t *testing.T) {
 		t.Errorf("expected Retry-After header")
 	}
 }
+
+func TestEgressProxy_HostHeaderSpoofBlocked(t *testing.T) {
+	eng := setupTestEngine(t)
+
+	egress, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		FallbackKeyID: "k-open",
+	})
+	if err != nil {
+		t.Fatalf("NewEgressProxy: %v", err)
+	}
+	proxyServer := httptest.NewServer(egress)
+	defer proxyServer.Close()
+
+	// 1. Plain HTTP request to external URL with Host header spoofed to internal prod IP (10.0.0.1)
+	conn, err := net.Dial("tcp", proxyServer.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	rawReq := "GET http://api.openai.com/v1/models HTTP/1.1\r\nHost: 10.0.0.1\r\nX-Cerberus-Key: k-open\r\n\r\n"
+	if _, err := conn.Write([]byte(rawReq)); err != nil {
+		t.Fatalf("write rawReq: %v", err)
+	}
+
+	reader := bufio.NewReader(conn)
+	statusLine, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read status line: %v", err)
+	}
+	if !strings.Contains(statusLine, "403") {
+		t.Fatalf("expected 403 Forbidden on host-header spoof, got: %s", statusLine)
+	}
+
+	// 2. CONNECT to 10.0.0.1:443
+	conn2, err := net.Dial("tcp", proxyServer.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer func() { _ = conn2.Close() }()
+
+	rawReq2 := "CONNECT 10.0.0.1:443 HTTP/1.1\r\nHost: 10.0.0.1:443\r\nX-Cerberus-Key: k-open\r\n\r\n"
+	if _, err := conn2.Write([]byte(rawReq2)); err != nil {
+		t.Fatalf("write rawReq2: %v", err)
+	}
+
+	reader2 := bufio.NewReader(conn2)
+	statusLine2, err := reader2.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read status line 2: %v", err)
+	}
+	if !strings.Contains(statusLine2, "403") {
+		t.Fatalf("expected 403 Forbidden on destination spoof, got: %s", statusLine2)
+	}
+}
+
+func TestEgressProxy_ConnectMissingHost(t *testing.T) {
+	eng := setupTestEngine(t)
+
+	egress, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		FallbackKeyID: "k-open",
+	})
+	if err != nil {
+		t.Fatalf("NewEgressProxy: %v", err)
+	}
+	proxyServer := httptest.NewServer(egress)
+	defer proxyServer.Close()
+
+	conn, err := net.Dial("tcp", proxyServer.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	rawReq := "CONNECT  HTTP/1.1\r\n\r\n"
+	if _, err := conn.Write([]byte(rawReq)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	reader := bufio.NewReader(conn)
+	statusLine, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(statusLine, "400") {
+		t.Fatalf("expected 400 Bad Request, got: %s", statusLine)
+	}
+}

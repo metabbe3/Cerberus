@@ -99,9 +99,17 @@ func openSQLite(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("audit: open %s: %w", path, err)
 	}
+	if path != ":memory:" {
+		_ = os.Chmod(path, 0o640)
+	}
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil && path != ":memory:" {
 		_ = db.Close()
 		return nil, fmt.Errorf("audit: journal_mode: %w", err)
+	}
+	if path != ":memory:" {
+		_ = os.Chmod(path, 0o640)
+		_ = os.Chmod(path+"-wal", 0o640)
+		_ = os.Chmod(path+"-shm", 0o640)
 	}
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()

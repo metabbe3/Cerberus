@@ -94,6 +94,33 @@ func DryRunSmoke(ctx context.Context, snap *Snapshot) error {
 		},
 	}
 
+	// If global kill switch is explicitly enabled, verify that all traffic is properly denied with ops.kill_switch.
+	if cfg, ok := snap.Data["config"].(map[string]any); ok {
+		if ks, ok := cfg["kill_switch"].(map[string]any); ok {
+			if g, ok := ks["global"].(bool); ok && g {
+				for _, sc := range cases {
+					rs, err := snap.Query.Eval(ctx, rego.EvalInput(sc.input))
+					if err != nil {
+						return fmt.Errorf("kill switch smoke eval '%s' error: %w", sc.name, err)
+					}
+					if len(rs) == 0 || len(rs[0].Expressions) == 0 {
+						return fmt.Errorf("kill switch smoke eval '%s' returned no expression", sc.name)
+					}
+					val, ok := rs[0].Expressions[0].Value.(map[string]any)
+					if !ok {
+						return fmt.Errorf("kill switch smoke eval '%s' returned invalid value type %T", sc.name, rs[0].Expressions[0].Value)
+					}
+					gotDec := strVal(val["decision"])
+					gotRule := strVal(val["rule_id"])
+					if gotDec != "deny" || gotRule != "ops.kill_switch" {
+						return fmt.Errorf("kill switch smoke test failed on '%s': got %s/%s, want deny/ops.kill_switch", sc.name, gotDec, gotRule)
+					}
+				}
+				return nil
+			}
+		}
+	}
+
 	for _, sc := range cases {
 		rs, err := snap.Query.Eval(ctx, rego.EvalInput(sc.input))
 		if err != nil {
