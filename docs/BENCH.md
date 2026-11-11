@@ -34,3 +34,19 @@ Evaluated on Apple M4 (darwin/arm64) via `go test -bench=. -benchmem ./internal/
 3. **Precomputed Snapshot Epoch String**: Cached `EpochStr` on `policy.Snapshot` during snapshot initialization, eliminating repeated runtime `strconv.FormatUint` calls on hot-path metrics updates.
 4. **Map Capacity Preallocation**: Replaced dynamic map reallocation in `regoInput` with preallocated capacity `make(map[string]any, 9)`, eliminating map expansion overhead.
 5. **Fast-path API Version Stripping**: Replaced blanket `regexp.ReplaceAllString` with fast-path prefix check `stripAPIVersion` in Docker proxy request parsing.
+
+## Sprint 8 — Random-Pattern Load Test (HTTP end-to-end, 11 Nov 2026)
+
+Method: `cmd/loadgen-stress` — random stage/host/action/resource/command per request (5-stage mix), HTTP POST /v1/decide vs isolated bench instance (port 18089, same binary+data), key `k-open` (no rate-limit → measures engine ceiling, not token bucket). Mac Mini M4 10-core/16GB. Ramp 12-15s per level.
+
+| Concurrency | TPS | p50 | p90 | p99 | err% |
+|---|---|---|---|---|---|
+| 1 | 4,098 | 0.1ms | 0.6 | 1.3 | 0 |
+| 8 | 18,516 | 0.1 | 1.4 | 2.7 | 0 |
+| 64 | 25,881 | 1.4 | 5.9 | 16.7 | 0 |
+| 256 | 41,806 | 2.1 | 12.0 | 76.7 | 0 |
+| 1024 | 73-74k | 7.7-8.4 | 31-32 | 87-104 | 0 |
+| **2048** | **84.6-87k** | **18** | **48-49** | **101** | **0** |
+| 4096 | 763 (collapse) | 669 | 7358 | 8405 | 70.5 |
+
+**MAX SUSTAINED: ~85,000 TPS** (err<1%, p99 ~100ms) at concurrency 2048. Collapse at 4096 = transport/GC saturation (latency 7s+), NOT policy eval. Fail-closed held: 0 wrong-allow, 0 5xx — all "errors" at 4096 were client-side timeouts. Live engine (8089) untouched throughout.
