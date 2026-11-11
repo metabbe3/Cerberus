@@ -30,7 +30,7 @@ func TestLogger_EmitTakesNoMutex(t *testing.T) {
 	}
 	defer func() { _ = l.Close() }()
 
-	l.mu.Lock() // simulate a slow Recent/Subscribe holding the lock
+	l.mu.Lock()         // simulate a slow Recent/Subscribe holding the lock
 	defer l.mu.Unlock() // LIFO: releases before the deferred Close on failure
 	done := make(chan struct{})
 	go func() {
@@ -683,4 +683,3 @@ func TestLogger_Revisions(t *testing.T) {
 		t.Fatalf("secret not redacted in revision data_json: %s", r1.DataJSON)
 	}
 }
-

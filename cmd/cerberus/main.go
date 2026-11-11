@@ -21,6 +21,7 @@ import (
 	"github.com/metabbe3/cerberus/internal/masking"
 	"github.com/metabbe3/cerberus/internal/policy"
 	"github.com/metabbe3/cerberus/internal/server"
+	"github.com/metabbe3/cerberus/internal/util"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=...".
@@ -185,16 +186,5 @@ func watchHUP(ctx context.Context, store *policy.Store, log *slog.Logger) (stop 
 }
 
 func newLogger(level string) *slog.Logger {
-	var lvl slog.Level
-	switch level {
-	case "debug":
-		lvl = slog.LevelDebug
-	case "warn":
-		lvl = slog.LevelWarn
-	case "error":
-		lvl = slog.LevelError
-	default:
-		lvl = slog.LevelInfo
-	}
-	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: lvl}))
+	return util.NewLogger(level)
 }

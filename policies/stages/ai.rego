@@ -320,7 +320,7 @@ arg_ok(constraint, value) if {
 
 # ---------- prod shield helpers (P0.3, P0.4, P0.5) ----------
 
-agent_has_prod_access if authz.agent.prod_access == true
+agent_has_prod_access if authz.agent_has_prod_access
 
 # LLM prod shield target checks
 target_host := object.get(object.get(input, "context", {}), "target_host", "")

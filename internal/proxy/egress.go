@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +13,7 @@ import (
 	"github.com/metabbe3/cerberus/internal/audit"
 	"github.com/metabbe3/cerberus/internal/engine"
 	"github.com/metabbe3/cerberus/internal/ratelimit"
+	"github.com/metabbe3/cerberus/internal/util"
 )
 
 // EgressConfig holds options for the HTTP/HTTPS egress proxy.
@@ -47,8 +47,8 @@ func NewEgressProxy(eng *engine.Engine, cfg EgressConfig) (*EgressProxy, error) 
 	}
 
 	tr := &http.Transport{
-		MaxIdleConns:        100,
-		IdleConnTimeout:     90 * time.Second,
+		MaxIdleConns:       100,
+		IdleConnTimeout:    90 * time.Second,
 		DisableCompression: false,
 	}
 
@@ -103,11 +103,7 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		host = r.URL.Host
 	}
 
-	hostOnly, port, err := net.SplitHostPort(host)
-	if err != nil {
-		hostOnly = host
-		port = "443"
-	}
+	hostOnly, port := util.ExtractHost(host)
 
 	keyID := p.resolveKey(r)
 
@@ -262,35 +258,12 @@ func (p *EgressProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *EgressProxy) writeForbidden(w http.ResponseWriter, dec engine.Decision) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"error":   "forbidden by policy",
-		"rule_id": dec.RuleID,
-		"reason":  dec.Reason,
-	})
+	util.WriteForbidden(w, dec.RuleID, dec.Reason)
 }
 
 func (p *EgressProxy) resolveKey(r *http.Request) string {
-	if k := r.Header.Get("X-Cerberus-Key"); k != "" {
+	if k := util.ResolveKey(r); k != "" {
 		return k
-	}
-	if k := r.Header.Get("X-Policy-Key"); k != "" {
-		return k
-	}
-	if auth := r.Header.Get("Proxy-Authorization"); auth != "" {
-		parts := strings.SplitN(auth, " ", 2)
-		if len(parts) == 2 {
-			if strings.EqualFold(parts[0], "bearer") {
-				return parts[1]
-			}
-			if strings.EqualFold(parts[0], "basic") {
-				if dec, err := base64.StdEncoding.DecodeString(parts[1]); err == nil {
-					userPass := strings.SplitN(string(dec), ":", 2)
-					return userPass[0]
-				}
-			}
-		}
 	}
 	return p.cfg.FallbackKeyID
 }

@@ -11,6 +11,15 @@ import (
 	"time"
 )
 
+// Default limits, ceilings, and timeouts across Cerberus.
+const (
+	DefaultCacheSize      = 10000
+	DefaultEvalTimeout    = 10 * time.Millisecond
+	DefaultRetentionDays  = 30
+	DefaultMaxBodyBytes   = 1 << 20
+	MaxBreakGlassDuration = 15 * time.Minute
+)
+
 // Config is the resolved runtime configuration. AdminToken must be non-empty
 // or Load returns an error (required secret fails startup, CONVENTIONS.md).
 type Config struct {
@@ -29,15 +38,15 @@ type Config struct {
 // Load resolves env (via getenv) then flags (args, os.Args[1:] style). Flag >
 // env > default. args may be nil.
 func Load(args []string, getenv func(string) string) (Config, error) {
-	cacheSize, err := envInt(getenv, "CERBERUS_CACHE_SIZE", 10000)
+	cacheSize, err := envInt(getenv, "CERBERUS_CACHE_SIZE", DefaultCacheSize)
 	if err != nil {
 		return Config{}, err
 	}
-	evalTimeout, err := envDuration(getenv, "CERBERUS_EVAL_TIMEOUT", 10*time.Millisecond)
+	evalTimeout, err := envDuration(getenv, "CERBERUS_EVAL_TIMEOUT", DefaultEvalTimeout)
 	if err != nil {
 		return Config{}, err
 	}
-	retentionDays, err := envInt(getenv, "CERBERUS_AUDIT_RETENTION_DAYS", 30)
+	retentionDays, err := envInt(getenv, "CERBERUS_AUDIT_RETENTION_DAYS", DefaultRetentionDays)
 	if err != nil {
 		return Config{}, err
 	}

@@ -4,17 +4,19 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"io"
 	"mime"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/metabbe3/cerberus/internal/config"
+	"github.com/metabbe3/cerberus/internal/util"
 )
 
 // maxBodyBytes caps every request body (Global Constraints: 1 MiB).
-const maxBodyBytes = 1 << 20
+const maxBodyBytes = config.DefaultMaxBodyBytes
 
 // statusWriter records the status code for the access log; Unwrap lets
 // http.NewResponseController reach the real Flusher (SSE needs it).
@@ -95,35 +97,10 @@ func isJSONContentType(h string) bool {
 }
 
 // APIError represents a structured error response with code and message.
-type APIError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Error   string `json:"error,omitempty"`
-}
+type APIError = util.APIError
 
 func statusCodeToCode(status int) string {
-	switch status {
-	case http.StatusUnauthorized:
-		return "unauthorized"
-	case http.StatusTooManyRequests:
-		return "rate_limit_exceeded"
-	case http.StatusNotFound:
-		return "not_found"
-	case http.StatusBadRequest:
-		return "bad_request"
-	case http.StatusUnprocessableEntity:
-		return "unprocessable_entity"
-	case http.StatusForbidden:
-		return "forbidden"
-	case http.StatusServiceUnavailable:
-		return "service_unavailable"
-	case http.StatusRequestEntityTooLarge:
-		return "request_entity_too_large"
-	case http.StatusUnsupportedMediaType:
-		return "unsupported_media_type"
-	default:
-		return "internal_error"
-	}
+	return util.StatusCodeToCode(status)
 }
 
 // admin guards the admin routes with the bearer token, compared in constant
@@ -161,18 +138,15 @@ func readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	util.WriteJSON(w, status, v)
 }
 
 func writeErr(w http.ResponseWriter, status int, msg string) {
-	code := statusCodeToCode(status)
-	writeJSON(w, status, APIError{Code: code, Message: msg, Error: msg})
+	util.WriteErr(w, status, msg)
 }
 
 func writeErrCode(w http.ResponseWriter, status int, code, msg string) {
-	writeJSON(w, status, APIError{Code: code, Message: msg, Error: msg})
+	util.WriteErrCode(w, status, code, msg)
 }
 
 // newRequestID is 8 random bytes as hex; on RNG failure it is empty and the

@@ -133,11 +133,7 @@ image_allowed if {
 	image_matches(pattern, image)
 }
 
-image_matches(pattern, img) if glob.match(pattern, [":"], img)
-
-image_matches(pattern, img) if authz.call_matches_pattern(pattern, img)
-
-image_matches(pattern, img) if lower(pattern) == lower(img)
+image_matches(pattern, img) if authz.pattern_matches(pattern, img)
 
 # ---------- shield container checks (P0.4) ----------
 

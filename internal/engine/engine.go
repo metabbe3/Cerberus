@@ -19,10 +19,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/golang-lru/v2"
 	"github.com/metabbe3/cerberus/internal/audit"
+	"github.com/metabbe3/cerberus/internal/config"
 	"github.com/metabbe3/cerberus/internal/masking"
 	"github.com/metabbe3/cerberus/internal/policy"
-	"github.com/hashicorp/golang-lru/v2"
+	"github.com/metabbe3/cerberus/internal/util"
 	"github.com/open-policy-agent/opa/v1/ast"
 	"github.com/open-policy-agent/opa/v1/rego"
 	"github.com/open-policy-agent/opa/v1/topdown"
@@ -47,8 +49,8 @@ type Options struct {
 }
 
 const (
-	defaultCacheSize   = 10000
-	defaultEvalTimeout = 10 * time.Millisecond
+	defaultCacheSize   = config.DefaultCacheSize
+	defaultEvalTimeout = config.DefaultEvalTimeout
 )
 
 // Engine is the hot path: Store.Current (atomic load) → LRU → singleflight →
@@ -280,12 +282,7 @@ func (e *Engine) Explain(ctx context.Context, in Input) Decision {
 		}
 	}
 	d.Trace = entries
-
-	if masked, changed := masking.Apply(snap.Maskers[in.KeyID], "args", in.Args); changed {
-		if m, ok := masked.(map[string]any); ok {
-			d.MaskedArgs = m
-		}
-	}
+	d.MaskedArgs = applyMasking(snap, in.KeyID, in.Args)
 	d.LatencyUS = time.Since(start).Microseconds()
 	return d
 }
@@ -322,17 +319,23 @@ func (e *Engine) eval(ctx context.Context, snap *policy.Snapshot, in Input) Deci
 	}
 
 	d := Decision{
-		Decision: str(val["decision"]),
-		RuleID:   str(val["rule_id"]),
-		Reason:   str(val["reason"]),
-		Epoch:    snap.Epoch,
-	}
-	if masked, changed := masking.Apply(snap.Maskers[in.KeyID], "args", in.Args); changed {
-		if m, ok := masked.(map[string]any); ok {
-			d.MaskedArgs = m
-		}
+		Decision:   str(val["decision"]),
+		RuleID:     str(val["rule_id"]),
+		Reason:     str(val["reason"]),
+		Epoch:      snap.Epoch,
+		MaskedArgs: applyMasking(snap, in.KeyID, in.Args),
 	}
 	return d
+}
+
+// applyMasking applies per-key masking rules to args map.
+func applyMasking(snap *policy.Snapshot, keyID string, args map[string]any) map[string]any {
+	if masked, changed := masking.Apply(snap.Maskers[keyID], "args", args); changed {
+		if m, ok := masked.(map[string]any); ok {
+			return m
+		}
+	}
+	return nil
 }
 
 // denyInternal is the fail-closed answer for every internal failure mode.
@@ -386,8 +389,7 @@ func cacheKey(epoch uint64, in Input) [32]byte {
 
 // str extracts a string field from the Rego decision object.
 func str(v any) string {
-	s, _ := v.(string)
-	return s
+	return util.Str(v)
 }
 
 // Stats returns the cache hits and misses totals recorded by the engine.

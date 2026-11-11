@@ -54,9 +54,9 @@ type Options struct {
 	BatchSize     int
 	FlushEvery    time.Duration
 	RingSize      int
-	RetentionDays int                                // SQLite daily log retention in days (default 30)
-	ShipURL       string                             // Remote JSON-lines endpoint for decision logs (optional)
-	MaskRules     []masking.Rule                     // Extra masking rules applied before persist
+	RetentionDays int                               // SQLite daily log retention in days (default 30)
+	ShipURL       string                            // Remote JSON-lines endpoint for decision logs (optional)
+	MaskRules     []masking.Rule                    // Extra masking rules applied before persist
 	MaskRulesFunc func(keyID string) []masking.Rule // Dynamic per-key masking rules lookup
 }
 

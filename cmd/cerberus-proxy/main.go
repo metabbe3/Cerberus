@@ -23,6 +23,7 @@ import (
 	"github.com/metabbe3/cerberus/internal/policy"
 	"github.com/metabbe3/cerberus/internal/proxy"
 	"github.com/metabbe3/cerberus/internal/ratelimit"
+	"github.com/metabbe3/cerberus/internal/util"
 )
 
 var version = "dev"
@@ -41,15 +42,15 @@ func main() {
 
 func run() error {
 	var (
-		listenAddr    = ":2375"
-		dockerHost    = "unix:///var/run/docker.sock"
-		egressAddr    = ""
-		defaultKey    = "k-default-agent"
-		policyDir     = "policies"
-		dataFile      = "data/prod.json"
-		auditDB       = "cerberus.db"
-		adminToken    = os.Getenv("CERBERUS_ADMIN_TOKEN")
-		logLevel      = "info"
+		listenAddr = ":2375"
+		dockerHost = "unix:///var/run/docker.sock"
+		egressAddr = ""
+		defaultKey = "k-default-agent"
+		policyDir  = "policies"
+		dataFile   = "data/prod.json"
+		auditDB    = "cerberus.db"
+		adminToken = os.Getenv("CERBERUS_ADMIN_TOKEN")
+		logLevel   = "info"
 	)
 
 	if v := os.Getenv("CERBERUS_PROXY_LISTEN"); v != "" {
@@ -206,16 +207,5 @@ func run() error {
 }
 
 func newLogger(level string) *slog.Logger {
-	var lvl slog.Level
-	switch level {
-	case "debug":
-		lvl = slog.LevelDebug
-	case "warn":
-		lvl = slog.LevelWarn
-	case "error":
-		lvl = slog.LevelError
-	default:
-		lvl = slog.LevelInfo
-	}
-	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: lvl}))
+	return util.NewLogger(level)
 }

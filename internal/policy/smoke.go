@@ -83,11 +83,11 @@ func DryRunSmoke(ctx context.Context, snap *Snapshot) error {
 		{
 			name: "happy llm/tool allow",
 			input: map[string]any{
-				"stage":     "llm",
-				"key_id":    "k-stranger-smoke",
-				"model":     "gpt-4",
-				"messages":  []any{map[string]any{"role": "user", "content": "ping"}},
-				"bypass":    true,
+				"stage":    "llm",
+				"key_id":   "k-stranger-smoke",
+				"model":    "gpt-4",
+				"messages": []any{map[string]any{"role": "user", "content": "ping"}},
+				"bypass":   true,
 			},
 			wantDec:    "allow",
 			wantRuleID: "",

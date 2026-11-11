@@ -28,6 +28,16 @@ call_matches_pattern(pattern, name) if {
 	contains(lower(name), lower(pattern))
 }
 
+# Common pattern matcher: glob with ":" separator, wildcard prefix/contains, or case-insensitive exact.
+pattern_matches(pattern, target) if glob.match(pattern, [":"], target)
+
+pattern_matches(pattern, target) if call_matches_pattern(pattern, target)
+
+pattern_matches(pattern, target) if lower(pattern) == lower(target)
+
+# Prod access flag for the resolved agent
+agent_has_prod_access if agent.prod_access == true
+
 # ---------- stage dispatch ----------
 
 # A stage is known if a stage package under data.stages exists for it.

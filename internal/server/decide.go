@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/metabbe3/cerberus/internal/audit"
+	"github.com/metabbe3/cerberus/internal/config"
 	"github.com/metabbe3/cerberus/internal/engine"
 )
 
@@ -50,7 +51,7 @@ func (s *Server) decide(stage string) http.HandlerFunc {
 					}
 				}
 				if s.breakGlass != nil {
-					s.breakGlass.Activate(in.KeyID, 15*time.Minute, breakGlassReason)
+					s.breakGlass.Activate(in.KeyID, config.MaxBreakGlassDuration, breakGlassReason)
 				}
 			} else {
 				s.log.Warn("http: unauthorized X-Break-Glass attempt ignored", "key_id", in.KeyID, "remote_addr", r.RemoteAddr)

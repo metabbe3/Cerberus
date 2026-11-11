@@ -104,11 +104,7 @@ host_allowed if {
 	host_matches(pattern, req_host)
 }
 
-host_matches(pattern, h) if glob.match(pattern, [":"], h)
-
-host_matches(pattern, h) if authz.call_matches_pattern(pattern, h)
-
-host_matches(pattern, h) if lower(pattern) == lower(h)
+host_matches(pattern, h) if authz.pattern_matches(pattern, h)
 
 # Method allowlist: when defined on agent or team, method must be listed
 method_not_allowed if {
@@ -132,7 +128,7 @@ method_allowed if {
 
 # ---------- shield prod checks (P0.3) ----------
 
-agent_has_prod_access if authz.agent.prod_access == true
+agent_has_prod_access if authz.agent_has_prod_access
 
 http_prod_ip_blocked if {
 	not agent_has_prod_access

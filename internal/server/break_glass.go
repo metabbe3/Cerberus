@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/metabbe3/cerberus/internal/audit"
+	"github.com/metabbe3/cerberus/internal/config"
 )
 
 type breakGlassManager struct {
@@ -29,8 +30,8 @@ func newBreakGlassManager() *breakGlassManager {
 func (bg *breakGlassManager) Activate(keyID string, duration time.Duration, reason string) time.Time {
 	bg.mu.Lock()
 	defer bg.mu.Unlock()
-	if duration <= 0 || duration > 15*time.Minute {
-		duration = 15 * time.Minute
+	if duration <= 0 || duration > config.MaxBreakGlassDuration {
+		duration = config.MaxBreakGlassDuration
 	}
 	until := time.Now().Add(duration)
 	if keyID == "" || keyID == "*" {
@@ -123,8 +124,8 @@ func (s *Server) postBreakGlass(w http.ResponseWriter, r *http.Request) {
 		req.Reason = "admin manual activation"
 	}
 	dur := time.Duration(req.DurationMinutes) * time.Minute
-	if dur <= 0 || dur > 15*time.Minute {
-		dur = 15 * time.Minute
+	if dur <= 0 || dur > config.MaxBreakGlassDuration {
+		dur = config.MaxBreakGlassDuration
 	}
 	until := s.breakGlass.Activate(req.KeyID, dur, req.Reason)
 

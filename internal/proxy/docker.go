@@ -21,10 +21,11 @@ import (
 	"github.com/metabbe3/cerberus/internal/audit"
 	"github.com/metabbe3/cerberus/internal/engine"
 	"github.com/metabbe3/cerberus/internal/ratelimit"
+	"github.com/metabbe3/cerberus/internal/util"
 )
 
 var (
-	apiVersionRegex = regexp.MustCompile(`^/v\d+\.\d+`)
+	apiVersionRegex  = regexp.MustCompile(`^/v\d+\.\d+`)
 	containerSubpath = regexp.MustCompile(`^/containers/([^/]+)(?:/(.+))?$`)
 	imageSubpath     = regexp.MustCompile(`^/images/([^/]+)(?:/(.+))?$`)
 	execSubpath      = regexp.MustCompile(`^/exec/([^/]+)(?:/(.+))?$`)
@@ -48,11 +49,11 @@ type DockerConfig struct {
 // DockerProxy intercepts Docker Engine API calls and evaluates them against the
 // Cerberus engine's docker stage.
 type DockerProxy struct {
-	engine        *engine.Engine
-	cfg           DockerConfig
-	reverseProxy  *httputil.ReverseProxy
-	labelCache    sync.Map // containerID -> cachedLabel
-	client        *http.Client
+	engine       *engine.Engine
+	cfg          DockerConfig
+	reverseProxy *httputil.ReverseProxy
+	labelCache   sync.Map // containerID -> cachedLabel
+	client       *http.Client
 }
 
 type cachedLabel struct {
@@ -74,8 +75,8 @@ func NewDockerProxy(eng *engine.Engine, cfg DockerConfig) (*DockerProxy, error) 
 	}
 
 	transport := &http.Transport{
-		MaxIdleConns:        100,
-		IdleConnTimeout:     90 * time.Second,
+		MaxIdleConns:       100,
+		IdleConnTimeout:    90 * time.Second,
 		DisableCompression: true,
 	}
 
@@ -166,13 +167,7 @@ func (p *DockerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	decision := p.engine.Decide(r.Context(), input)
 	if !decision.Allowed() {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusForbidden)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"error":   "forbidden by policy",
-			"rule_id": decision.RuleID,
-			"reason":  decision.Reason,
-		})
+		util.WriteForbidden(w, decision.RuleID, decision.Reason)
 		return
 	}
 
@@ -358,23 +353,11 @@ func (p *DockerProxy) extractExecArgs(body map[string]any, args map[string]any) 
 }
 
 func (p *DockerProxy) resolveKey(r *http.Request, containerID string) string {
-	// 1. Header lookup
-	if k := r.Header.Get("X-Cerberus-Key"); k != "" {
-		return k
-	}
-	if k := r.Header.Get("X-Policy-Key"); k != "" {
+	if k := util.ResolveKey(r); k != "" {
 		return k
 	}
 
-	// 2. Query lookup
-	if k := r.URL.Query().Get("policy_key"); k != "" {
-		return k
-	}
-	if k := r.URL.Query().Get("key_id"); k != "" {
-		return k
-	}
-
-	// 3. Container label lookup
+	// Container label lookup
 	if containerID != "" && containerID != "create" {
 		if val, ok := p.labelCache.Load(containerID); ok {
 			cl := val.(cachedLabel)

@@ -44,6 +44,9 @@ func newTestEngine(t *testing.T, sink Sink, opts Options) *Engine {
 	if err != nil {
 		t.Fatalf("policy.NewStore: %v", err)
 	}
+	if opts.EvalTimeout == 0 {
+		opts.EvalTimeout = 500 * time.Millisecond
+	}
 	e, err := New(store, sink, opts)
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)

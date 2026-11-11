@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/metabbe3/cerberus/internal/util"
 )
 
 // ErrNoRollback is returned when rollback is requested but no previous snapshot is available.
@@ -293,10 +295,7 @@ func dryRunSmoke(ctx context.Context, snap *Snapshot) error {
 }
 
 func strVal(v any) string {
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return ""
+	return util.Str(v)
 }
 
 // LoadBundle validates and installs an in-memory bundle.tar.gz.
