@@ -33,14 +33,15 @@ func TestLoad_Defaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Config{
-		Addr:        ":8089",
-		PolicyDir:   "policies",
-		DataFile:    "data/prod.json",
-		AuditDB:     "cerberus.db",
-		AdminToken:  "tok",
-		LogLevel:    "info",
-		CacheSize:   10000,
-		EvalTimeout: 10 * time.Millisecond,
+		Addr:               ":8089",
+		PolicyDir:          "policies",
+		DataFile:           "data/prod.json",
+		AuditDB:            "cerberus.db",
+		AuditRetentionDays: 30,
+		AdminToken:         "tok",
+		LogLevel:           "info",
+		CacheSize:          10000,
+		EvalTimeout:        10 * time.Millisecond,
 	}
 	if c != want {
 		t.Fatalf("got %+v, want %+v", c, want)

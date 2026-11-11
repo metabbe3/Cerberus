@@ -1,9 +1,17 @@
 package audit
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -327,3 +335,225 @@ func TestLogger_QueryFilters(t *testing.T) {
 		t.Errorf("audit: Query() len = %d, want 3", len(evs))
 	}
 }
+
+// Sprint 2B - 1. Masking at-rest: secrets never land on disk
+func TestLogger_MaskingAtRest(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "audit.db")
+	ctx := context.Background()
+
+	l, err := Open(ctx, dbPath, Options{
+		BatchSize:  1,
+		FlushEvery: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	secretKey := "sk-abc1234567890def"
+	l.Emit(Event{
+		Stage:    "tool",
+		KeyID:    "k-open",
+		Subject:  "bash",
+		Decision: "allow",
+		RuleID:   "ai.tool.allow",
+		Reason:   "ok",
+		Args: map[string]any{
+			"cmd":        fmt.Sprintf("use %s to authenticate", secretKey),
+			"auth_token": secretKey,
+		},
+	})
+
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// 1. Verify secrets never landed in SQLite files on disk
+	entries, err := os.ReadDir(tmpDir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	for _, e := range entries {
+		raw, err := os.ReadFile(filepath.Join(tmpDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		if bytes.Contains(raw, []byte(secretKey)) {
+			t.Fatalf("secret leaked at-rest in %s: found raw secret %s", e.Name(), secretKey)
+		}
+	}
+
+	// 2. Query audit and verify returned value is [REDACTED]
+	l2, err := Open(ctx, dbPath, Options{})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = l2.Close() }()
+
+	evs, err := l2.Query(ctx, Filter{})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(evs) != 1 {
+		t.Fatalf("len(evs) = %d, want 1", len(evs))
+	}
+	cmdVal, _ := evs[0].Args["cmd"].(string)
+	if cmdVal != "use [REDACTED] to authenticate" {
+		t.Fatalf("args.cmd = %q, want %q", cmdVal, "use [REDACTED] to authenticate")
+	}
+	tokenVal, _ := evs[0].Args["auth_token"].(string)
+	if tokenVal != "[REDACTED]" {
+		t.Fatalf("args.auth_token = %q, want [REDACTED]", tokenVal)
+	}
+}
+
+// Sprint 2B - 2. Rotation & disk cap: daily partition audit-YYYYMMDD.db + prune >N days
+func TestLogger_DailyPartitionAndPruning(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "audit.db")
+	ctx := context.Background()
+
+	l, err := Open(ctx, dbPath, Options{
+		BatchSize:     1,
+		FlushEvery:    10 * time.Millisecond,
+		RetentionDays: 7, // 7 days retention
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	now := time.Now().UTC()
+	oldTime := now.AddDate(0, 0, -10) // 10 days ago (past retention limit)
+
+	// Emit one event today
+	l.Emit(Event{
+		Time:     now,
+		Stage:    "llm",
+		Decision: "allow",
+		RuleID:   "rule.today",
+	})
+
+	// Emit one event 10 days ago
+	l.Emit(Event{
+		Time:     oldTime,
+		Stage:    "llm",
+		Decision: "allow",
+		RuleID:   "rule.old",
+	})
+
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	todayFileName := fmt.Sprintf("audit-%s.db", now.Format("20060102"))
+	oldFileName := fmt.Sprintf("audit-%s.db", oldTime.Format("20060102"))
+
+	// Check both files exist before pruning
+	if _, err := os.Stat(filepath.Join(tmpDir, todayFileName)); err != nil {
+		t.Fatalf("expected today's file %s to exist: %v", todayFileName, err)
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, oldFileName)); err != nil {
+		t.Fatalf("expected old file %s to exist: %v", oldFileName, err)
+	}
+
+	// Trigger prune
+	l2, err := Open(ctx, dbPath, Options{RetentionDays: 7})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if err := l2.Prune(now); err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	defer func() { _ = l2.Close() }()
+
+	// Old file should be pruned, today's file should remain
+	if _, err := os.Stat(filepath.Join(tmpDir, oldFileName)); !os.IsNotExist(err) {
+		t.Fatalf("expected old file %s to be pruned", oldFileName)
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, todayFileName)); err != nil {
+		t.Fatalf("expected today's file %s to remain: %v", todayFileName, err)
+	}
+}
+
+// Sprint 2B - 3. Ship-out: POST batch JSON lines (fire-and-forget, drop when full)
+func TestLogger_ShipOut(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "audit.db")
+	ctx := context.Background()
+
+	var receivedLines []string
+	var mu sync.Mutex
+
+	// Mock server receiving ship-out JSON lines
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		mu.Lock()
+		lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+		for _, line := range lines {
+			if strings.TrimSpace(line) != "" {
+				receivedLines = append(receivedLines, line)
+			}
+		}
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	l, err := Open(ctx, dbPath, Options{
+		BatchSize:  5,
+		FlushEvery: 50 * time.Millisecond,
+		ShipURL:    ts.URL,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	for i := range 10 {
+		l.Emit(Event{
+			Stage:    "tool",
+			KeyID:    fmt.Sprintf("k-%d", i),
+			Decision: "allow",
+			RuleID:   "ai.tool.allow",
+		})
+	}
+
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Give a moment for asynchronous post to finish
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		count := len(receivedLines)
+		mu.Unlock()
+		if count >= 10 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	mu.Lock()
+	count := len(receivedLines)
+	mu.Unlock()
+	if count < 10 {
+		t.Fatalf("received %d shipped events, want at least 10", count)
+	}
+
+	// Verify each line is valid JSON
+	mu.Lock()
+	firstLine := receivedLines[0]
+	mu.Unlock()
+	var ev Event
+	if err := json.Unmarshal([]byte(firstLine), &ev); err != nil {
+		t.Fatalf("line is not valid JSON: %v", err)
+	}
+}
+

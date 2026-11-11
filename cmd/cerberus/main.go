@@ -18,6 +18,7 @@ import (
 	"github.com/metabbe3/cerberus/internal/audit"
 	"github.com/metabbe3/cerberus/internal/config"
 	"github.com/metabbe3/cerberus/internal/engine"
+	"github.com/metabbe3/cerberus/internal/masking"
 	"github.com/metabbe3/cerberus/internal/policy"
 	"github.com/metabbe3/cerberus/internal/server"
 )
@@ -81,7 +82,16 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("cerberus: load policy: %w", err)
 	}
-	auditLog, err := audit.Open(ctx, cfg.AuditDB, audit.Options{})
+	auditLog, err := audit.Open(ctx, cfg.AuditDB, audit.Options{
+		RetentionDays: cfg.AuditRetentionDays,
+		ShipURL:       cfg.ShipURL,
+		MaskRulesFunc: func(keyID string) []masking.Rule {
+			if snap := store.Current(); snap != nil {
+				return snap.Maskers[keyID]
+			}
+			return nil
+		},
+	})
 	if err != nil {
 		return fmt.Errorf("cerberus: open audit db %s: %w", cfg.AuditDB, err)
 	}

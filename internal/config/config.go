@@ -14,14 +14,16 @@ import (
 // Config is the resolved runtime configuration. AdminToken must be non-empty
 // or Load returns an error (required secret fails startup, CONVENTIONS.md).
 type Config struct {
-	Addr        string
-	PolicyDir   string
-	DataFile    string
-	AuditDB     string
-	AdminToken  string
-	LogLevel    string
-	CacheSize   int
-	EvalTimeout time.Duration
+	Addr               string
+	PolicyDir          string
+	DataFile           string
+	AuditDB            string
+	AuditRetentionDays int
+	ShipURL            string
+	AdminToken         string
+	LogLevel           string
+	CacheSize          int
+	EvalTimeout        time.Duration
 }
 
 // Load resolves env (via getenv) then flags (args, os.Args[1:] style). Flag >
@@ -35,15 +37,21 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	retentionDays, err := envInt(getenv, "CERBERUS_AUDIT_RETENTION_DAYS", 30)
+	if err != nil {
+		return Config{}, err
+	}
 	c := Config{
-		Addr:        firstNonEmpty(getenv("CERBERUS_ADDR"), ":8089"),
-		PolicyDir:   firstNonEmpty(getenv("CERBERUS_POLICY_DIR"), "policies"),
-		DataFile:    firstNonEmpty(getenv("CERBERUS_DATA_FILE"), "data/prod.json"),
-		AuditDB:     firstNonEmpty(getenv("CERBERUS_AUDIT_DB"), "cerberus.db"),
-		AdminToken:  getenv("CERBERUS_ADMIN_TOKEN"),
-		LogLevel:    firstNonEmpty(getenv("CERBERUS_LOG_LEVEL"), "info"),
-		CacheSize:   cacheSize,
-		EvalTimeout: evalTimeout,
+		Addr:               firstNonEmpty(getenv("CERBERUS_ADDR"), ":8089"),
+		PolicyDir:          firstNonEmpty(getenv("CERBERUS_POLICY_DIR"), "policies"),
+		DataFile:           firstNonEmpty(getenv("CERBERUS_DATA_FILE"), "data/prod.json"),
+		AuditDB:            firstNonEmpty(getenv("CERBERUS_AUDIT_DB"), "cerberus.db"),
+		AuditRetentionDays: retentionDays,
+		ShipURL:            firstNonEmpty(getenv("CERBERUS_DECISION_LOG_SHIP_URL"), getenv("CERBERUS_SHIP_URL")),
+		AdminToken:         getenv("CERBERUS_ADMIN_TOKEN"),
+		LogLevel:           firstNonEmpty(getenv("CERBERUS_LOG_LEVEL"), "info"),
+		CacheSize:          cacheSize,
+		EvalTimeout:        evalTimeout,
 	}
 
 	fs := flag.NewFlagSet("cerberus", flag.ContinueOnError)
@@ -51,6 +59,8 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	fs.StringVar(&c.PolicyDir, "policy-dir", c.PolicyDir, "Rego bundle directory ($CERBERUS_POLICY_DIR)")
 	fs.StringVar(&c.DataFile, "data-file", c.DataFile, "policy data JSON ($CERBERUS_DATA_FILE)")
 	fs.StringVar(&c.AuditDB, "audit-db", c.AuditDB, "audit SQLite path ($CERBERUS_AUDIT_DB)")
+	fs.IntVar(&c.AuditRetentionDays, "audit-retention-days", c.AuditRetentionDays, "days to retain daily audit SQLite logs ($CERBERUS_AUDIT_RETENTION_DAYS)")
+	fs.StringVar(&c.ShipURL, "ship-url", c.ShipURL, "endpoint for shipping decision logs ($CERBERUS_DECISION_LOG_SHIP_URL)")
 	// No -admin-token flag: a secret on argv is readable by any local user via
 	// ps or /proc/<pid>/cmdline. The token comes from the environment only.
 	fs.StringVar(&c.LogLevel, "log-level", c.LogLevel, "debug|info|warn|error ($CERBERUS_LOG_LEVEL)")

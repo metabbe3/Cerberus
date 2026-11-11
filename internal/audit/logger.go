@@ -1,13 +1,16 @@
 package audit
 
 import (
+	"bytes"
 	"context"
-	"database/sql"
+	"encoding/json"
 	"log/slog"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/metabbe3/cerberus/internal/masking"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -18,40 +21,51 @@ var Dropped = promauto.NewCounter(prometheus.CounterOpts{
 	Help: "Audit events dropped because the channel buffer was full.",
 })
 
-// Options configures a Logger. Zero values take the defaults 4096, 256,
-// 200ms, 1000.
+// ShipDropCount counts events discarded by the shipper because the shipper queue was full.
+var ShipDropCount = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "cerberus_ship_drops_total",
+	Help: "Audit events dropped by the shipper because the ship queue was full.",
+})
+
+// Options configures a Logger.
 type Options struct {
-	ChanSize   int
-	BatchSize  int
-	FlushEvery time.Duration
-	RingSize   int
+	ChanSize      int
+	BatchSize     int
+	FlushEvery    time.Duration
+	RingSize      int
+	RetentionDays int                                // SQLite daily log retention in days (default 30)
+	ShipURL       string                             // Remote JSON-lines endpoint for decision logs (optional)
+	MaskRules     []masking.Rule                     // Extra masking rules applied before persist
+	MaskRulesFunc func(keyID string) []masking.Rule // Dynamic per-key masking rules lookup
 }
 
-const subBuffer = 64 // per-subscriber buffer; slow subscriber drops events
+const (
+	subBuffer  = 64   // per-subscriber buffer; slow subscriber drops events
+	shipBuffer = 1024 // shipper buffer; drops events when remote is slow
+)
 
 // Logger batches Events to SQLite on one background goroutine; that writer
 // also maintains the in-memory ring and subscriber fan-out, so Emit stays
 // lock-free (hot-path constraint, ADR-0001).
 type Logger struct {
-	db   *sql.DB
-	opts Options
-	ch   chan Event
-	seq  atomic.Int64
-
-	mu     sync.Mutex
-	ring   *ring
-	subs   map[int]chan Event
-	nextID int
-
+	mgr       *dbManager
+	opts      Options
+	ch        chan Event
+	shipCh    chan Event
+	seq       atomic.Int64
+	mu        sync.Mutex
+	ring      *ring
+	subs      map[int]chan Event
+	nextID    int
+	maskFn    func(string) []masking.Rule
 	stop      chan struct{}
 	closeOnce sync.Once
 	done      chan struct{}
+	shipDone  chan struct{}
 }
 
-// Open creates (or reopens) the SQLite database at dbPath, enables WAL, and
-// starts the single writer goroutine. The goroutine stops only via Close: ctx
-// (a signal context) is accepted for signature compatibility but ignored, so
-// SIGTERM shutdown still flushes pending events.
+// Open creates (or reopens) the partitioned SQLite logs at dbPath and starts
+// the background writer and shipper goroutines.
 func Open(ctx context.Context, dbPath string, opts Options) (*Logger, error) {
 	if opts.ChanSize <= 0 {
 		opts.ChanSize = 4096
@@ -65,35 +79,56 @@ func Open(ctx context.Context, dbPath string, opts Options) (*Logger, error) {
 	if opts.RingSize <= 0 {
 		opts.RingSize = 1000
 	}
+	if opts.RetentionDays <= 0 {
+		opts.RetentionDays = 30
+	}
 
-	db, err := openDB(dbPath)
+	mgr, err := newDBManager(dbPath, opts.RetentionDays)
 	if err != nil {
 		return nil, err
 	}
-	maxID, err := maxEventID(context.Background(), db)
+
+	maxID, err := mgr.maxID(context.Background())
 	if err != nil {
-		_ = db.Close()
+		_ = mgr.close()
 		return nil, err
 	}
+
 	l := &Logger{
-		db:   db,
-		opts: opts,
-		ch:   make(chan Event, opts.ChanSize),
-		ring: newRing(opts.RingSize),
-		subs: make(map[int]chan Event),
-		stop: make(chan struct{}),
-		done: make(chan struct{}),
+		mgr:    mgr,
+		opts:   opts,
+		ch:     make(chan Event, opts.ChanSize),
+		ring:   newRing(opts.RingSize),
+		subs:   make(map[int]chan Event),
+		stop:   make(chan struct{}),
+		done:   make(chan struct{}),
+		maskFn: opts.MaskRulesFunc,
 	}
 	l.seq.Store(maxID)
+
+	if opts.ShipURL != "" {
+		l.shipCh = make(chan Event, shipBuffer)
+		l.shipDone = make(chan struct{})
+		go l.runShipper()
+	}
+
 	go l.run(ctx)
 	return l, nil
 }
 
-// Emit hands ev to the writer without blocking and without taking Logger.mu:
-// only a non-blocking channel send happens here. The writer goroutine updates
-// the ring and fans out to subscribers, so decisions on the Engine.Decide hot
-// path never serialize behind Recent, Subscribe or a slow SSE fan-out. When
-// the channel is full the event is dropped and Dropped increments.
+// SetMaskRulesFunc updates the dynamic per-key masking rules function.
+func (l *Logger) SetMaskRulesFunc(fn func(keyID string) []masking.Rule) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.maskFn = fn
+}
+
+// Prune triggers pruning of daily partitions older than RetentionDays.
+func (l *Logger) Prune(now time.Time) error {
+	return l.mgr.prune(now)
+}
+
+// Emit hands ev to the writer without blocking and without taking Logger.mu.
 func (l *Logger) Emit(ev Event) {
 	if ev.Time.IsZero() {
 		ev.Time = time.Now()
@@ -107,17 +142,23 @@ func (l *Logger) Emit(ev Event) {
 	default:
 		Dropped.Inc()
 	}
+
+	// Ship-out: fire-and-forget, non-blocking, drop when full
+	if l.shipCh != nil {
+		select {
+		case l.shipCh <- ev:
+		default:
+			ShipDropCount.Inc()
+		}
+	}
 }
 
-// publish records ev in the ring and delivers it to every subscriber. Called
-// only from the writer goroutine. The mu round-trip is fine here: this is the
-// single writer, off the request path.
 func (l *Logger) publish(ev Event) {
 	l.mu.Lock()
 	l.ring.add(ev)
 	for _, ch := range l.subs {
 		select {
-		case ch <- ev: // buffered 64; slow subscriber drops
+		case ch <- ev:
 		default:
 		}
 	}
@@ -131,8 +172,7 @@ func (l *Logger) Recent(n int) []Event {
 	return l.ring.recent(n)
 }
 
-// Subscribe registers a buffered-64 channel for every emitted event. A slow
-// subscriber drops events rather than blocking Emit. cancel closes the channel.
+// Subscribe registers a buffered-64 channel for every emitted event.
 func (l *Logger) Subscribe() (ch <-chan Event, cancel func()) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -150,8 +190,7 @@ func (l *Logger) Subscribe() (ch <-chan Event, cancel func()) {
 	}
 }
 
-// Filter narrows a Query. Zero fields are ignored; Limit defaults to 100 and
-// caps at 1000.
+// Filter narrows a Query.
 type Filter struct {
 	KeyID    string
 	Stage    string
@@ -161,14 +200,14 @@ type Filter struct {
 	Limit    int
 }
 
-// Query runs a filtered, newest-first read against SQLite.
+// Query runs a filtered read against SQLite daily files, newest first.
 func (l *Logger) Query(ctx context.Context, f Filter) ([]Event, error) {
-	return queryEvents(ctx, l.db, f)
+	return l.mgr.query(ctx, f)
 }
 
 // Erase masks out args for the given decision event ID in SQLite and the ring buffer.
 func (l *Logger) Erase(ctx context.Context, id int64) (bool, error) {
-	ok, err := eraseEvent(ctx, l.db, id)
+	ok, err := l.mgr.erase(ctx, id)
 	if err != nil {
 		return false, err
 	}
@@ -190,11 +229,13 @@ func (l *Logger) QueueDepth() int {
 	return len(l.ch)
 }
 
-// Close flushes the pending batch, stops the writer goroutine, closes any
-// remaining subscriber channels, and closes the DB. Safe to call once.
+// Close flushes pending batches, stops writer & shipper, and closes SQLite.
 func (l *Logger) Close() error {
 	l.closeOnce.Do(func() { close(l.stop) })
 	<-l.done
+	if l.shipDone != nil {
+		<-l.shipDone
+	}
 
 	l.mu.Lock()
 	for id, ch := range l.subs {
@@ -203,14 +244,9 @@ func (l *Logger) Close() error {
 	}
 	l.mu.Unlock()
 
-	return l.db.Close()
+	return l.mgr.close()
 }
 
-// run is the single writer: it publishes each event to the ring and
-// subscribers, accumulates a batch, flushing on size or on the FlushEvery
-// tick, and drains-and-flushes on stop. It deliberately ignores the caller's
-// ctx: a cancelled ctx would fail the final insert and lose the pending batch
-// on every graceful shutdown.
 func (l *Logger) run(context.Context) {
 	defer close(l.done)
 	batch := make([]Event, 0, l.opts.BatchSize)
@@ -218,14 +254,21 @@ func (l *Logger) run(context.Context) {
 		if len(batch) == 0 {
 			return
 		}
-		// Background, not the caller's ctx: shutdown must still persist.
-		if err := insertBatch(context.Background(), l.db, batch); err != nil {
+		l.mu.Lock()
+		maskFn := l.maskFn
+		l.mu.Unlock()
+
+		if err := l.mgr.insertBatch(context.Background(), batch, maskFn, l.opts.MaskRules); err != nil {
 			slog.Error("audit: batch insert", "error", err)
 		}
 		batch = batch[:0]
 	}
 	ticker := time.NewTicker(l.opts.FlushEvery)
 	defer ticker.Stop()
+
+	// Hourly ticker for daily prune
+	pruneTicker := time.NewTicker(time.Hour)
+	defer pruneTicker.Stop()
 
 	for {
 		select {
@@ -242,11 +285,84 @@ func (l *Logger) run(context.Context) {
 			}
 		case <-ticker.C:
 			flush()
+		case now := <-pruneTicker.C:
+			_ = l.mgr.prune(now)
 		case ev := <-l.ch:
 			l.publish(ev)
 			batch = append(batch, ev)
 			if len(batch) >= l.opts.BatchSize {
 				flush()
+			}
+		}
+	}
+}
+
+// runShipper runs the background worker that POSTs batch JSON lines to ship_url with backoff.
+func (l *Logger) runShipper() {
+	defer close(l.shipDone)
+	client := &http.Client{Timeout: 3 * time.Second}
+	batch := make([]Event, 0, l.opts.BatchSize)
+
+	sendBatch := func() {
+		if len(batch) == 0 {
+			return
+		}
+
+		var buf bytes.Buffer
+		for _, ev := range batch {
+			b, err := json.Marshal(ev)
+			if err == nil {
+				buf.Write(b)
+				buf.WriteByte('\n')
+			}
+		}
+		data := buf.Bytes()
+		batch = batch[:0]
+
+		// Post with exponential backoff (up to 3 retries, capped delay)
+		go func(body []byte) {
+			backoff := 50 * time.Millisecond
+			for attempt := 0; attempt < 3; attempt++ {
+				req, err := http.NewRequest(http.MethodPost, l.opts.ShipURL, bytes.NewReader(body))
+				if err != nil {
+					return
+				}
+				req.Header.Set("Content-Type", "application/x-ndjson")
+				resp, err := client.Do(req)
+				if err == nil {
+					_ = resp.Body.Close()
+					if resp.StatusCode < 300 {
+						return
+					}
+				}
+				time.Sleep(backoff)
+				backoff *= 2
+			}
+			slog.Warn("audit: ship-out failed after retries", "url", l.opts.ShipURL)
+		}(data)
+	}
+
+	ticker := time.NewTicker(l.opts.FlushEvery)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-l.stop:
+			for {
+				select {
+				case ev := <-l.shipCh:
+					batch = append(batch, ev)
+				default:
+					sendBatch()
+					return
+				}
+			}
+		case <-ticker.C:
+			sendBatch()
+		case ev := <-l.shipCh:
+			batch = append(batch, ev)
+			if len(batch) >= l.opts.BatchSize {
+				sendBatch()
 			}
 		}
 	}
