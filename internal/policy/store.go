@@ -42,6 +42,20 @@ func (s *Store) VerificationKey() ed25519.PublicKey {
 	return s.verificationKey
 }
 
+// CurrentBundle returns the active bundle tar.gz bytes, or nil if none loaded.
+func (s *Store) CurrentBundle() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.currentBundle
+}
+
+// SetCurrentBundle updates the stored active bundle tar.gz bytes.
+func (s *Store) SetCurrentBundle(b []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.currentBundle = b
+}
+
 // OnSwap registers f to run after each successful snapshot swap (Reload,
 // ReplaceData). Call before serving traffic.
 func (s *Store) OnSwap(f func(*Snapshot)) { s.onSwap = f }

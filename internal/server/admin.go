@@ -186,6 +186,10 @@ func (s *Server) queryAudit(w http.ResponseWriter, r *http.Request) {
 		}
 		f.Limit = n
 	}
+	if q.Get("cluster") == "true" {
+		s.queryClusterAudit(w, r, f)
+		return
+	}
 	events, err := s.deps.Audit.Query(r.Context(), f)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -295,6 +299,25 @@ func (s *Server) uploadBundle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, epochResponse{Epoch: snap.Epoch})
+}
+
+// getBundle handles GET /v1/admin/bundle for exporting the active bundle.tar.gz.
+func (s *Server) getBundle(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Store == nil {
+		writeErr(w, http.StatusServiceUnavailable, "store unavailable")
+		return
+	}
+	b := s.deps.Store.CurrentBundle()
+	if len(b) == 0 {
+		writeErr(w, http.StatusNotFound, "no active bundle")
+		return
+	}
+	w.Header().Set("Content-Type", "application/gzip")
+	if snap := s.deps.Store.Current(); snap != nil {
+		w.Header().Set("X-Cerberus-Revision", snap.Revision)
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(b)
 }
 
 // rollbackBundle handles POST /v1/admin/bundle/rollback.

@@ -25,6 +25,7 @@ type Deps struct {
 	Store      *policy.Store
 	Audit      *audit.Logger
 	Limiter    *ratelimit.Limiter
+	Cluster    ClusterConfig
 	AdminToken string
 	Version    string
 }
@@ -37,6 +38,7 @@ type Server struct {
 
 	limiter      *ratelimit.Limiter
 	breakGlass   *breakGlassManager
+	cluster      *ClusterManager
 	adminLimiter *rateLimiter
 	queryLimiter *rateLimiter
 
@@ -96,6 +98,7 @@ func New(d Deps) *Server {
 		adminLimiter: newRateLimiter(1000), // generous general admin limiter
 		queryLimiter: newRateLimiter(10),   // strict 10/min for POST /v1/query
 	}
+	s.cluster = newClusterManager(s, d.Cluster)
 	s.streamsCtx, s.streamsCancel = context.WithCancel(context.Background())
 
 	mux := http.NewServeMux()
@@ -117,9 +120,11 @@ func New(d Deps) *Server {
 	mux.HandleFunc("GET /v1/status", s.getStatus)
 	mux.HandleFunc("GET /v1/admin/status", s.admin(s.getStatus))
 	mux.HandleFunc("POST /v1/admin/decisions/erase", s.admin(s.eraseDecision))
+	mux.HandleFunc("GET /v1/admin/bundle", s.admin(s.getBundle))
 	mux.HandleFunc("POST /v1/admin/bundle", s.admin(s.uploadBundle))
 	mux.HandleFunc("PUT /v1/admin/bundle", s.admin(s.uploadBundle))
 	mux.HandleFunc("POST /v1/admin/bundle/rollback", s.admin(s.rollbackBundle))
+	mux.HandleFunc("POST /v1/internal/sync", s.admin(s.handleInternalSync))
 	mux.HandleFunc("POST /v1/admin/break-glass", s.admin(s.postBreakGlass))
 	mux.HandleFunc("GET /v1/admin/break-glass", s.admin(s.getBreakGlass))
 	mux.HandleFunc("DELETE /v1/admin/break-glass", s.admin(s.deleteBreakGlass))
@@ -143,7 +148,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // http.Server.RegisterOnShutdown: SSE handlers otherwise end only on client
 // disconnect or audit-logger close (which main runs after Shutdown), so one
 // parked dashboard holds graceful shutdown out to its full drain deadline.
-func (s *Server) ShutdownStreams() { s.streamsCancel() }
+func (s *Server) ShutdownStreams() {
+	if s.cluster != nil {
+		s.cluster.Close()
+	}
+	s.streamsCancel()
+}
 
 // healthz is an unconditional liveness answer.
 func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
