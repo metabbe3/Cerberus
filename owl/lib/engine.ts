@@ -96,14 +96,17 @@ export async function validatePolicy(
 }
 
 // Raw upstream response for the SSE proxy — the route streams res.body
-// straight to the client (no buffering layer of our own).
-export async function openEventStream(): Promise<Response> {
+// straight to the client (no buffering layer of our own). The caller's
+// abort signal (the browser disconnect) must reach the upstream fetch, or
+// every disconnected client leaves a live subscriber on the engine.
+export async function openEventStream(signal?: AbortSignal): Promise<Response> {
   const { url, token } = engineEnv();
   let res: Response;
   try {
     res = await fetch(`${url}/v1/events`, {
       headers: { Authorization: `Bearer ${token}` },
       cache: "no-store",
+      signal,
     });
   } catch {
     throw new EngineError(502, "Engine unreachable");

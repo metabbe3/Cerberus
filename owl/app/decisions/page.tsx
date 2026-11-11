@@ -18,7 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { useAudit } from "@/lib/queries";
+import { mergeEvents, useAudit } from "@/lib/queries";
 import type { AuditEvent } from "@/lib/schema";
 
 export default function DecisionsPage() {
@@ -48,7 +48,7 @@ export default function DecisionsPage() {
       (decision === "all" || e.decision === decision) &&
       (!keyId || e.key_id.includes(keyId)),
   );
-  const events: AuditEvent[] = [...shownLive].reverse().concat(history.data ?? []).slice(0, 200);
+  const events = mergeEvents(shownLive, history.data ?? []);
 
   const createRule = (ev: AuditEvent) => {
     if (ev.stage === "tool") {

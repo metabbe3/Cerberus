@@ -162,6 +162,10 @@ masking, models/budget), live decision stream, Rego viewer + validate, settings.
 The browser never talks to the engine: Owl proxies every call through its own
 route handlers, so the admin token lives only in Owl's server env.
 
+**Owl has no authentication of its own** — every visitor is an admin through
+the proxy. Keep it on loopback or a private network and put an authenticating
+reverse proxy in front before exposing it; compose binds it to `127.0.0.1`.
+
 - **Env** (in `owl/.env.local`, gitignored — see `owl/.env.example`):
   `CERBERUS_URL` (default `http://localhost:8089`) and `CERBERUS_ADMIN_TOKEN`
   (no token → every page shows "Engine unreachable").

@@ -23,6 +23,12 @@ test("edit an agent and save — epoch increments; fail-closed flip shows the re
 
   await page.goto("/agents");
   await page.getByRole("row").filter({ hasText: "hardika-gutama" }).click();
+  await page.getByRole("tab", { name: "Constraints" }).click();
+  await page.getByPlaceholder("tool_call").fill("read_file");
+  await page.getByPlaceholder("argument").fill("path");
+  await page.getByRole("button", { name: "Add constraint" }).click();
+  await expect(page.getByText("bare-array allowlist")).toBeVisible();
+
   await page.getByRole("tab", { name: "Models & Budget" }).click();
   const budget = page.locator('label:has-text("Budget limit") input');
   await budget.fill("77");
@@ -37,6 +43,13 @@ test("edit an agent and save — epoch increments; fail-closed flip shows the re
   await expect(dialog).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
   await expect(dialog).toBeHidden();
+  // Cancelling must be the no-op; accepting the red confirm is what drafts
+  // the flip — the switch only moves once "Yes, deny unknown" is clicked.
+  await page.getByRole("switch").nth(1).click();
+  await expect(dialog).toBeVisible();
+  await page.getByRole("button", { name: "Yes, deny unknown" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole("switch").nth(1)).not.toBeChecked();
 });
 
 test("a fired decide call appears in the decision stream within 5s", async ({

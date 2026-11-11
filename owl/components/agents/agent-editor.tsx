@@ -257,8 +257,44 @@ function ConstraintsEditor({
   value: NonNullable<Agent["tool_argument_constraints"]>;
   onChange: (v: NonNullable<Agent["tool_argument_constraints"]>) => void;
 }) {
+  const [newTool, setNewTool] = useState("");
+  const [newArg, setNewArg] = useState("");
+  const add = () => {
+    const tool = newTool.trim();
+    const arg = newArg.trim();
+    if (!tool || !arg) return;
+    // New constraints start as the bare-array form; ConstraintRow's editor
+    // takes it from there.
+    onChange({ ...value, [tool]: { ...(value[tool] ?? {}), [arg]: [] } } as typeof value);
+    setNewTool("");
+    setNewArg("");
+  };
   return (
     <div className="space-y-4">
+      <div className="flex items-end gap-2">
+        <label className="space-y-1.5">
+          <span className="text-sm font-medium">Tool</span>
+          <Input
+            className="font-mono w-52"
+            placeholder="tool_call"
+            value={newTool}
+            onChange={(e) => setNewTool(e.target.value)}
+          />
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-sm font-medium">Argument</span>
+          <Input
+            className="font-mono w-52"
+            placeholder="argument"
+            value={newArg}
+            onChange={(e) => setNewArg(e.target.value)}
+          />
+        </label>
+        <Button variant="outline" size="sm" onClick={add} disabled={!newTool.trim() || !newArg.trim()}>
+          <Plus />
+          Add constraint
+        </Button>
+      </div>
       {Object.keys(value).length === 0 ? (
         <p className="text-sm text-muted-foreground">
           No constraints — every argument of every tool is unconstrained.

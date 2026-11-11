@@ -11,7 +11,7 @@ export default defineConfig({
   webServer: [
     {
       command:
-        "go build -o bin/cerberus ./cmd/cerberus && cp data/prod.json /tmp/cerberus-e2e-data.json && CERBERUS_ADMIN_TOKEN=e2e CERBERUS_DATA_FILE=/tmp/cerberus-e2e-data.json bin/cerberus",
+        "go build -o bin/cerberus ./cmd/cerberus && cp data/prod.json /tmp/cerberus-e2e-data.json && rm -f /tmp/cerberus-e2e-audit.db && CERBERUS_ADMIN_TOKEN=e2e CERBERUS_DATA_FILE=/tmp/cerberus-e2e-data.json CERBERUS_AUDIT_DB=/tmp/cerberus-e2e-audit.db bin/cerberus",
       cwd: "..",
       port: 8089,
       timeout: 30_000,

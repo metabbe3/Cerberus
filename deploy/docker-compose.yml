@@ -27,7 +27,10 @@ services:
       context: ../owl
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      # Loopback only: Owl has NO authentication of its own — anyone who can
+      # reach it can rewrite the gateway's policy through the proxy. Put an
+      # authenticating reverse proxy in front before publishing it.
+      - "127.0.0.1:3000:3000"
     environment:
       CERBERUS_URL: http://cerberus:8089
       CERBERUS_ADMIN_TOKEN: ${CERBERUS_ADMIN_TOKEN:?set CERBERUS_ADMIN_TOKEN}

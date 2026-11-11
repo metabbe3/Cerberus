@@ -69,3 +69,21 @@ export function useSaveAgent() {
     },
   });
 }
+
+// Live + history, newest-first. The engine replays its last-50 ring on every
+// (re)connect and the history page already contains those rows, so duplicates
+// are dropped by id — first occurrence wins (live rows sit ahead of history).
+export function mergeEvents(
+  live: AuditEvent[],
+  history: AuditEvent[],
+  cap = 200,
+): AuditEvent[] {
+  const seen = new Set<number>();
+  const out: AuditEvent[] = [];
+  for (const e of [...live].reverse().concat(history)) {
+    if (seen.has(e.id)) continue;
+    seen.add(e.id);
+    out.push(e);
+  }
+  return out.slice(0, cap);
+}
