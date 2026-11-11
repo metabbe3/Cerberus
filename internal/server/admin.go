@@ -434,6 +434,14 @@ func (s *Server) queryAudit(w http.ResponseWriter, r *http.Request) {
 		}
 		f.Since = t
 	}
+	if v := q.Get("until"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid until (want RFC3339)")
+			return
+		}
+		f.Until = t
+	}
 	if v := q.Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 {
@@ -452,6 +460,51 @@ func (s *Server) queryAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, events)
+}
+
+// timeseriesHandler aggregates decisions into fixed buckets between since and
+// until (exclusive; until defaults to now) — the shape dashboards chart
+// natively, instead of shipping raw events client-side. Buckets are capped at
+// 500 and default to 48 (e.g. 24h → 30m slices).
+func (s *Server) timeseriesHandler(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	f := audit.Filter{
+		KeyID:    q.Get("key_id"),
+		Stage:    q.Get("stage"),
+		Decision: q.Get("decision"),
+		RuleID:   q.Get("rule_id"),
+	}
+	if v := q.Get("since"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid since (want RFC3339)")
+			return
+		}
+		f.Since = t
+	}
+	if v := q.Get("until"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid until (want RFC3339)")
+			return
+		}
+		f.Until = t
+	}
+	buckets := 48
+	if v := q.Get("buckets"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 500 {
+			writeErr(w, http.StatusBadRequest, "buckets must be 1..500")
+			return
+		}
+		buckets = n
+	}
+	ts, err := s.deps.Audit.Timeseries(r.Context(), f, buckets)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, ts)
 }
 
 type eraseRequest struct {

@@ -570,6 +570,10 @@ func queryEvents(ctx context.Context, db *sql.DB, f Filter) ([]Event, error) {
 		where = append(where, "time >= ?")
 		qargs = append(qargs, f.Since.UnixNano())
 	}
+	if !f.Until.IsZero() {
+		where = append(where, "time < ?")
+		qargs = append(qargs, f.Until.UnixNano())
+	}
 	qargs = append(qargs, limit)
 
 	rows, err := db.QueryContext(ctx,
@@ -685,4 +689,130 @@ func (m *dbManager) getRevision(ctx context.Context, id int64) (*Revision, error
 	}
 	r.Time = time.Unix(0, t).UTC()
 	return &r, nil
+}
+
+// Bucket is one time-slice of a Timeseries result.
+type Bucket struct {
+	BucketNS int64 `json:"bucket_ns"`
+	Allow    int64 `json:"allow"`
+	Deny     int64 `json:"deny"`
+	Total    int64 `json:"total"`
+}
+
+// Timeseries aggregates decision counts into fixed buckets between since and
+// until (until exclusive; zero until = now). Buckets are aligned to the
+// Unix epoch so consecutive queries stitch seamlessly, and the bucket count
+// is capped at 500 so a wide range cannot mint thousands of rows.
+func (l *Logger) Timeseries(ctx context.Context, f Filter, buckets int) ([]Bucket, error) {
+	if buckets <= 0 || buckets > 500 {
+		return nil, fmt.Errorf("audit: buckets must be 1..500")
+	}
+	since := f.Since
+	if since.IsZero() {
+		return nil, fmt.Errorf("audit: timeseries requires since")
+	}
+	until := f.Until
+	if until.IsZero() {
+		until = time.Now()
+	}
+	if !until.After(since) {
+		return nil, fmt.Errorf("audit: until must be after since")
+	}
+	width := until.Sub(since).Nanoseconds() / int64(buckets)
+	if width < 1 {
+		width = 1
+	}
+	rows, err := l.mgr.queryAggregate(ctx, since, until, width, f)
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// queryAggregate runs the grouped COUNT query across the daily files.
+func (m *dbManager) queryAggregate(ctx context.Context, since, until time.Time, widthNS int64, f Filter) ([]Bucket, error) {
+	where := []string{"time >= ?", "time < ?"}
+	qargs := []any{since.UnixNano(), until.UnixNano()}
+	add := func(col, val string) {
+		if val != "" {
+			where = append(where, col+" = ?")
+			qargs = append(qargs, val)
+		}
+	}
+	add("key_id", f.KeyID)
+	add("stage", f.Stage)
+	add("decision", f.Decision)
+	add("rule_id", f.RuleID)
+
+	out := []Bucket{}
+	runOne := func(db *sql.DB) error {
+		if db == nil {
+			return nil
+		}
+		q := "SELECT ((time - ?) / ?) * ? AS b, " +
+			"SUM(CASE WHEN decision = 'allow' THEN 1 ELSE 0 END), COUNT(*) " +
+			"FROM events WHERE " + strings.Join(where, " AND ") +
+			" GROUP BY b ORDER BY b"
+		rows, err := db.QueryContext(ctx, q, append([]any{since.UnixNano(), widthNS, widthNS}, qargs...)...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var b, allows, total int64
+			if err := rows.Scan(&b, &allows, &total); err != nil {
+				return err
+			}
+			out = append(out, Bucket{BucketNS: b, Allow: allows, Deny: total - allows, Total: total})
+		}
+		return rows.Err()
+	}
+	if m.isMemory {
+		if err := runOne(m.dbs["memory"]); err != nil {
+			return nil, fmt.Errorf("audit: timeseries: %w", err)
+		}
+	} else {
+		entries, err := os.ReadDir(m.baseDir)
+		if err != nil {
+			return nil, fmt.Errorf("audit: read dir: %w", err)
+		}
+		var files []string
+		for _, e := range entries {
+			name := e.Name()
+			if strings.HasPrefix(name, "audit-") && strings.HasSuffix(name, ".db") {
+				files = append(files, name)
+			} else if name == filepath.Base(m.origPath) && !strings.HasPrefix(name, "audit-") {
+				files = append(files, name)
+			}
+		}
+		for _, fn := range files {
+			db, err := openSQLite(filepath.Join(m.baseDir, fn))
+			if err != nil {
+				continue // unreadable day file: skip, don't kill the aggregate
+			}
+			if err := runOne(db); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("audit: timeseries: %w", err)
+			}
+			db.Close()
+		}
+	}
+	// merge buckets across daily files (same bucket id can appear in 2 files)
+	merged := map[int64]Bucket{}
+	for _, b := range out {
+		if cur, ok := merged[b.BucketNS]; ok {
+			cur.Allow += b.Allow
+			cur.Deny += b.Deny
+			cur.Total += b.Total
+			merged[b.BucketNS] = cur
+		} else {
+			merged[b.BucketNS] = b
+		}
+	}
+	sorted := make([]Bucket, 0, len(merged))
+	for _, b := range merged {
+		sorted = append(sorted, b)
+	}
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].BucketNS < sorted[j].BucketNS })
+	return sorted, nil
 }

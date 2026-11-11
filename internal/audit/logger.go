@@ -217,13 +217,16 @@ func (l *Logger) Subscribe() (ch <-chan Event, cancel func()) {
 	}
 }
 
-// Filter narrows a Query.
+// Filter narrows a Query. Since/Until bound the window (Until exclusive);
+// both zero = unbounded. Since-only keeps the legacy "everything after"
+// behavior.
 type Filter struct {
 	KeyID    string
 	Stage    string
 	Decision string
 	RuleID   string
 	Since    time.Time
+	Until    time.Time
 	Limit    int
 }
 
