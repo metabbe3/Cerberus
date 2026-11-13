@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -57,6 +58,18 @@ func newTestTap(t *testing.T, upstreamURL string, engine *httptest.Server, dir s
 		engineURL: engineURL,
 		client:    &http.Client{Timeout: 30 * time.Second},
 		st:        newStore(dir, 14),
+	}
+}
+
+// newTap builds a tap server with explicit auth/strict settings.
+func newTap(upstreamURL, engineURL, dir, adminTok string, strict bool) *server {
+	return &server{
+		upstream:  upstreamURL,
+		engineURL: engineURL,
+		client:    &http.Client{Timeout: 30 * time.Second},
+		st:        newStore(dir, 14),
+		adminTok:  adminTok,
+		strict:    strict,
 	}
 }
 
@@ -234,6 +247,112 @@ func TestConcurrentSaves(t *testing.T) {
 	db.QueryRow(`SELECT COUNT(*) FROM turns`).Scan(&n)
 	if n != 20 {
 		t.Fatalf("rows = %d, want 20", n)
+	}
+}
+
+func TestTapEndpointsRequireAuth(t *testing.T) {
+	up := newTestUpstream(t, "json")
+	defer up.Close()
+	srv := newTap(up.URL, "", t.TempDir(), "adm-secret-token", false)
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	// tanpa token -> 401
+	resp, err := http.Get(ts.URL + "/tap/turns")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 401 {
+		t.Fatalf("no-token turns = %d, want 401", resp.StatusCode)
+	}
+	// token salah -> 401
+	resp2, _ := http.Get(ts.URL + "/tap/turns?token=wrong")
+	resp2.Body.Close()
+	if resp2.StatusCode != 401 {
+		t.Fatalf("wrong-token turns = %d, want 401", resp2.StatusCode)
+	}
+	// token benar -> 200
+	resp3, _ := http.Get(ts.URL + "/tap/turns?token=adm-secret-token")
+	resp3.Body.Close()
+	if resp3.StatusCode != 200 {
+		t.Fatalf("good-token turns = %d, want 200", resp3.StatusCode)
+	}
+	// healthz bebas
+	resp4, _ := http.Get(ts.URL + "/tap/healthz")
+	resp4.Body.Close()
+	if resp4.StatusCode != 200 {
+		t.Fatalf("healthz = %d, want 200", resp4.StatusCode)
+	}
+}
+
+func TestStrictDeniesWhenEngineDown(t *testing.T) {
+	up := newTestUpstream(t, "json")
+	defer up.Close()
+	// engine URL yang pasti mati
+	srv := newTap(up.URL, "http://127.0.0.1:1", t.TempDir(), "", true)
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/v1/messages", "application/json",
+		strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 403 {
+		t.Fatalf("strict engine-down = %d, want 403", resp.StatusCode)
+	}
+	// non-strict harus tetap allow (fail-open)
+	srv2 := newTap(up.URL, "http://127.0.0.1:1", t.TempDir(), "", false)
+	ts2 := httptest.NewServer(srv2)
+	defer ts2.Close()
+	resp2, err := http.Post(ts2.URL+"/v1/messages", "application/json",
+		strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != 200 {
+		t.Fatalf("non-strict engine-down = %d, want 200", resp2.StatusCode)
+	}
+}
+
+func TestAtRestMasking(t *testing.T) {
+	in := `{"messages":[{"role":"user","content":"my key sk-AbCdEfGh12345678 and postgres://user:secretpw@db:5432/x plus admin@teknikal.id"}]}`
+	out := maskAtRest(in)
+	if strings.Contains(out, "sk-AbCdEfGh12345678") {
+		t.Fatal("sk- key not masked")
+	}
+	if strings.Contains(out, "secretpw") {
+		t.Fatal("dsn password not masked")
+	}
+	if strings.Contains(out, "admin@teknikal.id") {
+		t.Fatal("email not masked")
+	}
+}
+
+func TestOversizedBodyForwardsFullyButCapturesCapped(t *testing.T) {
+	var gotLen int64
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotLen = int64(len(b))
+		w.Write([]byte(`{}`))
+	}))
+	defer up.Close()
+	srv := newTap(up.URL, "", t.TempDir(), "", false)
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	// body 2.5MB: full forward, capture capped
+	big := strings.Repeat("x", (2<<20)+500_000)
+	resp, err := http.Post(ts.URL+"/v1/messages", "application/json", strings.NewReader(big))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if gotLen != int64(len(big)) {
+		t.Fatalf("forwarded %d bytes, want %d (FULL body must reach upstream)", gotLen, len(big))
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -30,6 +31,28 @@ import (
 )
 
 const maxBody = 2 << 20 // 2MB capture cap per body
+
+// at-rest masking: applied to every persisted payload. Secrets inside
+// prompts/thinking/tool args never reach the tap DB in cleartext.
+type maskRule struct {
+	re   *regexp.Regexp
+	repl string
+}
+
+var atRestMask = []maskRule{
+	{regexp.MustCompile(`sk-[A-Za-z0-9_\-]{8,}`), "sk-[REDACTED]"},
+	{regexp.MustCompile(`(?i)(api[_-]?key|token|password|passwd|secret|authorization)["'\s:=]+[A-Za-z0-9_\-\./+=]{8,}`), "$1=[REDACTED]"},
+	{regexp.MustCompile(`postgres(ql)?://[^\s"']+`), "postgresql://[REDACTED]"},
+	{regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9_\-\./+=]{8,}`), "Bearer [REDACTED]"},
+	{regexp.MustCompile(`\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b`), "[EMAIL-REDACTED]"},
+}
+
+func maskAtRest(s string) string {
+	for _, m := range atRestMask {
+		s = m.re.ReplaceAllString(s, m.repl)
+	}
+	return s
+}
 
 type turnRow struct {
 	KeyID   string          `json:"key_id"`
@@ -129,8 +152,9 @@ func (s *store) save(t turnRow, latencyMS int64, status int) {
 		log.Printf("[tap] store open: %v", err)
 		return
 	}
+	masked := maskAtRest(string(t.Payload))
 	s.insM.Lock()
-	_, err = ins.Exec(time.Now().UTC().Format(time.RFC3339Nano), t.KeyID, t.Model, t.Kind, string(t.Payload), latencyMS, status)
+	_, err = ins.Exec(time.Now().UTC().Format(time.RFC3339Nano), t.KeyID, t.Model, t.Kind, masked, latencyMS, status)
 	s.insM.Unlock()
 	if err != nil {
 		log.Printf("[tap] store insert: %v", err)
@@ -157,7 +181,8 @@ type decideResp struct {
 }
 
 // askEngine calls POST /v1/decide/llm. Returns verdict, allowed.
-func askEngine(engineURL, token, keyID string, body []byte) (decideResp, bool) {
+// strict=true: engine unreachable => NOT allowed (fail-closed).
+func askEngine(engineURL, token, keyID string, body []byte, strict bool) (decideResp, bool) {
 	if engineURL == "" {
 		return decideResp{Decision: "allow"}, true
 	}
@@ -181,6 +206,10 @@ func askEngine(engineURL, token, keyID string, body []byte) (decideResp, bool) {
 	client := &http.Client{Timeout: 4 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
+		if strict {
+			log.Printf("[tap] engine decide unreachable (STRICT: denying): %v", err)
+			return decideResp{Decision: "deny", RuleID: "tap.engine_unreachable_strict"}, false
+		}
 		// Engine unreachable: fail-open for visibility mode, but log loudly.
 		log.Printf("[tap] engine decide unreachable (allowing): %v", err)
 		return decideResp{Decision: "allow", RuleID: "tap.engine_unreachable"}, true
@@ -188,6 +217,9 @@ func askEngine(engineURL, token, keyID string, body []byte) (decideResp, bool) {
 	defer resp.Body.Close()
 	var dr decideResp
 	if err := json.NewDecoder(resp.Body).Decode(&dr); err != nil || dr.Decision == "" {
+		if strict {
+			return decideResp{Decision: "deny", RuleID: "tap.engine_bad_response_strict"}, false
+		}
 		log.Printf("[tap] engine decide decode error (allowing)")
 		return decideResp{Decision: "allow", RuleID: "tap.engine_bad_response"}, true
 	}
@@ -272,6 +304,8 @@ type server struct {
 	upstream  string
 	engineURL string
 	engineTok string
+	strict    bool
+	adminTok  string
 	client    *http.Client
 	st        *store
 }
@@ -280,6 +314,17 @@ func (s *server) handleTap(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/tap/healthz":
 		w.Write([]byte("ok"))
+		return
+	}
+	// Inspection endpoints carry other agents' prompts/thinking — admin-only.
+	if s.adminTok != "" {
+		got := r.Header.Get("Authorization")
+		if got != "Bearer "+s.adminTok && r.URL.Query().Get("token") != s.adminTok {
+			http.Error(w, `{"error":"unauthorized"}`, 401)
+			return
+		}
+	}
+	switch r.URL.Path {
 	case "/tap/turns":
 		limit := 50
 		fmt.Sscanf(r.URL.Query().Get("limit"), "%d", &limit)
@@ -357,15 +402,13 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	start := time.Now()
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
+	// Read FULL body (no cap on the forwarded bytes — capture is capped separately,
+	// but policy MUST see a body whose hash matches what we forward).
+	raw, err := io.ReadAll(r.Body)
 	r.Body.Close()
 	if err != nil {
 		http.Error(w, "read body: "+err.Error(), 400)
 		return
-	}
-	truncated := len(body) > maxBody
-	if truncated {
-		body = body[:maxBody]
 	}
 
 	keyID := r.Header.Get("X-Tap-Key")
@@ -374,22 +417,31 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Enforcement: ask the engine BEFORE forwarding. deny = request dies here.
-	verdict, allowed := askEngine(s.engineURL, s.engineTok, keyID, body)
+	// -strict: engine unreachable => deny (fail-closed). Default: fail-open (visibility mode).
+	verdict, allowed := askEngine(s.engineURL, s.engineTok, keyID, raw, s.strict)
 	if !allowed {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		w.Write([]byte(`{"error":{"type":"tap_blocked","message":"blocked by cerberus policy"}}`))
-		s.st.save(turnRow{KeyID: keyID, Model: modelOf(body), Kind: "blocked", Payload: mustJSON(map[string]any{
+		s.st.save(turnRow{KeyID: keyID, Model: modelOf(raw), Kind: "blocked", Payload: mustJSON(map[string]any{
 			"verdict": verdict, "path": r.URL.Path,
 		})}, time.Since(start).Milliseconds(), 403)
 		return
 	}
 
 	// Capture request (auth headers never persisted — we only store parsed fields).
-	s.st.save(turnRow{KeyID: keyID, Model: modelOf(body), Kind: "request", Payload: sanitizedBody(body, truncated)}, 0, 0)
+	// Oversized bodies: store prefix + tail + hash, and NEVER forward silently past
+	// inspection — the engine already saw the full body above.
+	truncated := len(raw) > maxBody
+	capture := raw
+	if truncated {
+		half := maxBody / 2
+		capture = append(append([]byte{}, raw[:half]...), raw[len(raw)-half:]...)
+	}
+	s.st.save(turnRow{KeyID: keyID, Model: modelOf(raw), Kind: "request", Payload: sanitizedBody(capture, truncated)}, 0, 0)
 
-	// Forward upstream.
-	fwd, _ := http.NewRequestWithContext(r.Context(), r.Method, s.upstream+r.URL.Path, bytes.NewReader(body))
+	// Forward upstream — the FULL body, byte-identical to what was inspected.
+	fwd, _ := http.NewRequestWithContext(r.Context(), r.Method, s.upstream+r.URL.Path, bytes.NewReader(raw))
 	fwd.Header = r.Header.Clone()
 	fwd.Header.Del("X-Tap-Key")
 	resp, err := s.client.Do(fwd)
@@ -401,7 +453,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	isSSE := strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")
 	if isSSE {
-		s.proxySSE(w, resp, keyID, modelOf(body), start)
+		s.proxySSE(w, resp, keyID, modelOf(raw), start)
 		return
 	}
 
@@ -416,7 +468,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 	w.Write(respBody)
 
-	s.st.save(turnRow{KeyID: keyID, Model: modelOf(body), Kind: "response", Payload: respBody}, lat, resp.StatusCode)
+	s.st.save(turnRow{KeyID: keyID, Model: modelOf(raw), Kind: "response", Payload: respBody}, lat, resp.StatusCode)
 }
 
 // proxySSE tees the stream to the client while reassembling thinking/text/tool_use.
@@ -540,6 +592,8 @@ func main() {
 		engineURL     = flag.String("engine-url", "", "cerberus engine URL for decide (empty = visibility only)")
 		engineTok     = flag.String("engine-token", "", "cerberus engine admin token (or env CERBERUS_ADMIN_TOKEN)")
 		dataDir       = flag.String("data-dir", ".", "directory for tap-YYYYMMDD.db")
+		strict        = flag.Bool("strict", false, "fail-closed: deny LLM calls when engine unreachable/unreadable")
+		adminToken    = flag.String("admin-token", "", "admin token guarding /tap/turns and /tap/stats (or env TAP_ADMIN_TOKEN)")
 		retentionDays = flag.Int("retention-days", 14, "days to keep tap DBs (0 = forever)")
 	)
 	flag.Parse()
@@ -548,10 +602,16 @@ func main() {
 	}
 
 	st := newStore(*dataDir, *retentionDays)
+	adminTok := *adminToken
+	if adminTok == "" {
+		adminTok = os.Getenv("TAP_ADMIN_TOKEN")
+	}
 	srv := &server{
 		upstream:  strings.TrimSuffix(*upstream, "/"),
 		engineURL: *engineURL,
 		engineTok: *engineTok,
+		strict:    *strict,
+		adminTok:  adminTok,
 		client:    &http.Client{Timeout: 300 * time.Second},
 		st:        st,
 	}

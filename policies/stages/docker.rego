@@ -33,6 +33,18 @@ docker_decision := {
 	docker_container_protected
 } else := {
 	"decision": "deny",
+	"rule_id": "docker.host_root_forbidden",
+	"reason": "mounting host filesystem root into a container is forbidden",
+} if {
+	mount_host_root
+} else := {
+	"decision": "deny",
+	"rule_id": "docker.host_namespace_forbidden",
+	"reason": "host network/IPC/PID namespace is forbidden",
+} if {
+	host_namespace
+} else := {
+	"decision": "deny",
 	"rule_id": "docker.mount_forbidden",
 	"reason": "mounting docker.sock is forbidden",
 } if {
@@ -60,6 +72,32 @@ docker_decision := {
 	"rule_id": "docker.allow",
 	"reason": sprintf("docker %s on %q allowed", [action, image]),
 }
+
+# Host-escape mounts: binding / or /Users or /private into a container is
+# a full host takeover — forbid regardless of image allowlist.
+mount_host_root if {
+	some mount in args.binds
+	is_string(mount)
+	regex.match(`(?i)^(/|/Users|/private|/var|/etc|/bin|/sbin|/usr)(:|$)`, mount)
+}
+
+mount_host_root if {
+	some mount in args.volumes
+	is_string(mount)
+	regex.match(`(?i)^(/|/Users|/private|/var|/etc|/bin|/sbin|/usr)(:|$)`, mount)
+}
+
+mount_host_root if {
+	some mount in args.mounts
+	is_object(mount)
+	regex.match(`(?i)^(/|/Users|/private|/var|/etc|/bin|/sbin|/usr)$`, object.get(mount, "source", ""))
+}
+
+# --net=host / host IPC / host PID namespace sharing
+host_namespace if args.network_mode == "host"
+host_namespace if args.net == "host"
+host_namespace if args.ipc_mode == "host"
+host_namespace if args.pid_mode == "host"
 
 # Mount check: forbid docker.sock in mounts, volumes, or binds
 mount_docker_sock if {
@@ -137,11 +175,18 @@ image_matches(pattern, img) if authz.pattern_matches(pattern, img)
 
 # ---------- shield container checks (P0.4) ----------
 
+# Read-only actions that never mutate container state (observability stays open).
+docker_readonly_action if action in ["get", "list", "inspect", "logs", "stats", "top", "events", "version", "info", "ping", "diff", "changes", "history", "search"]
+
+# Hardened 13 Nov: a protected container is untouchable for ANY mutating
+# action — not just rm/stop/kill. exec into it, pause, update, attach,
+# archive, rename, resize, wait: all deny.
 docker_container_protected if {
-	docker_delete_action
+	not docker_readonly_action
 	docker_protected_target
 }
 
+# Legacy helper kept for is_container_delete_call semantics (plan/compose destroy).
 docker_delete_action if action in ["rm", "rmi", "delete", "down", "stop", "kill"]
 
 docker_delete_action if prod.is_container_delete_call(action)
