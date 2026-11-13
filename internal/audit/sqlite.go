@@ -94,8 +94,29 @@ func newDBManager(dbPath string, retentionDays int) (*dbManager, error) {
 	return m, nil
 }
 
+// sqliteDSN appends a busy_timeout pragma to the DSN so readers block up to 2s
+// instead of failing instantly with SQLITE_BUSY while a batch writer holds the
+// write lock (observed as intermittent empty audit query results).
+func sqliteDSN(path string) string {
+	if path == ":memory:" {
+		return path
+	}
+	return "file:" + path + "?_pragma=busy_timeout(2000)"
+}
+
+// openSQLiteRead opens an existing daily DB for querying WITHOUT running the
+// WAL/schema DDL of openSQLite — those Exec calls take the write lock and can
+// themselves trip SQLITE_BUSY against the live writer.
+func openSQLiteRead(path string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", sqliteDSN(path))
+	if err != nil {
+		return nil, fmt.Errorf("audit: open %s: %w", path, err)
+	}
+	return db, nil
+}
+
 func openSQLite(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", sqliteDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("audit: open %s: %w", path, err)
 	}
@@ -291,7 +312,7 @@ func (m *dbManager) query(ctx context.Context, f Filter) ([]Event, error) {
 			}
 		}
 
-		db, err := openSQLite(filepath.Join(m.baseDir, fn))
+		db, err := openSQLiteRead(filepath.Join(m.baseDir, fn))
 		if err != nil {
 			continue
 		}
@@ -478,7 +499,7 @@ func (m *dbManager) denyCountsSince(ctx context.Context, since time.Time) (int64
 			}
 		}
 
-		db, err := openSQLite(filepath.Join(m.baseDir, fn))
+		db, err := openSQLiteRead(filepath.Join(m.baseDir, fn))
 		if err != nil {
 			continue
 		}
@@ -787,7 +808,7 @@ func (m *dbManager) queryAggregate(ctx context.Context, since, until time.Time, 
 			}
 		}
 		for _, fn := range files {
-			db, err := openSQLite(filepath.Join(m.baseDir, fn))
+			db, err := openSQLiteRead(filepath.Join(m.baseDir, fn))
 			if err != nil {
 				continue // unreadable day file: skip, don't kill the aggregate
 			}
