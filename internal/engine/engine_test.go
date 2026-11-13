@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"os"
 	"strings"
@@ -550,5 +551,85 @@ func TestLLMPromptMasking(t *testing.T) {
 	}
 	if !strings.Contains(c, "10***") {
 		t.Fatalf("ip not masked: %s", c)
+	}
+}
+
+func TestCacheKey_UnmarshalableInputBypassesCache(t *testing.T) {
+	e := newTestEngine(t, nil, Options{})
+	ctx := context.Background()
+
+	ch1 := make(chan int)
+	in1 := Input{
+		Stage:    "tool",
+		KeyID:    "k-glob",
+		ToolCall: "kubernetes_get_pods",
+		Args:     map[string]any{"channel": ch1},
+	}
+
+	ch2 := make(chan string)
+	in2 := Input{
+		Stage:    "tool",
+		KeyID:    "k-glob",
+		ToolCall: "kubernetes_delete_pod",
+		Args:     map[string]any{"channel": ch2},
+	}
+
+	// 1. Direct check on cacheKey sentinel return ("", false)
+	key1, ok1 := cacheKey(1, in1)
+	if ok1 || key1 != "" {
+		t.Fatalf("cacheKey(in1) expected (\"\", false), got (%q, %v)", key1, ok1)
+	}
+	key2, ok2 := cacheKey(1, in2)
+	if ok2 || key2 != "" {
+		t.Fatalf("cacheKey(in2) expected (\"\", false), got (%q, %v)", key2, ok2)
+	}
+
+	// 2. Pre-seed the cache at the legacy collapsed key (sha256(epoch ‖ nil))
+	// to prove that unmarshalable inputs bypass the cache entirely instead of
+	// hitting or cross-contaminating with cached decisions.
+	legacyHash := sha256.Sum256(append([]byte{0, 0, 0, 0, 0, 0, 0, 1}, nil...))
+	legacyCollapsedKey := string(legacyHash[:])
+	e.cache.Add(legacyCollapsedKey, Decision{
+		Decision: "allow",
+		RuleID:   "legacy.collapsed.cache_poison",
+		Cached:   true,
+	})
+
+	// in1 evaluates under timeout hook, yielding internal.timeout
+	var slow atomic.Bool
+	e.evalHook = func() {
+		if slow.Load() {
+			time.Sleep(30 * time.Millisecond)
+		}
+	}
+	e.opts.EvalTimeout = 10 * time.Millisecond
+
+	slow.Store(true)
+	d1 := e.Decide(ctx, in1)
+
+	// in2 evaluates normally, yielding internal.eval_error (unmarshalable chan fails OPA eval)
+	slow.Store(false)
+	d2 := e.Decide(ctx, in2)
+
+	// Decisions must be different (not collapsed to the same cached decision)
+	if d1.RuleID == d2.RuleID {
+		t.Fatalf("expected different rule IDs for in1 and in2, both got %q", d1.RuleID)
+	}
+	if d1.RuleID != "internal.timeout" {
+		t.Fatalf("d1 expected internal.timeout, got %q", d1.RuleID)
+	}
+	if d2.RuleID != "internal.eval_error" {
+		t.Fatalf("d2 expected internal.eval_error, got %q", d2.RuleID)
+	}
+
+	// Neither decision must be cached or taken from the legacy collapsed key
+	if d1.Cached {
+		t.Fatalf("d1 should bypass cache, but d1.Cached was true")
+	}
+	if d2.Cached {
+		t.Fatalf("d2 should bypass cache, but d2.Cached was true")
+	}
+	if d1.RuleID == "legacy.collapsed.cache_poison" || d2.RuleID == "legacy.collapsed.cache_poison" {
+		t.Fatalf("decisions contaminated by legacy collapsed cache key!")
 	}
 }

@@ -192,11 +192,15 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	keyID := p.resolveKey(r)
 
 	// Collect targets from both RequestURI/URL.Host and Host header
-	targets := make([]string, 0, 2)
-	if r.URL.Host != "" {
-		targets = append(targets, r.URL.Host)
+	urlHost := r.URL.Host
+	if (urlHost == "http:" || urlHost == "https:") && strings.HasPrefix(r.URL.Path, "//") {
+		urlHost = strings.TrimPrefix(r.URL.Path, "//")
 	}
-	if r.Host != "" && r.Host != r.URL.Host {
+	targets := make([]string, 0, 2)
+	if urlHost != "" {
+		targets = append(targets, urlHost)
+	}
+	if r.Host != "" && r.Host != urlHost {
 		targets = append(targets, r.Host)
 	}
 	if len(targets) == 0 {
@@ -205,9 +209,9 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, target := range targets {
-		hostOnly, port := util.ExtractHost(target)
-		if hostOnly == "" {
-			http.Error(w, "missing host in CONNECT request", http.StatusBadRequest)
+		hostOnly, port, err := util.ExtractHost(target)
+		if err != nil || hostOnly == "" {
+			http.Error(w, "invalid host or port in CONNECT request", http.StatusBadRequest)
 			return
 		}
 
@@ -255,11 +259,15 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Dial target host (prefer explicit URL.Host if set, otherwise r.Host)
-	dialTarget := r.URL.Host
+	dialTarget := urlHost
 	if dialTarget == "" {
 		dialTarget = r.Host
 	}
-	dialHost, dialPort := util.ExtractHost(dialTarget)
+	dialHost, dialPort, err := util.ExtractHost(dialTarget)
+	if err != nil || dialHost == "" {
+		http.Error(w, "invalid host or port in CONNECT request", http.StatusBadRequest)
+		return
+	}
 
 	dialer := &net.Dialer{Timeout: p.cfg.DialTimeout}
 	if p.dialControl != nil {
@@ -324,7 +332,11 @@ func (p *EgressProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	keyID := p.resolveKey(r)
-	hostOnly, port := util.ExtractHost(r.Host)
+	hostOnly, port, err := util.ExtractHost(r.Host)
+	if err != nil || hostOnly == "" {
+		http.Error(w, "invalid host or port", http.StatusBadRequest)
+		return
+	}
 	if port == "443" && !strings.Contains(r.Host, ":") {
 		if r.URL.Scheme == "http" || strings.HasPrefix(destURL, "http://") {
 			port = "80"

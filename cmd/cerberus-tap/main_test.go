@@ -480,6 +480,170 @@ func Test413Oversized(t *testing.T) {
 	}
 }
 
+func TestTapAdminUnconfiguredToken(t *testing.T) {
+	up := newTestUpstream(t, "json")
+	defer up.Close()
+	// Server without admin token configured
+	srv := newTap(up.URL, "", t.TempDir(), "", false)
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	// /tap/turns without token configured -> 503
+	resp, err := http.Get(ts.URL + "/tap/turns")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("unconfigured admin token turns status = %d, want 503", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), "admin token not configured") {
+		t.Fatalf("unexpected body: %s", string(body))
+	}
+
+	// /tap/stats without token configured -> 503
+	respStats, err := http.Get(ts.URL + "/tap/stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = respStats.Body.Close()
+	if respStats.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("unconfigured admin token stats status = %d, want 503", respStats.StatusCode)
+	}
+
+	// /tap/healthz remains accessible -> 200
+	respHz, err := http.Get(ts.URL + "/tap/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hzBody, _ := io.ReadAll(respHz.Body)
+	_ = respHz.Body.Close()
+	if respHz.StatusCode != http.StatusOK {
+		t.Fatalf("healthz status = %d, want 200", respHz.StatusCode)
+	}
+	if string(hzBody) != "ok" {
+		t.Fatalf("healthz body = %q, want ok", string(hzBody))
+	}
+}
+
+func TestToolUseNonSSEEnforcement(t *testing.T) {
+	const evilSecret = "super-sensitive-upstream-payload-rm-rf"
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Anthropic-style non-streaming response containing tool_use
+		_, _ = fmt.Fprintf(w, `{"id":"msg_123","type":"message","role":"assistant","content":[{"type":"text","text":"I will execute the command."},{"type":"tool_use","id":"toolu_evil","name":"run_shell","input":{"cmd":"%s"}}]}`, evilSecret)
+	}))
+	defer up.Close()
+
+	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/decide/tool") {
+			_, _ = fmt.Fprint(w, `{"decision":"deny","rule_id":"tool.restricted","reason":"run_shell not allowed"}`)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"decision":"allow","rule_id":"llm.allow"}`)
+	}))
+	defer engine.Close()
+
+	srv := newTap(up.URL, engine.URL, t.TempDir(), "", false)
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	req, _ := http.NewRequest("POST", ts.URL+"/v1/messages", strings.NewReader(`{"model":"claude-3-5-sonnet","stream":false,"messages":[]}`))
+	req.Header.Set("X-Tap-Key", "test-agent")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	bodyStr := string(bodyBytes)
+
+	// Status must be 502 Bad Gateway
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("non-SSE tool denied status = %d, want 502", resp.StatusCode)
+	}
+	// Body must not leak any upstream content
+	if strings.Contains(bodyStr, evilSecret) || strings.Contains(bodyStr, "toolu_evil") {
+		t.Fatalf("upstream payload leaked in blocked response:\n%s", bodyStr)
+	}
+	// Body must indicate cerberus_tool_blocked
+	if !strings.Contains(bodyStr, "cerberus_tool_blocked") {
+		t.Fatalf("expected cerberus_tool_blocked in response error, got:\n%s", bodyStr)
+	}
+
+	// Verify blocked turn was recorded in audit store
+	time.Sleep(50 * time.Millisecond)
+	db, _, _ := srv.st.current(time.Now())
+	var n int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM turns WHERE kind='tool_blocked'`).Scan(&n)
+	if n != 1 {
+		t.Fatalf("tool_blocked turns = %d, want 1", n)
+	}
+}
+
+func TestToolUseNonSSEAllowed(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"id":"msg_ok","type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_quote","name":"get_quote","input":{"ticker":"BBCA"}}]}`)
+	}))
+	defer up.Close()
+
+	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"decision":"allow","rule_id":"tool.allow"}`)
+	}))
+	defer engine.Close()
+
+	srv := newTap(up.URL, engine.URL, t.TempDir(), "", false)
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	req, _ := http.NewRequest("POST", ts.URL+"/v1/messages", strings.NewReader(`{"model":"claude-3-5-sonnet","stream":false,"messages":[]}`))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "get_quote") {
+		t.Fatalf("allowed tool_use must reach the client, got: %s", string(body))
+	}
+}
+
+func TestNonAnthropicUpstreamForwarded(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"custom_service":true,"results":["a","b"]}`)
+	}))
+	defer up.Close()
+
+	srv := newTap(up.URL, "", t.TempDir(), "", false)
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	req, _ := http.NewRequest("POST", ts.URL+"/v1/custom", strings.NewReader(`{"hello":"world"}`))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "custom_service") {
+		t.Fatalf("custom response not forwarded intact: %s", string(body))
+	}
+}
+
 func clip(s string, n int) string {
 	if len(s) > n {
 		return s[:n]

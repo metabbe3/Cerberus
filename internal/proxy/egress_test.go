@@ -763,3 +763,37 @@ func TestEgressProxy_HostPunycodeHomoglyphBlocked(t *testing.T) {
 		t.Fatalf("expected 403 Forbidden for punycode HTTP, got %d", rec2.Code)
 	}
 }
+
+func TestEgressProxy_InvalidPortReturns400(t *testing.T) {
+	eng := setupTestEngine(t)
+	egress, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		DenyLocalIPs:  &[]bool{false}[0],
+		FallbackKeyID: "k-http-allow",
+	})
+	if err != nil {
+		t.Fatalf("NewEgressProxy: %v", err)
+	}
+
+	invalidPorts := []string{"http", "99999", "-1", "abc", "0"}
+	for _, badPort := range invalidPorts {
+		// 1. CONNECT request with invalid port
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodConnect, "http://api.github.com", nil)
+		req.Host = "api.github.com:" + badPort
+		req.Header.Set("X-Cerberus-Key", "k-http-allow")
+		egress.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("CONNECT port %q expected 400 Bad Request, got %d", badPort, rec.Code)
+		}
+
+		// 2. HTTP GET request with invalid port
+		recHTTP := httptest.NewRecorder()
+		reqHTTP := httptest.NewRequest(http.MethodGet, "http://api.github.com/test", nil)
+		reqHTTP.Host = "api.github.com:" + badPort
+		reqHTTP.Header.Set("X-Cerberus-Key", "k-http-allow")
+		egress.ServeHTTP(recHTTP, reqHTTP)
+		if recHTTP.Code != http.StatusBadRequest {
+			t.Fatalf("HTTP GET port %q expected 400 Bad Request, got %d", badPort, recHTTP.Code)
+		}
+	}
+}

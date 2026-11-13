@@ -31,6 +31,17 @@ func mustReject(t *testing.T, script, want string) {
 	}
 }
 
+func TestAssignmentPrefixRejected(t *testing.T) {
+	mustReject(t, "PATH=/tmp/evil grep x", "assignment_prefix")
+	mustReject(t, "A=1 B=2 ls", "assignment_prefix")
+	mustReject(t, "LD_PRELOAD=/evil.so grep x", "assignment_prefix")
+
+	cmds := mustExtract(t, "grep x")
+	if len(cmds) != 1 || cmds[0].Binary != "grep" || len(cmds[0].Args) != 1 || cmds[0].Args[0] != "x" {
+		t.Fatalf("unexpected extracted command: %+v", cmds)
+	}
+}
+
 func TestBenignGrepExtractsBinary(t *testing.T) {
 	cmds := mustExtract(t, "grep -c error /var/log/app.log")
 	if len(cmds) != 1 {

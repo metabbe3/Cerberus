@@ -314,12 +314,15 @@ func (s *server) handleTap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Inspection endpoints carry other agents' prompts/thinking — admin-only.
-	if s.adminTok != "" {
-		got := r.Header.Get("Authorization")
-		if got != "Bearer "+s.adminTok && r.URL.Query().Get("token") != s.adminTok {
-			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-			return
-		}
+	// When admin token is unconfigured, refuse to serve inspection endpoints (fail-closed).
+	if s.adminTok == "" {
+		http.Error(w, "admin token not configured", http.StatusServiceUnavailable)
+		return
+	}
+	got := r.Header.Get("Authorization")
+	if got != "Bearer "+s.adminTok && r.URL.Query().Get("token") != s.adminTok {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
 	}
 	switch r.URL.Path {
 	case "/tap/turns":
@@ -472,6 +475,46 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	lat := time.Since(start).Milliseconds()
+
+	// In non-SSE path, inspect Anthropic responses containing tool_use blocks.
+	if strings.Contains(resp.Header.Get("Content-Type"), "application/json") {
+		type anthropicBlock struct {
+			Type  string          `json:"type"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+		}
+		var msg struct {
+			Content []anthropicBlock `json:"content"`
+		}
+		if err := json.Unmarshal(respBody, &msg); err == nil && len(msg.Content) > 0 {
+			for _, b := range msg.Content {
+				if b.Type == "tool_use" {
+					rawInput := strings.TrimSpace(string(b.Input))
+					if rawInput == "" {
+						rawInput = "{}"
+					}
+					verdict, ok := s.askToolEngine(keyID, modelOf(raw), b.Name, rawInput)
+					if !ok {
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusBadGateway)
+						_ = json.NewEncoder(w).Encode(map[string]any{
+							"error":   "cerberus_tool_blocked",
+							"message": "tool_use blocked by cerberus policy: " + verdict.Reason,
+							"rule_id": verdict.RuleID,
+						})
+						s.st.save(turnRow{
+							KeyID:   keyID,
+							Model:   modelOf(raw),
+							Kind:    "tool_blocked",
+							Payload: mustJSON(map[string]any{"tool": b.Name, "verdict": verdict}),
+						}, lat, http.StatusBadGateway)
+						return
+					}
+				}
+			}
+		}
+	}
+
 	// copy response headers
 	for k, vv := range resp.Header {
 		for _, v := range vv {

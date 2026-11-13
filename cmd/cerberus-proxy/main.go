@@ -86,6 +86,7 @@ func run() error {
 	fs.StringVar(&policyDir, "policy-dir", policyDir, "policies directory")
 	fs.StringVar(&dataFile, "data-file", dataFile, "data JSON file")
 	fs.StringVar(&auditDB, "audit-db", auditDB, "audit database path")
+	fs.StringVar(&adminToken, "admin-token", adminToken, "admin token for bearer auth")
 	fs.StringVar(&logLevel, "log-level", logLevel, "log level (debug|info|warn|error)")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -94,6 +95,10 @@ func run() error {
 
 	log := newLogger(logLevel)
 	slog.SetDefault(log)
+
+	if adminToken == "" {
+		log.Warn("UNAUTHENTICATED mode: CERBERUS_ADMIN_TOKEN not set, proxy requests are unauthenticated")
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -155,7 +160,7 @@ func run() error {
 	}()
 
 	srv := &http.Server{
-		Handler:           dp,
+		Handler:           requireAdminAuth(adminToken, dp),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
@@ -181,7 +186,7 @@ func run() error {
 		defer func() { _ = egressListener.Close() }()
 
 		egressSrv = &http.Server{
-			Handler:           ep,
+			Handler:           requireAdminAuth(adminToken, ep),
 			ReadHeaderTimeout: 5 * time.Second,
 			IdleTimeout:       120 * time.Second,
 		}
@@ -189,7 +194,6 @@ func run() error {
 		log.Info("cerberus-proxy egress proxy listening", "addr", egressAddr)
 	}
 
-	_ = adminToken
 	select {
 	case err := <-serveErr:
 		if !errors.Is(err, http.ErrServerClosed) {
@@ -208,4 +212,21 @@ func run() error {
 
 func newLogger(level string) *slog.Logger {
 	return util.NewLogger(level)
+}
+
+// requireAdminAuth wraps an http.Handler with Bearer token authentication when token is non-empty.
+func requireAdminAuth(token string, next http.Handler) http.Handler {
+	if token == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := r.Header.Get("Authorization")
+		if got != "Bearer "+token {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

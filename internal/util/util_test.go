@@ -12,15 +12,33 @@ func TestExtractHost(t *testing.T) {
 		input    string
 		wantHost string
 		wantPort string
+		wantErr  bool
 	}{
-		{"example.com", "example.com", "443"},
-		{"example.com:8080", "example.com", "8080"},
-		{"https://secure.example.com/api/v1", "secure.example.com", "443"},
-		{"http://localhost:3000/test", "localhost", "3000"},
+		{"example.com", "example.com", "443", false},
+		{"example.com:8080", "example.com", "8080", false},
+		{"https://secure.example.com/api/v1", "secure.example.com", "443", false},
+		{"http://localhost:3000/test", "localhost", "3000", false},
+		// C5 test cases
+		{"host:http", "", "", true},
+		{"host:080", "host", "80", false},
+		{"host:99999", "", "", true},
+		{"host:443", "host", "443", false},
+		{"host:0", "", "", true},
+		{"", "", "", true},
 	}
 
 	for _, tc := range tests {
-		h, p := ExtractHost(tc.input)
+		h, p, err := ExtractHost(tc.input)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("ExtractHost(%q) expected error, got (%q, %q)", tc.input, h, p)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("ExtractHost(%q) unexpected error: %v", tc.input, err)
+			continue
+		}
 		if h != tc.wantHost || p != tc.wantPort {
 			t.Errorf("ExtractHost(%q) = (%q, %q), want (%q, %q)", tc.input, h, p, tc.wantHost, tc.wantPort)
 		}

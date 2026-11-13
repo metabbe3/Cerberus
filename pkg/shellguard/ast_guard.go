@@ -110,9 +110,13 @@ func ExtractAndValidate(rawScript string) ([]ExtractedCommand, error) {
 	return cmds, nil
 }
 
-// validateCall checks one simple command. It returns nil (and no error) for
-// bare variable assignments, which carry no binary to police.
+// validateCall checks one simple command. It rejects any command with variable
+// assignment prefixes (fail-closed, reason assignment_prefix) and returns nil
+// for commands with no arguments (e.g. bare redirections).
 func validateCall(call *syntax.CallExpr) (*ExtractedCommand, error) {
+	if len(call.Assigns) > 0 {
+		return nil, fmt.Errorf("command has assignment prefix (assignment_prefix, fail-closed)")
+	}
 	if len(call.Args) == 0 {
 		return nil, nil
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -119,9 +120,10 @@ func bearerOrBasicToken(auth string) string {
 	return ""
 }
 
-// ExtractHost parses a destination host string (or URL) into host and port.
-// Defaults port to 443 if missing or invalid.
-func ExtractHost(raw string) (host string, port string) {
+// ExtractHost parses a destination host string (or URL) into host and normalized port.
+// Missing port defaults to 443. Any port with non-digit characters or outside 1-65535 returns an error.
+// Leading zeros are normalized with strconv.Atoi (e.g. "080" -> "80").
+func ExtractHost(raw string) (host string, port string, err error) {
 	host = raw
 	if strings.Contains(host, "://") {
 		parts := strings.SplitN(host, "://", 2)
@@ -130,11 +132,27 @@ func ExtractHost(raw string) (host string, port string) {
 	if idx := strings.Index(host, "/"); idx != -1 {
 		host = host[:idx]
 	}
-	h, p, err := net.SplitHostPort(host)
-	if err != nil {
-		return host, "443"
+	if host == "" {
+		return "", "", fmt.Errorf("empty host")
 	}
-	return h, p
+	h, p, splitErr := net.SplitHostPort(host)
+	if splitErr != nil {
+		// Missing port: default to 443
+		return host, "443", nil
+	}
+	if p == "" {
+		return "", "", fmt.Errorf("empty port in %q", raw)
+	}
+	for _, c := range p {
+		if c < '0' || c > '9' {
+			return "", "", fmt.Errorf("invalid port %q: non-digit characters", p)
+		}
+	}
+	portNum, atoiErr := strconv.Atoi(p)
+	if atoiErr != nil || portNum < 1 || portNum > 65535 {
+		return "", "", fmt.Errorf("invalid port %q: must be between 1 and 65535", p)
+	}
+	return h, strconv.Itoa(portNum), nil
 }
 
 // ValidateRequest checks for malformed requests (e.g. HTTP smuggling vectors like

@@ -137,15 +137,17 @@ func (d Decision) Allowed() bool {
 func (e *Engine) Decide(ctx context.Context, in Input) Decision {
 	start := time.Now()
 	snap := e.store.Current()
-	sum := cacheKey(snap.Epoch, in)
-	key := string(sum[:])
+	key, ok := cacheKey(snap.Epoch, in)
 	epochStr := snap.EpochStr
 	if epochStr == "" {
 		epochStr = strconv.FormatUint(snap.Epoch, 10)
 	}
 
 	var d Decision
-	if hit, ok := e.cache.Get(key); ok {
+	if !ok {
+		// Unmarshalable input cannot be safely keyed: bypass cache and singleflight entirely.
+		d = e.eval(context.WithoutCancel(ctx), snap, in)
+	} else if hit, hitOk := e.cache.Get(key); hitOk {
 		cacheHitsTotal.Inc()
 		cacheHitsEpoch.WithLabelValues(epochStr).Inc()
 		hit.Cached = true
@@ -448,11 +450,11 @@ var shaPool = sync.Pool{
 
 // cacheKey is sha256(epoch ‖ json.Marshal(in)) — the epoch invalidates the
 // whole cache on reload, and json.Marshal sorts map keys so equal inputs hash
-// equally.
-func cacheKey(epoch uint64, in Input) [32]byte {
+// equally. Returns ("", false) if in cannot be marshaled into JSON.
+func cacheKey(epoch uint64, in Input) (string, bool) {
 	b, err := json.Marshal(in)
 	if err != nil {
-		b = nil // unmarshalable args → stable (weaker) key; decision still fails closed on eval
+		return "", false
 	}
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], epoch)
@@ -463,7 +465,7 @@ func cacheKey(epoch uint64, in Input) [32]byte {
 	var out [32]byte
 	h.Sum(out[:0])
 	shaPool.Put(h)
-	return out
+	return string(out[:]), true
 }
 
 // str extracts a string field from the Rego decision object.
