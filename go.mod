@@ -1,6 +1,6 @@
 module github.com/metabbe3/cerberus
 
-go 1.26.0
+go 1.25.0
 
 require (
 	github.com/hashicorp/golang-lru/v2 v2.0.7
@@ -11,7 +11,7 @@ require (
 	golang.org/x/crypto v0.47.0
 	golang.org/x/sync v0.22.0
 	modernc.org/sqlite v1.46.0
-	mvdan.cc/sh/v3 v3.14.1
+	mvdan.cc/sh/v3 v3.10.0
 )
 
 require (
