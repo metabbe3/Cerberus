@@ -37,17 +37,24 @@ func TestAdmin_ReplayAudit(t *testing.T) {
 	}
 	h.auditLog.Emit(ev1)
 	h.auditLog.Emit(ev2)
-	time.Sleep(50 * time.Millisecond) // allow ring / batch to record
 
-	// 1. Replay with current policy data (no changes)
-	resp1 := h.do(t, http.MethodPost, "/v1/admin/replay", "application/json", `{"limit":10}`, true)
-	if resp1.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 OK, got %d", resp1.StatusCode)
+	// Poll until both emitted events are visible to replay. On slow CI runners
+	// the audit batch flush can lag well past the old fixed 50ms sleep.
+	var res1 replayResponse
+	ok := false
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		resp1 := h.do(t, http.MethodPost, "/v1/admin/replay", "application/json", `{"limit":10}`, true)
+		if resp1.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d", resp1.StatusCode)
+		}
+		res1 = decodeJSON[replayResponse](t, resp1.Body)
+		if res1.TotalEvaluated >= 2 {
+			ok = true
+			break
+		}
 	}
-
-	res1 := decodeJSON[replayResponse](t, resp1.Body)
-	if res1.TotalEvaluated < 2 {
-		t.Fatalf("expected at least 2 evaluated events, got %d", res1.TotalEvaluated)
+	if !ok {
+		t.Fatalf("expected at least 2 evaluated events after 5s, got %d", res1.TotalEvaluated)
 	}
 
 	// 2. Replay with draft data that tightens rules

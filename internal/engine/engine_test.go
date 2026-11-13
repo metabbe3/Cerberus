@@ -267,11 +267,14 @@ func TestDecide_CancelledLeaderNotShared(t *testing.T) {
 // guaranteed a fresh, successful eval — a 1ns budget is not deterministic
 // (a fast eval can occasionally finish before the deadline check).
 func TestDecide_InternalFailureNotCached(t *testing.T) {
-	e := newTestEngine(t, &recSink{}, Options{EvalTimeout: 20 * time.Millisecond})
+	// Budget must comfortably exceed the hook sleep (deterministic timeout on the
+	// first call) while the second, hook-free eval must fit even on a slow CI
+	// runner where a fresh OPA compile can take hundreds of ms.
+	e := newTestEngine(t, &recSink{}, Options{EvalTimeout: 2 * time.Second})
 	var calls atomic.Int32
 	e.evalHook = func() {
 		if calls.Add(1) == 1 {
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(5 * time.Second) // deterministic: exceeds the 2s budget
 		}
 	}
 	in := toolInput("k-glob", "kubernetes_get_pods", nil)
