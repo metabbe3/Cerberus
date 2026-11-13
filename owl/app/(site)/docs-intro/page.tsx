@@ -6,6 +6,7 @@ import {
   Code2,
   ExternalLink,
   FileText,
+  Layers,
   ShieldCheck,
   Terminal,
 } from "lucide-react";
@@ -145,6 +146,87 @@ export default function DocsIntroPage() {
                 await guard.execute(tool, args, fn)
               </pre>
             </div>
+          </div>
+        </div>
+
+        {/* Instalasi & Env Reference Card */}
+        <div className="clay-card p-6 sm:p-8 space-y-6">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <div className="clay-chip clay-chip-mint size-8">
+                <Layers className="size-4 text-[#155E40]" />
+              </div>
+              <h2 className="text-xl font-bold text-[var(--clay-ink)]">
+                Instalasi &amp; Env Reference
+              </h2>
+            </div>
+            <p className="text-sm text-[var(--clay-ink-muted)]">
+              Arsitektur unified multi-stage container (<code className="font-mono text-xs">ghcr.io/metabbe3/cerberus:latest</code>), 5 enforcement services, dan referensi environment variables lengkap.
+            </p>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 pt-2">
+            <div className="p-3 bg-[#F0EBE1] rounded-xl space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-xs text-[var(--clay-ink)]">1. Engine (:8089)</span>
+                <span className="font-mono text-[10px] text-[var(--clay-ink-muted)]">internal</span>
+              </div>
+              <p className="text-[11px] text-[var(--clay-ink-muted)] leading-snug">
+                Policy engine central, evaluasi OPA Rego, admin API, dan audit trail.
+              </p>
+            </div>
+
+            <div className="p-3 bg-[#F0EBE1] rounded-xl space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-xs text-[var(--clay-ink)]">2. LLM Tap (:8090)</span>
+                <span className="font-mono text-[10px] text-[var(--clay-ink-muted)]">127.0.0.1</span>
+              </div>
+              <p className="text-[11px] text-[var(--clay-ink-muted)] leading-snug">
+                In-path LLM proxy, stream inspection, masking at-rest, dan fail-closed deny.
+              </p>
+            </div>
+
+            <div className="p-3 bg-[#F0EBE1] rounded-xl space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-xs text-[var(--clay-ink)]">3. Docker Proxy (:2377)</span>
+                <span className="font-mono text-[10px] text-[var(--clay-ink-muted)]">127.0.0.1</span>
+              </div>
+              <p className="text-[11px] text-[var(--clay-ink-muted)] leading-snug">
+                Socket proxy shield melindungi docker.sock dari escape atau abuse agent.
+              </p>
+            </div>
+
+            <div className="p-3 bg-[#F0EBE1] rounded-xl space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-xs text-[var(--clay-ink)]">4. Egress Proxy (:8088)</span>
+                <span className="font-mono text-[10px] text-[var(--clay-ink-muted)]">127.0.0.1</span>
+              </div>
+              <p className="text-[11px] text-[var(--clay-ink-muted)] leading-snug">
+                HTTP CONNECT outbound proxy memblokir akses ke CIDR prod &amp; DNS spoofing.
+              </p>
+            </div>
+
+            <div className="p-3 bg-[#F0EBE1] rounded-xl space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-xs text-[var(--clay-ink)]">5. SSH Bastion (:2222)</span>
+                <span className="font-mono text-[10px] text-[var(--clay-ink-muted)]">127.0.0.1</span>
+              </div>
+              <p className="text-[11px] text-[var(--clay-ink-muted)] leading-snug">
+                Audit gate inspeksi perintah shell SSH via engine sebelum dieksekusi.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-3 pt-2">
+            <a
+              href="https://github.com/metabbe3/Cerberus/blob/main/docs/SETUP.md"
+              target="_blank"
+              rel="noreferrer"
+              className="clay-btn clay-btn-accent clay-btn-sm font-semibold text-xs gap-1.5"
+            >
+              Buka Panduan SETUP.md &amp; Env Reference
+              <ExternalLink className="size-3.5" />
+            </a>
           </div>
         </div>
 

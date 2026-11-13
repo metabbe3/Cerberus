@@ -1,0 +1,9 @@
+.git
+owl/node_modules
+owl/.next
+data/
+*.db
+docs/
+*.md
+bin/
+dist/
