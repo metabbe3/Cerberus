@@ -121,9 +121,20 @@ func TestLogger_EraseAndSince(t *testing.T) {
 		t.Fatalf("Event ID = %d, want > 0", idToErase)
 	}
 
-	ok, err := l.Erase(ctx, idToErase)
-	if err != nil || !ok {
-		t.Fatalf("Erase(%d) ok=%v err=%v", idToErase, ok, err)
+	// Erase requires the event to be flushed to SQLite; the ring may show it
+	// before the async flush lands, so poll until the erase takes effect.
+	var ok bool
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		ok, err = l.Erase(ctx, idToErase)
+		if err != nil {
+			t.Fatalf("Erase(%d) err=%v", idToErase, err)
+		}
+		if ok {
+			break
+		}
+	}
+	if !ok {
+		t.Fatalf("Erase(%d) not persisted after 5s (async flush lag)", idToErase)
 	}
 
 	// Verify erased in ring
