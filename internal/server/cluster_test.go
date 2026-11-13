@@ -171,28 +171,34 @@ func TestCluster_AuditMergeSort(t *testing.T) {
 	al1.Emit(audit.Event{Time: t3, Stage: "llm", KeyID: "k-open", Subject: "evC", Decision: "allow", RuleID: "test.c"})
 	al2.Emit(audit.Event{Time: t4, Stage: "llm", KeyID: "k-open", Subject: "evD", Decision: "allow", RuleID: "test.d"})
 
-	time.Sleep(50 * time.Millisecond) // wait for SQLite flushes
-
-	// Query Node 1 with cluster=true
-	req, _ := http.NewRequest(http.MethodGet, ts1.URL+"/v1/audit?cluster=true", nil)
-	req.Header.Set("Authorization", "Bearer "+adminToken)
-	resp, err := ts1.Client().Do(req)
-	if err != nil {
-		t.Fatalf("query cluster audit: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
-	}
-
+	// Poll the cluster query until all 4 events are visible — SQLite batch
+	// flush on both nodes can lag well past a fixed sleep on slow CI runners.
 	var events []audit.Event
-	if err := json.NewDecoder(resp.Body).Decode(&events); err != nil {
-		t.Fatalf("decode events: %v", err)
+	ok := false
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		req, _ := http.NewRequest(http.MethodGet, ts1.URL+"/v1/audit?cluster=true", nil)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		resp, err := ts1.Client().Do(req)
+		if err != nil {
+			t.Fatalf("query cluster audit: %v", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			_ = resp.Body.Close()
+			t.Fatalf("status = %d, want 200", resp.StatusCode)
+		}
+		events = []audit.Event{}
+		if err := json.NewDecoder(resp.Body).Decode(&events); err != nil {
+			_ = resp.Body.Close()
+			t.Fatalf("decode events: %v", err)
+		}
+		_ = resp.Body.Close()
+		if len(events) >= 4 {
+			ok = true
+			break
+		}
 	}
-
-	if len(events) < 4 {
-		t.Fatalf("got %d events, want at least 4", len(events))
+	if !ok {
+		t.Fatalf("got %d events after 5s, want at least 4 (audit flush lag)", len(events))
 	}
 
 	// Verify order is strictly newest-first (t4 > t3 > t2 > t1)
