@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cerberus.tap</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/cerberus-tap</string>
+        <string>-listen</string>
+        <string>0.0.0.0:8090</string>
+        <string>-upstream</string>
+        <string>https://api.openai.com</string>
+        <string>-engine-url</string>
+        <string>http://127.0.0.1:8089</string>
+        <string>-data-dir</string>
+        <string>/var/lib/cerberus-tap</string>
+        <string>-strict</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>UPSTREAM</key>
+        <string>https://api.openai.com</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/var/log/cerberus/tap.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/cerberus/tap.err</string>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65536</integer>
+    </dict>
+</dict>
+</plist>

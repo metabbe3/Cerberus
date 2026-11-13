@@ -1,0 +1,29 @@
+[Unit]
+Description=Cerberus SSH Bastion (SSH Relay & Policy Guard)
+Documentation=https://github.com/metabbe3/cerberus
+After=network.target cerberus-engine.service
+Wants=cerberus-engine.service
+
+[Service]
+Type=simple
+User=cerberus
+Group=cerberus
+EnvironmentFile=-/etc/cerberus/cerberus-ssh.env
+ExecStart=/usr/local/bin/cerberus-ssh -listen 0.0.0.0:2222 -engine-url http://127.0.0.1:8089 -hostkey-file /var/lib/cerberus-ssh/hostkey
+Restart=always
+RestartSec=5s
+
+# Security Hardening
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/cerberus-ssh
+
+# Resource Limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

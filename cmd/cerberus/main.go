@@ -85,6 +85,9 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("cerberus: load policy: %w", err)
 	}
+	if err := setupVerificationKey(store, cfg.BundlePubKey); err != nil {
+		return fmt.Errorf("cerberus: %w", err)
+	}
 	// PostgreSQL system of record: when a DSN is set, boot data comes from PG
 	// (falling back to the file only when PG is unreachable), and every admin
 	// data PUT persists to PG after the file write.
@@ -211,4 +214,21 @@ func watchHUP(ctx context.Context, store *policy.Store, log *slog.Logger) (stop 
 
 func newLogger(level string) *slog.Logger {
 	return util.NewLogger(level)
+}
+
+// setupVerificationKey parses and configures the bundle verification public key on the policy store.
+// If keyStr is empty, bundle verification is omitted and a warning is logged.
+// If keyStr is non-empty but invalid, it returns an error (fail-closed).
+func setupVerificationKey(store *policy.Store, keyStr string) error {
+	if keyStr == "" {
+		slog.Warn("cerberus: bundle verification key not configured; unsigned bundles will be accepted")
+		return nil
+	}
+	pk, err := policy.ParsePublicKey([]byte(keyStr))
+	if err != nil {
+		return fmt.Errorf("parse bundle verification key: %w", err)
+	}
+	store.SetVerificationKey(pk)
+	slog.Info("cerberus: bundle signature verification enabled")
+	return nil
 }

@@ -92,6 +92,11 @@ func ReadBundle(r io.Reader) (*Bundle, error) {
 		case strings.HasSuffix(name, ".json") && (strings.HasPrefix(name, "data/") || strings.Contains(name, "/data/")):
 			b.DataFiles[name] = content
 		case strings.HasSuffix(name, ".rego") && !strings.HasSuffix(name, "_test.rego"):
+			base := filepath.Base(name)
+			if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "._") ||
+				strings.HasPrefix(base, ".") || strings.HasPrefix(base, "._") {
+				continue
+			}
 			b.RegoFiles[name] = content
 		}
 	}

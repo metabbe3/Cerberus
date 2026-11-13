@@ -114,3 +114,27 @@ func TestLoad_CompilesMaskers(t *testing.T) {
 		t.Fatalf("Maskers has %d keys, want 1 (only k-glob masks)", len(snap.Maskers))
 	}
 }
+
+func TestLoad_AppleDoubleAndHiddenRegoSkipped(t *testing.T) {
+	dir := t.TempDir()
+	validRego := "package gateway.authz\n\ndefault decision = {\"decision\": \"allow\", \"rule_id\": \"test.ok\"}\n"
+	if err := os.WriteFile(filepath.Join(dir, "policy.rego"), []byte(validRego), 0o600); err != nil {
+		t.Fatalf("write valid rego: %v", err)
+	}
+
+	brokenAppleDouble := "package gateway.authz\n\nthis is invalid apple double syntax ((((\n"
+	if err := os.WriteFile(filepath.Join(dir, "._evil.rego"), []byte(brokenAppleDouble), 0o600); err != nil {
+		t.Fatalf("write apple double rego: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".hidden.rego"), []byte(brokenAppleDouble), 0o600); err != nil {
+		t.Fatalf("write hidden rego: %v", err)
+	}
+
+	snap, err := Load(context.Background(), dir, loadTestData(t), 1)
+	if err != nil {
+		t.Fatalf("Load failed: %v (._evil.rego or .hidden.rego was not skipped)", err)
+	}
+	if snap == nil {
+		t.Fatal("expected non-nil snapshot")
+	}
+}

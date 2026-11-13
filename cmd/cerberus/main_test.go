@@ -1,12 +1,17 @@
 package main
 
 import (
+	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"io"
 	"net"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/metabbe3/cerberus/internal/policy"
 	"github.com/metabbe3/cerberus/internal/server"
 )
 
@@ -53,5 +58,41 @@ func TestServerCutsOffSlowBody(t *testing.T) {
 		}
 	case <-time.After(15 * time.Second):
 		t.Fatal("slow-body trickle was not cut off; a goroutine is parked in readBody forever")
+	}
+}
+
+func TestSetupVerificationKey_ValidBase64(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b64Key := base64.StdEncoding.EncodeToString(pub)
+	store := policy.NewStoreWithSnapshot(nil)
+
+	if err := setupVerificationKey(store, b64Key); err != nil {
+		t.Fatalf("setupVerificationKey failed: %v", err)
+	}
+	if !bytes.Equal(store.VerificationKey(), pub) {
+		t.Fatalf("stored verification key = %x, want %x", store.VerificationKey(), pub)
+	}
+}
+
+func TestSetupVerificationKey_CorruptedKeyReturnsError(t *testing.T) {
+	store := policy.NewStoreWithSnapshot(nil)
+	if err := setupVerificationKey(store, "not-a-valid-base64-or-key!"); err == nil {
+		t.Fatal("expected error for corrupted key string, got nil")
+	}
+	if store.VerificationKey() != nil {
+		t.Fatalf("expected nil verification key on error, got %x", store.VerificationKey())
+	}
+}
+
+func TestSetupVerificationKey_EmptyKeyOmitted(t *testing.T) {
+	store := policy.NewStoreWithSnapshot(nil)
+	if err := setupVerificationKey(store, ""); err != nil {
+		t.Fatalf("expected nil error for empty key, got %v", err)
+	}
+	if store.VerificationKey() != nil {
+		t.Fatalf("expected nil verification key when empty, got %x", store.VerificationKey())
 	}
 }

@@ -48,7 +48,7 @@ func Load(ctx context.Context, policyDir string, dataJSON []byte, epoch uint64) 
 		return nil, err
 	}
 
-	result, err := loader.NewFileLoader().WithFilter(bundleFilter).All([]string{policyDir})
+	result, err := loader.NewFileLoader().Filtered([]string{policyDir}, bundleFilter)
 	if err != nil {
 		return nil, fmt.Errorf("policy: %w: %w", ErrCompile, err)
 	}
@@ -88,11 +88,15 @@ func LoadFiles(ctx context.Context, policyDir, dataPath string, epoch uint64) (*
 
 // bundleFilter keeps only non-test .rego files: *_test.rego never ships in a
 // snapshot, and data files under policyDir are ignored in favor of dataJSON.
+// Hidden files and AppleDouble (._*) metadata files are skipped.
 func bundleFilter(_ string, info os.FileInfo, _ int) bool {
 	if info == nil || info.IsDir() {
 		return false
 	}
 	name := info.Name()
+	if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "._") {
+		return true
+	}
 	return !strings.HasSuffix(name, ".rego") || strings.HasSuffix(name, "_test.rego")
 }
 

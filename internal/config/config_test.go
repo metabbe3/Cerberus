@@ -96,3 +96,31 @@ func TestLoad_FlagOverridesEnv(t *testing.T) {
 		t.Errorf("eval timeout default: got %v", c.EvalTimeout)
 	}
 }
+
+func TestLoad_BundlePubKey(t *testing.T) {
+	t.Parallel()
+	c, err := Load(nil, env(map[string]string{
+		"CERBERUS_ADMIN_TOKEN":   "tok",
+		"CERBERUS_BUNDLE_PUBKEY": "dGVzdC1rZXk=",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.BundlePubKey != "dGVzdC1rZXk=" {
+		t.Fatalf("bundle pubkey from env: got %q, want dGVzdC1rZXk=", c.BundlePubKey)
+	}
+
+	c, err = Load(
+		[]string{"-bundle-pubkey", "ZmxhZy1rZXk="},
+		env(map[string]string{
+			"CERBERUS_ADMIN_TOKEN":   "tok",
+			"CERBERUS_BUNDLE_PUBKEY": "ZW52LWtleQ==",
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.BundlePubKey != "ZmxhZy1rZXk=" {
+		t.Fatalf("bundle pubkey from flag: got %q, want ZmxhZy1rZXk=", c.BundlePubKey)
+	}
+}

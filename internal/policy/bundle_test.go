@@ -626,3 +626,25 @@ func readFile(t *testing.T, path string) string {
 	}
 	return string(b)
 }
+
+func TestReadBundle_AppleDoubleRegoSkipped(t *testing.T) {
+	regoFiles := map[string]string{
+		"policies/stages/foo.rego":    "package stages.foo\n\ndefault decision = {\"decision\": \"allow\"}\n",
+		"policies/stages/._evil.rego": "broken syntax (((\n",
+		"._root_evil.rego":            "broken syntax (((\n",
+	}
+	raw := createCustomBundle(t, []string{"stages"}, "rev-appledouble", []byte(`{}`), regoFiles, nil)
+	b, err := ReadBundle(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("ReadBundle: %v", err)
+	}
+	if _, ok := b.RegoFiles["policies/stages/._evil.rego"]; ok {
+		t.Error("policies/stages/._evil.rego should be skipped from RegoFiles")
+	}
+	if _, ok := b.RegoFiles["._root_evil.rego"]; ok {
+		t.Error("._root_evil.rego should be skipped from RegoFiles")
+	}
+	if _, ok := b.RegoFiles["policies/stages/foo.rego"]; !ok {
+		t.Error("policies/stages/foo.rego should be present in RegoFiles")
+	}
+}

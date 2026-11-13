@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cerberus.ssh</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/cerberus-ssh</string>
+        <string>-listen</string>
+        <string>0.0.0.0:2222</string>
+        <string>-engine-url</string>
+        <string>http://127.0.0.1:8089</string>
+        <string>-hostkey-file</string>
+        <string>/var/lib/cerberus-ssh/hostkey</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/var/log/cerberus/ssh.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/cerberus/ssh.err</string>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65536</integer>
+    </dict>
+</dict>
+</plist>

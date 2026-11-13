@@ -34,6 +34,7 @@ type Config struct {
 	LogLevel           string
 	CacheSize          int
 	EvalTimeout        time.Duration
+	BundlePubKey       string
 }
 
 // Load resolves env (via getenv) then flags (args, os.Args[1:] style). Flag >
@@ -63,6 +64,7 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 		LogLevel:           firstNonEmpty(getenv("CERBERUS_LOG_LEVEL"), "info"),
 		CacheSize:          cacheSize,
 		EvalTimeout:        evalTimeout,
+		BundlePubKey:       getenv("CERBERUS_BUNDLE_PUBKEY"),
 	}
 
 	fs := flag.NewFlagSet("cerberus", flag.ContinueOnError)
@@ -73,6 +75,7 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	fs.StringVar(&c.PGDSN, "pg-dsn", c.PGDSN, "PostgreSQL DSN — system of record for gateway data ($CERBERUS_PG_DSN); empty = flat file only")
 	fs.IntVar(&c.AuditRetentionDays, "audit-retention-days", c.AuditRetentionDays, "days to retain daily audit SQLite logs ($CERBERUS_AUDIT_RETENTION_DAYS)")
 	fs.StringVar(&c.ShipURL, "ship-url", c.ShipURL, "endpoint for shipping decision logs ($CERBERUS_DECISION_LOG_SHIP_URL)")
+	fs.StringVar(&c.BundlePubKey, "bundle-pubkey", c.BundlePubKey, "base64/PEM ed25519 public key for bundle signature verification ($CERBERUS_BUNDLE_PUBKEY)")
 	// No -admin-token flag: a secret on argv is readable by any local user via
 	// ps or /proc/<pid>/cmdline. The token comes from the environment only.
 	fs.StringVar(&c.LogLevel, "log-level", c.LogLevel, "debug|info|warn|error ($CERBERUS_LOG_LEVEL)")

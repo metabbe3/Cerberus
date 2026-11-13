@@ -1,0 +1,29 @@
+[Unit]
+Description=Cerberus Tap (LLM Gateway Interceptor & Enforcement)
+Documentation=https://github.com/metabbe3/cerberus
+After=network.target cerberus-engine.service
+Wants=cerberus-engine.service
+
+[Service]
+Type=simple
+User=cerberus
+Group=cerberus
+EnvironmentFile=-/etc/cerberus/cerberus-tap.env
+ExecStart=/usr/local/bin/cerberus-tap -listen 0.0.0.0:8090 -upstream $UPSTREAM -engine-url http://127.0.0.1:8089 -data-dir /var/lib/cerberus-tap -strict
+Restart=always
+RestartSec=5s
+
+# Security Hardening
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/cerberus-tap
+
+# Resource Limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

@@ -6,3 +6,6 @@ dist/
 owl/node_modules
 owl/.next
 __pycache__/
+data/prod.json
+.superpowers/
+
