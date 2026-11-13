@@ -814,7 +814,10 @@ func (m *dbManager) queryAggregate(ctx context.Context, since, until time.Time, 
 			}
 			if err := runOne(db); err != nil {
 				_ = db.Close()
-				return nil, fmt.Errorf("audit: timeseries: %w", err)
+				// A day-file that exists on disk but whose schema/tables have not
+				// been created yet (writer hasn't flushed its first batch) must
+				// not abort the aggregate — it is semantically empty.
+				continue //nolint:revive // keep scanning remaining day files
 			}
 			_ = db.Close()
 		}
