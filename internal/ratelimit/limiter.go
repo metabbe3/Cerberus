@@ -148,6 +148,22 @@ func (l *Limiter) Allow(ctx context.Context, keyID string, stage string) Verdict
 	}
 
 	kl := l.getOrInitKeyLimiter(keyID, cfg)
+
+	var fetchedCount int64
+	var didFetch bool
+	var fetchErr error
+	if stage == "tool" && cfg.DailyToolCalls > 0 && l.audit != nil {
+		todayStr := time.Now().UTC().Format("20060102")
+		kl.mu.Lock()
+		needsFetch := kl.dayStamp != todayStr || !kl.dailyChecked
+		kl.mu.Unlock()
+
+		if needsFetch {
+			fetchedCount, fetchErr = l.audit.DailyToolCallsCount(ctx, keyID, time.Now().UTC())
+			didFetch = true
+		}
+	}
+
 	kl.mu.Lock()
 	defer kl.mu.Unlock()
 
@@ -190,7 +206,20 @@ func (l *Limiter) Allow(ctx context.Context, keyID string, stage string) Verdict
 				kl.dailyChecked = false
 			}
 
-			if !kl.dailyChecked && l.audit != nil {
+			if !kl.dailyChecked && didFetch {
+				if fetchErr != nil {
+					if now.Sub(kl.lastAuditWarn) >= time.Minute {
+						kl.lastAuditWarn = now
+						slog.Warn("ratelimit: failed to fetch daily tool calls count; retrying on next call",
+							"key_id", keyID, "err", fetchErr)
+					}
+				} else {
+					kl.dailyCount = fetchedCount
+					kl.dailyChecked = true
+				}
+			}
+
+			if !kl.dailyChecked && !didFetch && l.audit != nil {
 				cnt, err := l.audit.DailyToolCallsCount(ctx, keyID, now.UTC())
 				if err != nil {
 					if now.Sub(kl.lastAuditWarn) >= time.Minute {

@@ -21,10 +21,11 @@ type Store struct {
 	mu              sync.Mutex
 	// onSwaps holds callbacks invoked after each successful swap.
 	// Protected by mu.
-	onSwaps       []func(*Snapshot)
-	prevSnapshot  *Snapshot
-	prevBundle    []byte
-	currentBundle []byte
+	onSwaps        []func(*Snapshot)
+	prevSnapshot   *Snapshot
+	prevBundle     []byte
+	prevAddedFiles []string
+	currentBundle  []byte
 }
 
 // SetVerificationKey sets the public key used to verify incoming bundles.

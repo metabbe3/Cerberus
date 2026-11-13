@@ -18,6 +18,11 @@ import (
 	"github.com/metabbe3/cerberus/internal/audit"
 )
 
+const (
+	maxClusterBundleBytes = 64 << 20 // 64MB max bundle size pulled from peer
+	maxClusterAuditBytes  = 32 << 20 // 32MB max audit events JSON from peer
+)
+
 // SyncPayload is exchanged between Cerberus nodes during gossip sync.
 type SyncPayload struct {
 	NodeID         string `json:"node_id"`
@@ -144,6 +149,26 @@ func (cm *ClusterManager) SyncAll(ctx context.Context) {
 	}
 }
 
+// shouldPullFromPeer implements the HA authoritative rule:
+// A peer is authoritative only if it has a differing revision or data hash AND:
+// 1. Its epoch is strictly higher than our epoch, OR
+// 2. Its epoch is equal to our epoch AND it started earlier (StartedAt tie-break).
+// A peer with a lower epoch never overwrites our policy, even if older.
+func shouldPullFromPeer(my, peer SyncPayload) bool {
+	hasDiff := (peer.BundleRevision != "" && peer.BundleRevision != my.BundleRevision) ||
+		(peer.DataHash != "" && peer.DataHash != my.DataHash)
+	if !hasDiff {
+		return false
+	}
+	if peer.Epoch > my.Epoch {
+		return true
+	}
+	if peer.Epoch == my.Epoch && peer.StartedAt < my.StartedAt {
+		return true
+	}
+	return false
+}
+
 func (cm *ClusterManager) syncWithPeer(ctx context.Context, peer string, myPayload SyncPayload) error {
 	body, err := json.Marshal(myPayload)
 	if err != nil {
@@ -174,20 +199,7 @@ func (cm *ClusterManager) syncWithPeer(ctx context.Context, peer string, myPaylo
 		return fmt.Errorf("decode peer payload: %w", err)
 	}
 
-	// HA rule: The eldest peer (lower startedAt) or peer with higher epoch/different revision
-	// is authoritative. If peer is older and has different revision/hash, pull bundle from it.
-	shouldPull := false
-	if peerPayload.BundleRevision != "" && peerPayload.BundleRevision != myPayload.BundleRevision {
-		if peerPayload.StartedAt < myPayload.StartedAt || peerPayload.Epoch > myPayload.Epoch {
-			shouldPull = true
-		}
-	} else if peerPayload.DataHash != "" && peerPayload.DataHash != myPayload.DataHash {
-		if peerPayload.StartedAt < myPayload.StartedAt || peerPayload.Epoch > myPayload.Epoch {
-			shouldPull = true
-		}
-	}
-
-	if shouldPull {
+	if shouldPullFromPeer(myPayload, peerPayload) {
 		slog.Info("cluster: pulling bundle from authoritative peer", "peer", peer, "peer_rev", peerPayload.BundleRevision, "peer_epoch", peerPayload.Epoch)
 		return cm.pullBundle(ctx, peer)
 	}
@@ -213,9 +225,12 @@ func (cm *ClusterManager) pullBundle(ctx context.Context, peer string) error {
 		return fmt.Errorf("pull bundle failed with status %d", resp.StatusCode)
 	}
 
-	bundleBytes, err := io.ReadAll(resp.Body)
+	bundleBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxClusterBundleBytes+1))
 	if err != nil {
 		return fmt.Errorf("read pulled bundle: %w", err)
+	}
+	if int64(len(bundleBytes)) > maxClusterBundleBytes {
+		return fmt.Errorf("pulled bundle exceeds max size (%d bytes)", maxClusterBundleBytes)
 	}
 
 	if cm.srv.deps.Store == nil {
@@ -302,7 +317,7 @@ func (s *Server) queryClusterAudit(w http.ResponseWriter, r *http.Request, f aud
 					return
 				}
 				var peerEvs []audit.Event
-				if err := json.NewDecoder(resp.Body).Decode(&peerEvs); err == nil {
+				if err := json.NewDecoder(io.LimitReader(resp.Body, maxClusterAuditBytes+1)).Decode(&peerEvs); err == nil {
 					mu.Lock()
 					allEvents = append(allEvents, peerEvs...)
 					mu.Unlock()

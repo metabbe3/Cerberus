@@ -43,7 +43,7 @@ fixture_agents := {
 	},
 	"k-docker-open": {
 		"name": "docker-open-agent",
-		"docker_write_allowlist": {"start": true, "create": true, "restart": true},
+		"docker_write_allowlist": {"start": true, "create": true, "restart": true, "stop": true, "rm": true},
 	},
 }
 
@@ -160,6 +160,17 @@ test_docker_stranger_write_denied if {
 		"key_id": "stranger-key",
 		"action": "start",
 		"resource": "any-image:latest",
+	})
+	out.decision == "deny"
+	out.rule_id == "docker.write_not_allowlisted"
+}
+
+test_docker_stranger_stop_denied if {
+	out := decide({
+		"stage": "docker",
+		"key_id": "stranger-key",
+		"action": "stop",
+		"resource": "box-x",
 	})
 	out.decision == "deny"
 	out.rule_id == "docker.write_not_allowlisted"

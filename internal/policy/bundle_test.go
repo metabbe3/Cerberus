@@ -487,6 +487,91 @@ func TestStore_BundleRollback(t *testing.T) {
 	}
 }
 
+// B1 audit fix: bundle rollback cleans up added files and executes smoke test
+func TestStore_BundleRollback_RestoresFilesAndRunsSmoke(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tmpDir := t.TempDir()
+	policyDir := filepath.Join(tmpDir, "policies")
+	if err := os.MkdirAll(policyDir, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	dataPath := filepath.Join(tmpDir, "data.json")
+	if err := os.CopyFS(policyDir, os.DirFS("../../policies")); err != nil {
+		t.Fatalf("copy: %v", err)
+	}
+	if err := os.WriteFile(dataPath, loadTestData(t), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	store, err := NewStore(ctx, policyDir, dataPath)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	aiRego, err := os.ReadFile(filepath.Join(policyDir, "stages/ai.rego")) //nolint:gosec // G304 test fixture
+	if err != nil {
+		t.Fatalf("read ai.rego: %v", err)
+	}
+	toolRego, err := os.ReadFile(filepath.Join(policyDir, "stages/tool.rego")) //nolint:gosec // G304 test fixture
+	if err != nil {
+		t.Fatalf("read tool.rego: %v", err)
+	}
+
+	// Bundle A: 2 files
+	bA := createCustomBundle(t, []string{"stages"}, "rev-A", loadTestData(t), map[string]string{
+		"policies/stages/ai.rego":   string(aiRego),
+		"policies/stages/tool.rego": string(toolRego),
+	}, nil)
+	snapA, err := store.LoadBundle(ctx, bA)
+	if err != nil {
+		t.Fatalf("LoadBundle A: %v", err)
+	}
+	if snapA.Revision != "rev-A" {
+		t.Fatalf("snapA.Revision = %q, want rev-A", snapA.Revision)
+	}
+
+	// Bundle B: Bundle A + 1 new file
+	newFileContent := "package stages\n\ndefault extra_audit_allowed := true\n"
+	bB := createCustomBundle(t, []string{"stages"}, "rev-B", loadTestData(t), map[string]string{
+		"policies/stages/ai.rego":                  string(aiRego),
+		"policies/stages/tool.rego":                string(toolRego),
+		"policies/stages/extra_audit_feature.rego": newFileContent,
+	}, nil)
+	snapB, err := store.LoadBundle(ctx, bB)
+	if err != nil {
+		t.Fatalf("LoadBundle B: %v", err)
+	}
+	if snapB.Revision != "rev-B" {
+		t.Fatalf("snapB.Revision = %q, want rev-B", snapB.Revision)
+	}
+
+	newFilePath := filepath.Join(policyDir, "stages/extra_audit_feature.rego")
+	if _, err := os.Stat(newFilePath); err != nil {
+		t.Fatalf("expected new file from bundle B on disk, got err: %v", err)
+	}
+
+	// Rollback to Bundle A
+	rolledSnap, err := store.Rollback(ctx)
+	if err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if rolledSnap.Revision != "rev-A" {
+		t.Fatalf("rolledSnap.Revision = %q, want rev-A", rolledSnap.Revision)
+	}
+
+	// Verify the newly added file was deleted upon rollback
+	if _, err := os.Stat(newFilePath); !os.IsNotExist(err) {
+		t.Fatalf("expected new file %s to be deleted on rollback, stat err: %v", newFilePath, err)
+	}
+
+	// Verify smoke test passes on rolled back policy
+	if err := DryRunSmoke(ctx, rolledSnap); err != nil {
+		t.Fatalf("smoke test failed on rolled back snapshot: %v", err)
+	}
+}
+
 // Data subtree /data/* support
 func TestStore_BundleDataSubtree(t *testing.T) {
 	t.Parallel()

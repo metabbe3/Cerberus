@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
@@ -13,7 +14,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/metabbe3/cerberus/internal/audit"
 	"github.com/metabbe3/cerberus/internal/engine"
 	"github.com/metabbe3/cerberus/internal/policy"
 )
@@ -206,6 +209,7 @@ func TestBundle_E2E_BuildSignUploadSmokeRollback(t *testing.T) {
 	// Step 6: Rollback -> revision returns to bundle-rev-1
 	req, _ = http.NewRequest(http.MethodPost, h.ts.URL+"/v1/admin/bundle/rollback", nil)
 	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("X-Admin-User", "test-admin")
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("POST rollback: %v", err)
@@ -229,6 +233,37 @@ func TestBundle_E2E_BuildSignUploadSmokeRollback(t *testing.T) {
 	}
 	if rollResp.Epoch != 4 {
 		t.Fatalf("rolled back epoch = %d, want 4", rollResp.Epoch)
+	}
+
+	// Verify audit event emitted for bundle rollback (B4)
+	var foundRollback bool
+	var matchedEvent audit.Event
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		evs, err := h.auditLog.Query(context.Background(), audit.Filter{Limit: 10})
+		if err == nil {
+			for _, ev := range evs {
+				if ev.RuleID == "admin.bundle.rollback" {
+					foundRollback = true
+					matchedEvent = ev
+					break
+				}
+			}
+		}
+		if foundRollback {
+			break
+		}
+	}
+	if !foundRollback {
+		t.Fatal("expected admin.bundle.rollback audit event, none found within 5s")
+	}
+	if matchedEvent.KeyID != "test-admin" {
+		t.Errorf("matchedEvent.KeyID = %q, want test-admin", matchedEvent.KeyID)
+	}
+	if matchedEvent.Epoch != 4 {
+		t.Errorf("matchedEvent.Epoch = %d, want 4", matchedEvent.Epoch)
+	}
+	if matchedEvent.Reason != "rollback to revision bundle-rev-1" {
+		t.Errorf("matchedEvent.Reason = %q, want rollback to revision bundle-rev-1", matchedEvent.Reason)
 	}
 
 	// Step 7: Verify decision still works as expected

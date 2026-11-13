@@ -436,6 +436,7 @@ func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, err
 
 	// If store has paths configured on disk, persist the bundle contents so
 	// reload or disk readers also observe them.
+	var addedFiles []string
 	if s.policyDir != "" {
 		for name, content := range b.RegoFiles {
 			rel, err := safeRel(name)
@@ -443,6 +444,9 @@ func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, err
 				return nil, err
 			}
 			dest := filepath.Join(s.policyDir, rel)
+			if _, err := os.Stat(dest); os.IsNotExist(err) {
+				addedFiles = append(addedFiles, rel)
+			}
 			if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
 				return nil, fmt.Errorf("bundle: install mkdir: %w", err)
 			}
@@ -460,6 +464,7 @@ func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, err
 	// Save previous state for instant rollback
 	s.prevSnapshot = old
 	s.prevBundle = s.currentBundle
+	s.prevAddedFiles = addedFiles
 	s.currentBundle = bundleGz
 
 	// Atomic swap
@@ -504,6 +509,9 @@ func (s *Store) Rollback(ctx context.Context) (*Snapshot, error) {
 		if s.policyDir != "" {
 			_ = copyDir(s.policyDir, tmpDir)
 		}
+		for _, rel := range s.prevAddedFiles {
+			_ = os.Remove(filepath.Join(tmpDir, rel))
+		}
 		for name, content := range b.RegoFiles {
 			rel, err := safeRel(name)
 			if err != nil {
@@ -524,7 +532,14 @@ func (s *Store) Rollback(ctx context.Context) (*Snapshot, error) {
 		}
 		snap.Revision = b.Revision
 
+		if err := DryRunSmoke(ctx, snap); err != nil {
+			return nil, fmt.Errorf("rollback: smoke test failed: %w", err)
+		}
+
 		if s.policyDir != "" {
+			for _, rel := range s.prevAddedFiles {
+				_ = os.Remove(filepath.Join(s.policyDir, rel))
+			}
 			for name, content := range b.RegoFiles {
 				rel, err := safeRel(name)
 				if err != nil {
@@ -554,11 +569,15 @@ func (s *Store) Rollback(ctx context.Context) (*Snapshot, error) {
 			Maskers:  s.prevSnapshot.Maskers,
 			Loaded:   time.Now(),
 		}
+		if err := DryRunSmoke(ctx, rolledBack); err != nil {
+			return nil, fmt.Errorf("rollback: smoke test failed: %w", err)
+		}
 	}
 
 	s.currentBundle = s.prevBundle
 	s.prevBundle = nil
 	s.prevSnapshot = nil
+	s.prevAddedFiles = nil
 
 	s.ptr.Store(rolledBack)
 	s.notifySwaps(rolledBack)

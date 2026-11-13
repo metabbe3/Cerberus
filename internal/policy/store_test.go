@@ -310,3 +310,40 @@ func TestStore_Reload_FailsSmokeTest(t *testing.T) {
 		t.Fatalf("epoch changed to %d, want 1", s.Current().Epoch)
 	}
 }
+
+// B9 audit fix: verify smoke test handles missing bypass_unknown_keys flag gracefully by defaulting to closedMode=true
+func TestDryRunSmoke_ClosedModeDefault(t *testing.T) {
+	ctx := context.Background()
+
+	raw := loadTestData(t)
+
+	// 1. Data without bypass_unknown_keys flag (closed mode default)
+	var dataWithoutFlag map[string]any
+	if err := json.Unmarshal(raw, &dataWithoutFlag); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	cfg := dataWithoutFlag["config"].(map[string]any)
+	delete(cfg, "bypass_unknown_keys")
+	dataWithoutFlagBytes, _ := json.Marshal(dataWithoutFlag)
+
+	snapWithoutFlag, err := Load(ctx, policyDir, dataWithoutFlagBytes, 1)
+	if err != nil {
+		t.Fatalf("Load without flag: %v", err)
+	}
+
+	// Smoke test must PASS on data without bypass_unknown_keys flag
+	if err := DryRunSmoke(ctx, snapWithoutFlag); err != nil {
+		t.Fatalf("DryRunSmoke failed with closedMode default (missing flag): %v", err)
+	}
+
+	// 2. Data with bypass_unknown_keys == true (onboarding mode)
+	snapWithFlagTrue, err := Load(ctx, policyDir, raw, 2)
+	if err != nil {
+		t.Fatalf("Load with flag true: %v", err)
+	}
+
+	// Smoke test must PASS on data with bypass_unknown_keys == true
+	if err := DryRunSmoke(ctx, snapWithFlagTrue); err != nil {
+		t.Fatalf("DryRunSmoke failed with bypass_unknown_keys=true: %v", err)
+	}
+}

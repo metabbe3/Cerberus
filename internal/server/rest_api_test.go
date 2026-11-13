@@ -295,3 +295,42 @@ func TestREST_QueryEndpointAndRateLimiting(t *testing.T) {
 		t.Fatalf("expected code rate_limit_exceeded, got %q", rateErr.Code)
 	}
 }
+
+func TestServer_QueryAPI_SSRF_Protection(t *testing.T) {
+	h := newHarness(t)
+
+	forbiddenQueries := []string{
+		`{"q": "http.send({\"method\": \"get\", \"url\": \"http://evil.internal\"})"}`,
+		`{"q": "opa.runtime()"}`,
+		`{"q": "net.lookup_ip_addr(\"localhost\")"}`,
+		`{"q": "crypto.x509.parse_certificates(\"cert\")"}`,
+	}
+
+	for _, body := range forbiddenQueries {
+		req, _ := http.NewRequest(http.MethodPost, h.ts.URL+"/v1/query", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST /v1/query: %v", err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("query %s got status %d, want 400", body, resp.StatusCode)
+		}
+	}
+
+	// Valid query should succeed (200)
+	validBody := `{"q": "data.gateway.authz.decision", "input": {"stage": "tool", "key_id": "k-open", "tool_call": "bash", "args": {"cmd": "echo test"}}}`
+	req, _ := http.NewRequest(http.MethodPost, h.ts.URL+"/v1/query", strings.NewReader(validBody))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/query valid: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("valid query got status %d, want 200", resp.StatusCode)
+	}
+}

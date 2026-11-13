@@ -121,13 +121,13 @@ func DryRunSmoke(ctx context.Context, snap *Snapshot) error {
 		}
 	}
 
-	// Fail-closed deployments (bypass_unknown_keys=false) deny unknown keys
+	// Fail-closed deployments (bypass_unknown_keys != true) deny unknown keys
 	// outright, so stranger-key "expect allow" cases do not apply — skip them
 	// instead of forcing the data back to onboarding mode.
-	closedMode := false
+	closedMode := true
 	if cfg, ok := snap.Data["config"].(map[string]any); ok {
-		if v, ok := cfg["bypass_unknown_keys"].(bool); ok {
-			closedMode = !v
+		if v, ok := cfg["bypass_unknown_keys"].(bool); ok && v {
+			closedMode = false
 		}
 	}
 

@@ -3,6 +3,8 @@ package ratelimit
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -285,5 +287,72 @@ func TestLimiter_UnkeyedIncrementsMetric(t *testing.T) {
 	after := testutil.ToFloat64(RateLimitUnkeyedTotal)
 	if after != before+1 {
 		t.Fatalf("expected RateLimitUnkeyedTotal to increment by 1, got before=%v, after=%v", before, after)
+	}
+}
+
+type slowAuditCounter struct {
+	delay time.Duration
+	count int64
+}
+
+func (s *slowAuditCounter) DailyToolCallsCount(_ context.Context, _ string, _ time.Time) (int64, error) {
+	time.Sleep(s.delay)
+	return s.count, nil
+}
+
+func TestLimiter_ConcurrentAllow_NoDeadlockWithSlowAudit(t *testing.T) {
+	data := map[string]any{
+		"agents": map[string]any{
+			"k-conc": map[string]any{
+				"rate_limit": map[string]any{
+					"daily_tool_calls":    100,
+					"requests_per_minute": 1000,
+					"bursts":              1000,
+				},
+			},
+		},
+	}
+	snap := &policy.Snapshot{Epoch: 1, Data: data}
+	store := policy.NewStoreWithSnapshot(snap)
+
+	slowAudit := &slowAuditCounter{
+		delay: 100 * time.Millisecond,
+		count: 5,
+	}
+
+	lim := NewLimiter(store, slowAudit)
+	ctx := context.Background()
+
+	const numGoroutines = 50
+	var wg sync.WaitGroup
+	errCh := make(chan error, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			v := lim.Allow(ctx, "k-conc", "tool")
+			if !v.Allowed {
+				errCh <- fmt.Errorf("unexpected deny: %s", v.Reason)
+			}
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success
+	case <-time.After(3 * time.Second):
+		t.Fatal("deadlock or timeout: 50 concurrent Allow calls did not finish within 3s")
+	}
+
+	close(errCh)
+	for err := range errCh {
+		t.Errorf("error in concurrent Allow: %v", err)
 	}
 }

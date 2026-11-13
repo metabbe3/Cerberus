@@ -475,7 +475,8 @@ func TestDockerProxy_ContainerLabelResolution(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 OK, got %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200 OK, got %d, body: %s", resp.StatusCode, body)
 	}
 }
 

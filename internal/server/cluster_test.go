@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -208,5 +209,119 @@ func TestCluster_AuditMergeSort(t *testing.T) {
 		if events[i].Subject != want {
 			t.Errorf("event[%d].Subject = %q, want %q", i, events[i].Subject, want)
 		}
+	}
+}
+
+func TestCluster_ShouldPullFromPeer_TableDriven(t *testing.T) {
+	my := SyncPayload{
+		NodeID:         "local-node",
+		StartedAt:      2000,
+		Epoch:          5,
+		BundleRevision: "rev-5",
+		DataHash:       "hash-5",
+	}
+
+	tests := []struct {
+		name     string
+		peer     SyncPayload
+		wantPull bool
+	}{
+		{
+			name: "peer older+lower epoch: no pull (prevent regression)",
+			peer: SyncPayload{
+				NodeID:         "peer-old",
+				StartedAt:      1000, // older node
+				Epoch:          4,    // lower epoch
+				BundleRevision: "rev-4",
+				DataHash:       "hash-4",
+			},
+			wantPull: false,
+		},
+		{
+			name: "peer higher epoch: pull",
+			peer: SyncPayload{
+				NodeID:         "peer-ahead",
+				StartedAt:      3000, // younger node
+				Epoch:          6,    // higher epoch
+				BundleRevision: "rev-6",
+				DataHash:       "hash-6",
+			},
+			wantPull: true,
+		},
+		{
+			name: "same epoch, peer older started: pull",
+			peer: SyncPayload{
+				NodeID:         "peer-tiebreak-win",
+				StartedAt:      1000, // older node
+				Epoch:          5,    // same epoch
+				BundleRevision: "rev-5-alt",
+				DataHash:       "hash-5",
+			},
+			wantPull: true,
+		},
+		{
+			name: "same epoch, peer younger started: no pull",
+			peer: SyncPayload{
+				NodeID:         "peer-tiebreak-lose",
+				StartedAt:      3000, // younger node
+				Epoch:          5,    // same epoch
+				BundleRevision: "rev-5-alt",
+				DataHash:       "hash-5",
+			},
+			wantPull: false,
+		},
+		{
+			name: "identical revision and hash: no pull",
+			peer: SyncPayload{
+				NodeID:         "peer-identical",
+				StartedAt:      1000,
+				Epoch:          6,
+				BundleRevision: "rev-5",
+				DataHash:       "hash-5",
+			},
+			wantPull: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shouldPullFromPeer(my, tc.peer)
+			if got != tc.wantPull {
+				t.Errorf("shouldPullFromPeer() = %v, want %v", got, tc.wantPull)
+			}
+		})
+	}
+}
+
+func TestCluster_PullBundle_ExceedsLimit(t *testing.T) {
+	// A fake peer server that streams > 64MB bundle
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/gzip")
+		w.WriteHeader(http.StatusOK)
+		chunk := make([]byte, 1024*1024)
+		for i := 0; i < 65; i++ {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+		}
+	}))
+	defer ts.Close()
+
+	srv := &Server{
+		deps: Deps{
+			AdminToken: "test",
+		},
+	}
+	cm := &ClusterManager{
+		srv:    srv,
+		client: ts.Client(),
+	}
+
+	err := cm.pullBundle(context.Background(), ts.URL)
+	if err == nil {
+		t.Fatal("expected error pulling bundle exceeding max size, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds max size") {
+		t.Fatalf("expected 'exceeds max size' in error, got: %v", err)
 	}
 }

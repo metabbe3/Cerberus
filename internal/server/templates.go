@@ -29,7 +29,7 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 	}
 	tpls, err := s.deps.PGMirror.ListTemplates(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeInternalErr(w, err)
 		return
 	}
 	if tpls == nil {
@@ -71,7 +71,7 @@ func (s *Server) putTemplate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.deps.PGMirror.UpsertTemplate(r.Context(), doc.ID, doc.Name, doc.Description, doc.Stage, doc.Policy); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeInternalErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": doc.ID})

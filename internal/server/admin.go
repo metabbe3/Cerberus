@@ -229,7 +229,7 @@ func (s *Server) listRevisions(w http.ResponseWriter, r *http.Request) {
 	}
 	revs, err := s.deps.Audit.ListRevisions(r.Context(), limit)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeInternalErr(w, err)
 		return
 	}
 	if revs == nil {
@@ -353,6 +353,12 @@ func stripPaths(msg string) string {
 	return strings.Join(fields, " ")
 }
 
+// writeInternalErr logs the full error with slog.Error and responds with a sanitized 500 "internal error".
+func writeInternalErr(w http.ResponseWriter, err error) {
+	slog.Error("internal error", "err", err)
+	writeErr(w, http.StatusInternalServerError, "internal error")
+}
+
 // validatePolicy parses one submitted module and compiles it together with
 // the modules currently on disk, without touching the live snapshot.
 func (s *Server) validatePolicy(w http.ResponseWriter, r *http.Request) {
@@ -375,7 +381,7 @@ func (s *Server) validatePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	mods, err := currentModules(s.deps.Store.PolicyDir())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeInternalErr(w, err)
 		return
 	}
 	mods["candidate.rego"] = candidate
@@ -456,7 +462,7 @@ func (s *Server) queryAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	events, err := s.deps.Audit.Query(r.Context(), f)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeInternalErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, events)
@@ -576,7 +582,7 @@ func (s *Server) eraseDecision(w http.ResponseWriter, r *http.Request) {
 	for _, id := range ids {
 		ok, err := s.deps.Audit.Erase(r.Context(), id)
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
+			writeInternalErr(w, err)
 			return
 		}
 		if ok {
@@ -644,6 +650,23 @@ func (s *Server) rollbackBundle(w http.ResponseWriter, r *http.Request) {
 		writeStoreErr(w, "rollback bundle", err)
 		return
 	}
+
+	if s.deps.Audit != nil {
+		author := r.Header.Get("X-Admin-User")
+		if author == "" {
+			author = "admin"
+		}
+		s.deps.Audit.Emit(audit.Event{
+			Time:     time.Now().UTC(),
+			RuleID:   "admin.bundle.rollback",
+			KeyID:    author,
+			Epoch:    snap.Epoch,
+			Reason:   "rollback to revision " + snap.Revision,
+			Decision: "allow",
+			Stage:    "admin",
+		})
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":       true,
 		"epoch":    snap.Epoch,
@@ -775,7 +798,7 @@ func (s *Server) listPolicies(w http.ResponseWriter, _ *http.Request) {
 		return nil
 	})
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeInternalErr(w, err)
 		return
 	}
 
@@ -876,12 +899,20 @@ func (s *Server) postQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	forbiddenBuiltins := []string{"http.send", "opa.runtime", "net.", "crypto."}
+	for _, forbidden := range forbiddenBuiltins {
+		if strings.Contains(q, forbidden) {
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("query contains forbidden builtin or function: %s", forbidden))
+			return
+		}
+	}
+
 	snap := s.deps.Store.Current()
 	dir := s.deps.Store.PolicyDir()
 
 	res, err := loader.NewFileLoader().WithFilter(regoFilter).All([]string{dir})
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeInternalErr(w, err)
 		return
 	}
 
@@ -902,7 +933,7 @@ func (s *Server) postQuery(w http.ResponseWriter, r *http.Request) {
 
 	rs, err := prepared.Eval(r.Context(), rego.EvalInput(req.Input))
 	if err != nil {
-		writeErrCode(w, http.StatusInternalServerError, "eval_error", err.Error())
+		writeInternalErr(w, err)
 		return
 	}
 
@@ -1100,7 +1131,7 @@ func (s *Server) getCoverage(w http.ResponseWriter, r *http.Request) {
 	}
 	rep, err := s.deps.Store.Coverage(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, fmt.Sprintf("calculate coverage: %v", err))
+		writeInternalErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, rep)

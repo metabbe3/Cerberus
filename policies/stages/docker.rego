@@ -195,7 +195,6 @@ docker_write_allowed if {
 
 docker_write_action if {
 	not docker_readonly_action
-	not action in ["rm", "rmi", "delete", "down", "stop", "kill"]
 	not docker_write_allowed
 }
 

@@ -481,6 +481,33 @@ func TestAdmin_PolicyValidate_GoodRego200(t *testing.T) {
 	}
 }
 
+func TestAdmin_PolicyValidate_InternalErrorSanitized(t *testing.T) {
+	t.Parallel()
+	h := newHarnessCopy(t)
+	// Remove the policy dir to force currentModules to fail with a path error
+	if err := os.RemoveAll(h.policies); err != nil {
+		t.Fatalf("remove policies: %v", err)
+	}
+
+	rego := "package gateway.extra\n\nallow := true\n"
+	resp := h.do(t, http.MethodPost, "/v1/admin/policy/validate", "application/json",
+		`{"rego":`+strconv.Quote(rego)+`}`, true)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", resp.StatusCode)
+	}
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	bodyStr := string(bodyBytes)
+	if strings.Contains(bodyStr, h.policies) {
+		t.Fatalf("response body leaked internal path %q: %s", h.policies, bodyStr)
+	}
+	if !strings.Contains(bodyStr, "internal error") {
+		t.Fatalf("response body expected 'internal error', got: %s", bodyStr)
+	}
+}
+
 func TestAudit_QueryReturnsDecision(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
