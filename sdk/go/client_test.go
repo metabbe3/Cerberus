@@ -14,7 +14,7 @@ import (
 )
 
 func TestClient_DecideToolAndGuardedExecutor_Allow(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(cerberus.Decision{
 			Decision: "allow",
@@ -31,7 +31,7 @@ func TestClient_DecideToolAndGuardedExecutor_Allow(t *testing.T) {
 	guard := cerberus.NewGuardedExecutor(client)
 
 	executed := false
-	runner := func(ctx context.Context, tool string, args any) (any, error) {
+	runner := func(_ context.Context, _ string, _ any) (any, error) {
 		executed = true
 		return "tool-result", nil
 	}
@@ -55,7 +55,7 @@ func TestClient_DecideToolAndGuardedExecutor_Allow(t *testing.T) {
 }
 
 func TestClient_DecideToolAndGuardedExecutor_Deny(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(cerberus.Decision{
 			Decision: "deny",
@@ -72,7 +72,7 @@ func TestClient_DecideToolAndGuardedExecutor_Deny(t *testing.T) {
 	guard := cerberus.NewGuardedExecutor(client)
 
 	executed := false
-	runner := func(ctx context.Context, tool string, args any) (any, error) {
+	runner := func(_ context.Context, _ string, _ any) (any, error) {
 		executed = true
 		return "tool-result", nil
 	}
@@ -102,7 +102,7 @@ func TestClient_DecideToolAndGuardedExecutor_Deny(t *testing.T) {
 
 func TestClient_CachingTTL60s(t *testing.T) {
 	var requestCount atomic.Uint64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requestCount.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(cerberus.Decision{
@@ -166,7 +166,7 @@ func TestClient_CachingTTL60s(t *testing.T) {
 
 func TestClient_AutoRetryBackoff(t *testing.T) {
 	var attempts atomic.Uint64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		att := attempts.Add(1)
 		if att < 3 {
 			// Fail first two attempts with 503

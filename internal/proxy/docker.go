@@ -109,7 +109,7 @@ func NewDockerProxy(eng *engine.Engine, cfg DockerConfig) (*DockerProxy, error) 
 			}
 		},
 		Transport: transport,
-		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadGateway)
 			_ = json.NewEncoder(w).Encode(map[string]any{

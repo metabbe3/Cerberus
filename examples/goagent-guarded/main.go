@@ -11,7 +11,7 @@ import (
 )
 
 // Simulated existing tool executor in GoAgent
-func myToolRunner(ctx context.Context, tool string, args any) (any, error) {
+func myToolRunner(_ context.Context, tool string, args any) (any, error) {
 	fmt.Printf("[Agent Engine] Executing tool %s with args: %+v\n", tool, args)
 	return fmt.Sprintf("output from %s", tool), nil
 }

@@ -519,7 +519,7 @@ func TestEgressProxy_ResourceHygiene_IdleConnection(t *testing.T) {
 	}
 
 	// Server remains fully responsive
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	}))

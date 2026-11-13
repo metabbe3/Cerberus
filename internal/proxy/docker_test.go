@@ -481,7 +481,7 @@ func TestDockerProxy_ContainerLabelResolution(t *testing.T) {
 
 func BenchmarkDockerProxy_Overhead(b *testing.B) {
 	eng := setupTestEngine(&testing.T{})
-	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}))
