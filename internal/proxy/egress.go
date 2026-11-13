@@ -20,6 +20,10 @@ import (
 
 // EgressConfig holds options for the HTTP/HTTPS egress proxy.
 type EgressConfig struct {
+	// DenyLocalIPs blocks loopback/private/link-local/multicast/unspecified
+	// destination IPs at the dial Control hook (OS-level). Default TRUE when
+	// nil — tests that dial 127.0.0.1 backends must set it to false.
+	DenyLocalIPs  *bool
 	FallbackKeyID string
 	DialTimeout   time.Duration
 	// LookupIP overrides DNS lookup; defaults to net.LookupIP.
@@ -61,6 +65,10 @@ func NewEgressProxy(eng *engine.Engine, cfg EgressConfig) (*EgressProxy, error) 
 	// The Control hook sees the ACTUAL connection IP — validate it there,
 	// post-resolution, pre-handshake. Both the forward transport and the
 	// CONNECT tunnel dialer share this guard.
+	denyLocal := true
+	if cfg.DenyLocalIPs != nil {
+		denyLocal = *cfg.DenyLocalIPs
+	}
 	control := func(network, address string, _ syscall.RawConn) error {
 		host, _, err := net.SplitHostPort(address)
 		if err != nil {
@@ -70,6 +78,9 @@ func NewEgressProxy(eng *engine.Engine, cfg EgressConfig) (*EgressProxy, error) 
 		ip := net.ParseIP(ipStr)
 		if ip == nil {
 			return fmt.Errorf("egress: unparseable dial address %q", address)
+		}
+		if denyLocal && IsLocalIP(ip) {
+			return fmt.Errorf("egress blocked: connection to private/internal IP disallowed (%s)", ipStr)
 		}
 		return DenyHostIP(context.Background(), eng, ipStr)
 	}
@@ -106,6 +117,13 @@ func DenyHostIP(ctx context.Context, eng *engine.Engine, ipStr string) error {
 		return fmt.Errorf("egress: %s blocked: %s", ipStr, dec.RuleID)
 	}
 	return nil
+}
+
+// IsLocalIP reports whether an IP is loopback, private, link-local,
+// multicast, or unspecified (0.0.0.0/::) — never valid egress targets.
+func IsLocalIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()
 }
 
 // NormalizeIPString unwraps IPv4-mapped IPv6 ("::ffff:10.0.0.1" → "10.0.0.1")

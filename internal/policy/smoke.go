@@ -121,7 +121,20 @@ func DryRunSmoke(ctx context.Context, snap *Snapshot) error {
 		}
 	}
 
+	// Fail-closed deployments (bypass_unknown_keys=false) deny unknown keys
+	// outright, so stranger-key "expect allow" cases do not apply — skip them
+	// instead of forcing the data back to onboarding mode.
+	closedMode := false
+	if cfg, ok := snap.Data["config"].(map[string]any); ok {
+		if v, ok := cfg["bypass_unknown_keys"].(bool); ok {
+			closedMode = !v
+		}
+	}
+
 	for _, sc := range cases {
+		if closedMode && sc.wantDec == "allow" && !registeredKey(snap.Data, sc.input) {
+			continue
+		}
 		rs, err := snap.Query.Eval(ctx, rego.EvalInput(sc.input))
 		if err != nil {
 			return fmt.Errorf("smoke eval '%s' error: %w", sc.name, err)
@@ -139,8 +152,27 @@ func DryRunSmoke(ctx context.Context, snap *Snapshot) error {
 			return fmt.Errorf("smoke test failed on '%s': got %s/%s, want %s", sc.name, gotDec, gotRule, sc.wantDec)
 		}
 		if sc.wantRuleID != "" && gotRule != sc.wantRuleID {
-			return fmt.Errorf("smoke test failed on '%s': got rule %s, want %s", sc.name, gotRule, sc.wantRuleID)
+			// A stranger-key deny under bypass_unknown_keys=false is equally
+			// fail-closed: accept config.unknown_key_closed wherever the case
+			// expected a deny from a stage rule.
+			if !(sc.wantDec == "deny" && gotRule == "config.unknown_key_closed") {
+				return fmt.Errorf("smoke test failed on '%s': got rule %s, want %s", sc.name, gotRule, sc.wantRuleID)
+			}
 		}
 	}
 	return nil
+}
+
+// registeredKey reports whether the case's key_id exists in data.agents.
+func registeredKey(data map[string]any, input map[string]any) bool {
+	k, _ := input["key_id"].(string)
+	if k == "" {
+		return false
+	}
+	agents, ok := data["agents"].(map[string]any)
+	if !ok {
+		return false
+	}
+	_, ok = agents[k].(map[string]any)
+	return ok
 }

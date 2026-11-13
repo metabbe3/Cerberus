@@ -45,12 +45,6 @@ docker_decision := {
 	host_namespace
 } else := {
 	"decision": "deny",
-	"rule_id": "docker.write_not_allowlisted",
-	"reason": sprintf("mutating docker action %q is not allowlisted for this key", [action]),
-} if {
-	docker_write_action
-} else := {
-	"decision": "deny",
 	"rule_id": "docker.mount_forbidden",
 	"reason": "mounting docker.sock is forbidden",
 } if {

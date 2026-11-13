@@ -191,11 +191,8 @@ func askEngine(engineURL, token, keyID string, body []byte, strict bool) (decide
 		"key_id": keyID,
 		"stage":  "llm",
 		"action": "chat",
-		"input": map[string]any{
-			"key_id": keyID,
-			"model":  modelOf(body),
-			"prompt": prompt,
-		},
+		"model":  modelOf(body),
+		"prompt": prompt,
 	})
 	url := strings.TrimSuffix(engineURL, "/") + "/v1/decide/llm"
 	req, _ := http.NewRequest("POST", url, bytes.NewReader(payload))

@@ -30,6 +30,7 @@ func TestEgressProxy_HTTPForward(t *testing.T) {
 	defer backend.Close()
 
 	egress, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		DenyLocalIPs:  &[]bool{false}[0],
 		FallbackKeyID: "k-open",
 	})
 	if err != nil {
@@ -71,6 +72,7 @@ func TestEgressProxy_ProdShieldIPBlocked(t *testing.T) {
 	eng := setupTestEngine(t)
 
 	egress, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		DenyLocalIPs:  &[]bool{false}[0],
 		FallbackKeyID: "k-open",
 	})
 	if err != nil {
@@ -132,6 +134,7 @@ func TestEgressProxy_DNSResolveToProdIPBlocked(t *testing.T) {
 	eng := setupTestEngine(t)
 
 	egress, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		DenyLocalIPs:  &[]bool{false}[0],
 		FallbackKeyID: "k-open",
 		LookupIP: func(host string) ([]net.IP, error) {
 			if host == "sneaky-external.com" {
@@ -201,6 +204,7 @@ func TestEgressProxy_ConnectTunnelSuccess(t *testing.T) {
 	}()
 
 	egress, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		DenyLocalIPs:  &[]bool{false}[0],
 		FallbackKeyID: "k-open",
 	})
 	if err != nil {
@@ -279,6 +283,7 @@ func TestEgressProxy_RateLimit(t *testing.T) {
 	eng, store := setupTestEngineWithStore(t)
 	lim := ratelimit.NewLimiter(store, nil)
 	ep, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		DenyLocalIPs:  &[]bool{false}[0],
 		FallbackKeyID: "k-rate-limited",
 		Limiter:       lim,
 	})
@@ -327,6 +332,7 @@ func TestEgressProxy_HostHeaderSpoofBlocked(t *testing.T) {
 	eng := setupTestEngine(t)
 
 	egress, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		DenyLocalIPs:  &[]bool{false}[0],
 		FallbackKeyID: "k-open",
 	})
 	if err != nil {
@@ -385,6 +391,7 @@ func TestEgressProxy_ConnectMissingHost(t *testing.T) {
 	eng := setupTestEngine(t)
 
 	egress, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		DenyLocalIPs:  &[]bool{false}[0],
 		FallbackKeyID: "k-open",
 	})
 	if err != nil {
@@ -451,6 +458,7 @@ func TestEgressProxy_ResourceHygiene_IdleConnection(t *testing.T) {
 	}()
 
 	egress, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		DenyLocalIPs:  &[]bool{false}[0],
 		FallbackKeyID: "k-open",
 		DialTimeout:   1 * time.Second,
 	})
@@ -541,6 +549,7 @@ func TestEgressProxy_DNSPinning_MultiARecord(t *testing.T) {
 	eng := setupTestEngine(t)
 
 	egress, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		DenyLocalIPs:  &[]bool{false}[0],
 		FallbackKeyID: "k-open",
 		LookupIP: func(host string) ([]net.IP, error) {
 			if host == "api.github.com" {
@@ -614,6 +623,7 @@ func TestEgressProxy_PortValidation(t *testing.T) {
 	eng := setupTestEngine(t)
 
 	egress, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		DenyLocalIPs:  &[]bool{false}[0],
 		FallbackKeyID: "k-http-allow",
 		DialTimeout:   100 * time.Millisecond,
 	})
@@ -668,6 +678,7 @@ func TestEgressProxy_MalformedRequest(t *testing.T) {
 	eng := setupTestEngine(t)
 
 	egress, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		DenyLocalIPs:  &[]bool{false}[0],
 		FallbackKeyID: "k-open",
 	})
 	if err != nil {
@@ -718,6 +729,7 @@ func TestEgressProxy_HostPunycodeHomoglyphBlocked(t *testing.T) {
 	eng := setupTestEngine(t)
 
 	egress, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		DenyLocalIPs:  &[]bool{false}[0],
 		FallbackKeyID: "k-http-allow",
 	})
 	if err != nil {
