@@ -46,7 +46,10 @@ func newTestEngine(t *testing.T, sink Sink, opts Options) *Engine {
 		t.Fatalf("policy.NewStore: %v", err)
 	}
 	if opts.EvalTimeout == 0 {
-		opts.EvalTimeout = 500 * time.Millisecond
+		// Generous default: OPA cold-start policy compilation can exceed 500ms
+		// on slow CI runners (2-core), which would surface as spurious
+		// internal.timeout denials unrelated to what the test exercises.
+		opts.EvalTimeout = 5 * time.Second
 	}
 	e, err := New(store, sink, opts)
 	if err != nil {

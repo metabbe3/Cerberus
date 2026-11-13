@@ -43,7 +43,7 @@ func setupTestEngine(t *testing.T) *engine.Engine {
 
 	eng, err := engine.New(store, auditLog, engine.Options{
 		CacheSize:   1000,
-		EvalTimeout: 50 * time.Millisecond,
+		EvalTimeout: 5 * time.Second, // generous: OPA cold compile on slow CI runners
 	})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
@@ -72,7 +72,7 @@ func setupTestEngineWithStore(t *testing.T) (*engine.Engine, *policy.Store) {
 
 	eng, err := engine.New(store, auditLog, engine.Options{
 		CacheSize:   1000,
-		EvalTimeout: 50 * time.Millisecond,
+		EvalTimeout: 5 * time.Second, // generous: OPA cold compile on slow CI runners
 	})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)

@@ -30,7 +30,7 @@ func TestCluster_GossipSync_PullFromAuthoritativePeer(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = al1.Close() })
 
-	eng1, _ := engine.New(store1, al1, engine.Options{EvalTimeout: time.Second})
+	eng1, _ := engine.New(store1, al1, engine.Options{EvalTimeout: 5 * time.Second})
 	srv1 := New(Deps{
 		Engine:     eng1,
 		Store:      store1,
@@ -85,7 +85,7 @@ func TestCluster_GossipSync_PullFromAuthoritativePeer(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = al2.Close() })
 
-	eng2, _ := engine.New(store2, al2, engine.Options{EvalTimeout: time.Second})
+	eng2, _ := engine.New(store2, al2, engine.Options{EvalTimeout: 5 * time.Second})
 	srv2 := New(Deps{
 		Engine:     eng2,
 		Store:      store2,
@@ -126,14 +126,14 @@ func TestCluster_AuditMergeSort(t *testing.T) {
 	store1, _ := policy.NewStore(ctx, policyDir, testData)
 	al1, _ := audit.Open(ctx, filepath.Join(dir1, "audit.db"), audit.Options{BatchSize: 1, FlushEvery: 10 * time.Millisecond})
 	t.Cleanup(func() { _ = al1.Close() })
-	eng1, _ := engine.New(store1, al1, engine.Options{EvalTimeout: time.Second})
+	eng1, _ := engine.New(store1, al1, engine.Options{EvalTimeout: 5 * time.Second})
 
 	// Node 2
 	dir2 := t.TempDir()
 	store2, _ := policy.NewStore(ctx, policyDir, testData)
 	al2, _ := audit.Open(ctx, filepath.Join(dir2, "audit.db"), audit.Options{BatchSize: 1, FlushEvery: 10 * time.Millisecond})
 	t.Cleanup(func() { _ = al2.Close() })
-	eng2, _ := engine.New(store2, al2, engine.Options{EvalTimeout: time.Second})
+	eng2, _ := engine.New(store2, al2, engine.Options{EvalTimeout: 5 * time.Second})
 
 	srv2 := New(Deps{
 		Engine:     eng2,

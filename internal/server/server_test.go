@@ -83,7 +83,7 @@ func newHarnessIn(t *testing.T, dir string) *harness {
 	// ponytail: 2s eval timeout — under -race + full-suite load a 10ms default
 	// budget flakes the golden tests (observed once); timeout behavior itself is
 	// covered by engine TestDecide_TimeoutDenies, so outcome tests don't need it.
-	eng, err := engine.New(store, al, engine.Options{EvalTimeout: 2 * time.Second})
+	eng, err := engine.New(store, al, engine.Options{EvalTimeout: 5 * time.Second})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}
@@ -262,6 +262,9 @@ func TestDecide_KeySpoof401(t *testing.T) {
 // and must not leak absolute filesystem paths to the client.
 func TestAdmin_PutData_IOFailure500NoPath(t *testing.T) {
 	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("read-only-dir IO-failure test invalid as root (root bypasses mode bits)")
+	}
 	h := newHarness(t)
 	dir := filepath.Dir(h.dataPath)
 	if err := os.Chmod(dir, 0o500); err != nil { // #nosec G302 -- test-only read-only dir
