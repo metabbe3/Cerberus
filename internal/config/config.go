@@ -14,7 +14,7 @@ import (
 // Default limits, ceilings, and timeouts across Cerberus.
 const (
 	DefaultCacheSize      = 10000
-	DefaultEvalTimeout    = 10 * time.Millisecond
+	DefaultEvalTimeout    = 3 * time.Second // was 10ms: OPA cold compile on slow runners spiked internal.timeout denials
 	DefaultRetentionDays  = 30
 	DefaultMaxBodyBytes   = 1 << 20
 	MaxBreakGlassDuration = 15 * time.Minute

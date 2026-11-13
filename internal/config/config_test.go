@@ -41,7 +41,7 @@ func TestLoad_Defaults(t *testing.T) {
 		AdminToken:         "tok",
 		LogLevel:           "info",
 		CacheSize:          10000,
-		EvalTimeout:        10 * time.Millisecond,
+		EvalTimeout:        3 * time.Second,
 	}
 	if c != want {
 		t.Fatalf("got %+v, want %+v", c, want)
@@ -92,7 +92,7 @@ func TestLoad_FlagOverridesEnv(t *testing.T) {
 		t.Errorf("admin token: got %q, want envtok", c.AdminToken)
 	}
 	// Env value survives when no flag overrides it.
-	if c.EvalTimeout != 10*time.Millisecond {
+	if c.EvalTimeout != 3*time.Second {
 		t.Errorf("eval timeout default: got %v", c.EvalTimeout)
 	}
 }
