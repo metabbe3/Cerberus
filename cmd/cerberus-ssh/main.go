@@ -144,18 +144,18 @@ func (b *bastion) serve(ln net.Listener) {
 }
 
 func (b *bastion) handleConn(c net.Conn) {
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	sconn, newChs, reqs, err := ssh.NewServerConn(c, b.serverConfig())
 	if err != nil {
 		log.Printf("[cerberus-ssh] handshake from %s: %v", c.RemoteAddr(), err)
 		return
 	}
-	defer sconn.Close()
+	defer func() { _ = sconn.Close() }()
 	go ssh.DiscardRequests(reqs)
 
 	for newCh := range newChs {
 		if newCh.ChannelType() != "session" {
-			newCh.Reject(ssh.Prohibited, "cerberus_ssh_error: only session channels are allowed")
+			_ = newCh.Reject(ssh.Prohibited, "cerberus_ssh_error: only session channels are allowed")
 			continue
 		}
 		ch, reqs, err := newCh.Accept()
@@ -172,9 +172,9 @@ func (b *bastion) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request) {
 	for req := range reqs {
 		switch req.Type {
 		case "pty-req", "shell":
-			req.Reply(false, nil)
-			fmt.Fprintf(ch.Stderr(), "cerberus_ssh_error: interactive shell disabled\n")
-			ch.Close()
+			_ = req.Reply(false, nil)
+			_, _ = fmt.Fprintf(ch.Stderr(), "cerberus_ssh_error: interactive shell disabled\n")
+			_ = ch.Close()
 			return
 		case "exec":
 			cmd := parseExecPayload(req.Payload)
@@ -182,7 +182,7 @@ func (b *bastion) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request) {
 			return
 		default:
 			if req.WantReply {
-				req.Reply(false, nil)
+				_ = req.Reply(false, nil)
 			}
 		}
 	}
@@ -192,30 +192,30 @@ func (b *bastion) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request) {
 func (b *bastion) handleExec(ch ssh.Channel, req *ssh.Request, cmd string) {
 	verdict, allowed := b.decide(cmd)
 	if !allowed {
-		req.Reply(false, nil)
-		fmt.Fprintf(ch.Stderr(), "cerberus_ssh_blocked: %s\n", verdict.Reason)
-		ch.SendRequest("exit-status", false, exitStatusPayload(blockedExit))
-		ch.Close()
+		_ = req.Reply(false, nil)
+		_, _ = fmt.Fprintf(ch.Stderr(), "cerberus_ssh_blocked: %s\n", verdict.Reason)
+		_, _ = ch.SendRequest("exit-status", false, exitStatusPayload(blockedExit))
+		_ = ch.Close()
 		return
 	}
 
 	if b.upstreamSigner == nil { // decide-only mode
-		req.Reply(true, nil)
-		fmt.Fprintf(ch, "cerberus-ssh decide-only: ALLOW %s\n", cmd)
-		ch.SendRequest("exit-status", false, exitStatusPayload(0))
-		ch.Close()
+		_ = req.Reply(true, nil)
+		_, _ = fmt.Fprintf(ch, "cerberus-ssh decide-only: ALLOW %s\n", cmd)
+		_, _ = ch.SendRequest("exit-status", false, exitStatusPayload(0))
+		_ = ch.Close()
 		return
 	}
 
-	req.Reply(true, nil)
+	_ = req.Reply(true, nil)
 	status, err := b.relay(ch, cmd)
 	if err != nil {
 		log.Printf("[cerberus-ssh] relay %q: %v", cmd, err)
-		fmt.Fprintf(ch.Stderr(), "cerberus_ssh_error: upstream relay failed: %v\n", err)
+		_, _ = fmt.Fprintf(ch.Stderr(), "cerberus_ssh_error: upstream relay failed: %v\n", err)
 		status = relayErrExit
 	}
-	ch.SendRequest("exit-status", false, exitStatusPayload(status))
-	ch.Close()
+	_, _ = ch.SendRequest("exit-status", false, exitStatusPayload(status))
+	_ = ch.Close()
 }
 
 // decide asks the engine POST /v1/decide. Fail-closed: deny, unreachable,
@@ -251,7 +251,7 @@ func (b *bastion) decide(cmd string) (decideResp, bool) {
 		log.Printf("[cerberus-ssh] engine unreachable (denying): %v", err)
 		return decideResp{Decision: "deny", Reason: "engine unreachable"}, false
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return decideResp{Decision: "deny", Reason: fmt.Sprintf("engine http %d", resp.StatusCode)}, false
 	}
@@ -274,12 +274,12 @@ func (b *bastion) relay(ch ssh.Channel, cmd string) (int, error) {
 	if err != nil {
 		return relayErrExit, fmt.Errorf("dial %s: %w", b.cfg.UpstreamHost, err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	sess, err := client.NewSession()
 	if err != nil {
 		return relayErrExit, fmt.Errorf("new session: %w", err)
 	}
-	defer sess.Close()
+	defer func() { _ = sess.Close() }()
 	sess.Stdout = ch
 	sess.Stderr = ch.Stderr()
 	if err := sess.Run(cmd); err != nil {
@@ -300,7 +300,7 @@ func (b *bastion) upstreamHostKeyCallback() ssh.HostKeyCallback {
 	// TODO(prod): distribute and pin the upstream host key via
 	// CERBERUS_SSH_UPSTREAM_HOSTKEY. Until then any upstream key is accepted,
 	// which means a MITM between bastion and upstream is undetected.
-	return ssh.InsecureIgnoreHostKey()
+	return ssh.InsecureIgnoreHostKey() //nolint:gosec // G106: temporary until CERBERUS_SSH_UPSTREAM_HOSTKEY pinning is set in prod
 }
 
 // parseExecPayload decodes an RFC 4254 §6.5 exec request: 4-byte big-endian
@@ -317,7 +317,7 @@ func parseExecPayload(p []byte) string {
 }
 
 func exitStatusPayload(code int) []byte {
-	return binary.BigEndian.AppendUint32(nil, uint32(code))
+	return binary.BigEndian.AppendUint32(nil, uint32(code)) //nolint:gosec // G115: code is 0/126/127 or an SSH exit status
 }
 
 // upstreamDialAddr appends the default SSH port when none is given.
@@ -351,7 +351,7 @@ func base64Decode(s string) ([]byte, error) {
 // loadOrGenerateHostKey returns the bastion host key signer, generating and
 // persisting a fresh ed25519 key (OpenSSH PEM, 0600) if the file is missing.
 func loadOrGenerateHostKey(path string) (ssh.Signer, error) {
-	if data, err := os.ReadFile(path); err == nil {
+	if data, err := os.ReadFile(path); err == nil { //nolint:gosec // G304: path is a server flag/env, not user input
 		signer, err := ssh.ParsePrivateKey(data)
 		if err != nil {
 			return nil, fmt.Errorf("parse host key %s: %w", path, err)
@@ -412,7 +412,7 @@ func main() {
 		stop := make(chan os.Signal, 1)
 		signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 		<-stop
-		ln.Close()
+		_ = ln.Close()
 	}()
 	b.serve(ln)
 }

@@ -192,7 +192,7 @@ func TestConcurrentExtractAndValidate(t *testing.T) {
 	}
 	done := make(chan struct{})
 	for i := 0; i < 8; i++ {
-		go func(i int) {
+		go func(_ int) {
 			defer func() { done <- struct{}{} }()
 			for j := 0; j < 200; j++ {
 				if _, err := ExtractAndValidate(scripts[j%len(scripts)]); err != nil && j%len(scripts) == 0 {

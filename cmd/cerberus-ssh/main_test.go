@@ -41,7 +41,7 @@ func startBastion(t *testing.T, engineURL string) string {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() { _ = ln.Close() })
 	hostKey := filepath.Join(t.TempDir(), "cerberus_ssh_hostkey")
 	b, err := newBastion(config{
 		EngineURL:    engineURL,
@@ -72,7 +72,7 @@ func dialBastion(t *testing.T, addr string) *ssh.Client {
 	cc, chans, reqs, err := ssh.NewClientConn(conn, addr, &ssh.ClientConfig{
 		User:            "agent",
 		Auth:            []ssh.AuthMethod{},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // test host key is ephemeral
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // test-only // test host key is ephemeral
 		Timeout:         5 * time.Second,
 	})
 	if err != nil {
@@ -84,7 +84,7 @@ func dialBastion(t *testing.T, addr string) *ssh.Client {
 // execPayload builds an RFC 4254 §6.5 exec request payload.
 func execPayload(cmd string) []byte {
 	p := make([]byte, 4, 4+len(cmd))
-	binary.BigEndian.PutUint32(p, uint32(len(cmd)))
+	binary.BigEndian.PutUint32(p, uint32(len(cmd))) //nolint:gosec // G115: test command lengths
 	return append(p, cmd...)
 }
 
@@ -96,7 +96,7 @@ func waitExitStatus(reqs <-chan *ssh.Request) int {
 			return int(binary.BigEndian.Uint32(req.Payload))
 		}
 		if req.WantReply {
-			req.Reply(false, nil)
+			_ = req.Reply(false, nil)
 		}
 	}
 	return -1
@@ -111,7 +111,7 @@ type engineCapture struct {
 
 func (c *engineCapture) record(auth string, body []byte) {
 	var d map[string]any
-	json.Unmarshal(body, &d)
+	_ = json.Unmarshal(body, &d)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.auth = auth
@@ -125,7 +125,7 @@ func (c *engineCapture) get() (string, map[string]any) {
 }
 
 // newEngine returns a stub /v1/decide engine with the fixed verdict.
-func newEngine(t *testing.T, decision, reason string, cap *engineCapture) *httptest.Server {
+func newEngine(t *testing.T, decision, reason string, engCap *engineCapture) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/decide" {
@@ -133,9 +133,9 @@ func newEngine(t *testing.T, decision, reason string, cap *engineCapture) *httpt
 			return
 		}
 		body, _ := io.ReadAll(r.Body)
-		cap.record(r.Header.Get("Authorization"), body)
+		engCap.record(r.Header.Get("Authorization"), body)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"decision": decision,
 			"rule_id":  "rule-test",
 			"reason":   reason,
@@ -146,12 +146,12 @@ func newEngine(t *testing.T, decision, reason string, cap *engineCapture) *httpt
 }
 
 func TestExecDeniedByEngine(t *testing.T) {
-	cap := &engineCapture{}
-	engine := newEngine(t, "deny", "blocked pattern", cap)
+	engCap := &engineCapture{}
+	engine := newEngine(t, "deny", "blocked pattern", engCap)
 	addr := startBastion(t, engine.URL)
 
 	client := dialBastion(t, addr)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ch, reqs, err := client.OpenChannel("session", nil)
 	if err != nil {
@@ -181,7 +181,7 @@ func TestExecDeniedByEngine(t *testing.T) {
 	}
 
 	// The engine must have seen exactly the command the agent tried to run.
-	auth, decide := cap.get()
+	auth, decide := engCap.get()
 	if auth != "Bearer "+testEngineToken {
 		t.Errorf("engine Authorization = %q, want %q", auth, "Bearer "+testEngineToken)
 	}
@@ -195,12 +195,12 @@ func TestExecDeniedByEngine(t *testing.T) {
 }
 
 func TestExecAllowedDecideOnly(t *testing.T) {
-	cap := &engineCapture{}
-	engine := newEngine(t, "allow", "ok", cap)
+	engCap := &engineCapture{}
+	engine := newEngine(t, "allow", "ok", engCap)
 	addr := startBastion(t, engine.URL)
 
 	client := dialBastion(t, addr)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ch, reqs, err := client.OpenChannel("session", nil)
 	if err != nil {
@@ -228,7 +228,7 @@ func TestExecAllowedDecideOnly(t *testing.T) {
 	}
 
 	// Full decide payload shape: key_id/stage/action and input host/user/cmd.
-	auth, decide := cap.get()
+	auth, decide := engCap.get()
 	if auth != "Bearer "+testEngineToken {
 		t.Errorf("engine Authorization = %q, want Bearer token", auth)
 	}
@@ -254,12 +254,12 @@ func TestExecAllowedDecideOnly(t *testing.T) {
 }
 
 func TestInteractiveShellRejected(t *testing.T) {
-	cap := &engineCapture{}
-	engine := newEngine(t, "allow", "ok", cap)
+	engCap := &engineCapture{}
+	engine := newEngine(t, "allow", "ok", engCap)
 	addr := startBastion(t, engine.URL)
 
 	client := dialBastion(t, addr)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ptyPayload := ssh.Marshal(struct {
 		Term     string
@@ -333,7 +333,7 @@ func TestHostKeyGeneratedTight(t *testing.T) {
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Errorf("host key mode = %o, want 600", perm)
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: test temp path
 	if err != nil {
 		t.Fatalf("read host key: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestHostKeyGeneratedTight(t *testing.T) {
 	}
 
 	// A second start must reuse (not clobber) the persisted key.
-	before, _ := os.ReadFile(path)
+	before, _ := os.ReadFile(path) //nolint:gosec // G304: test temp path
 	if _, err := newBastion(config{
 		EngineURL:    "http://127.0.0.1:1",
 		UpstreamHost: testUpstreamHost,
@@ -354,7 +354,7 @@ func TestHostKeyGeneratedTight(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("newBastion reload: %v", err)
 	}
-	after, _ := os.ReadFile(path)
+	after, _ := os.ReadFile(path) //nolint:gosec // G304: test temp path
 	if string(before) != string(after) {
 		t.Error("existing host key was regenerated instead of reused")
 	}
