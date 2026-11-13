@@ -871,11 +871,18 @@ func TestEvents_LastEventIDReconnect(t *testing.T) {
 	// Make 2 decisions
 	h.do(t, http.MethodPost, "/v1/decide", "application/json", decideAllowBody, false)
 	h.do(t, http.MethodPost, "/v1/decide", "application/json", decideAllowBody, false)
-	time.Sleep(50 * time.Millisecond)
 
-	recent := h.auditLog.Recent(2)
-	if len(recent) < 2 {
-		t.Fatalf("recent len = %d, want >= 2", len(recent))
+	var recent []audit.Event
+	found := false
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		recent = h.auditLog.Recent(2)
+		if len(recent) >= 2 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("recent len = %d after 5s, want >= 2 (audit flush lag)", len(recent))
 	}
 	firstID := recent[1].ID
 	lastID := recent[0].ID
@@ -1163,18 +1170,34 @@ func TestServer_Decide_AuditCacheHit(t *testing.T) {
 		t.Fatalf("call 2 should be cached")
 	}
 
-	time.Sleep(50 * time.Millisecond)
-
-	// Query /v1/audit: both events must be recorded in /v1/audit
-	auditResp := h.do(t, http.MethodGet, "/v1/audit?key_id=k-glob", "", "", true)
-	if auditResp.StatusCode != http.StatusOK {
-		t.Fatalf("audit status = %d, want 200", auditResp.StatusCode)
-	}
+	// Poll /v1/audit until both decide events are visible — the async audit
+	// pipeline can lag well past a fixed sleep on slow CI runners.
 	var evs []audit.Event
-	if err := json.NewDecoder(auditResp.Body).Decode(&evs); err != nil {
-		t.Fatalf("decode audit events: %v", err)
+	found := false
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		auditResp := h.do(t, http.MethodGet, "/v1/audit?key_id=k-glob", "", "", true)
+		if auditResp.StatusCode != http.StatusOK {
+			t.Fatalf("audit status = %d, want 200", auditResp.StatusCode)
+		}
+		evs = []audit.Event{}
+		if err := json.NewDecoder(auditResp.Body).Decode(&evs); err != nil {
+			t.Fatalf("decode audit events: %v", err)
+		}
+		_ = auditResp.Body.Close()
+		match := 0
+		for _, e := range evs {
+			if e.KeyID == "k-glob" && e.Subject == "kubernetes_get_pods" {
+				match++
+			}
+		}
+		if match >= 2 {
+			found = true
+			break
+		}
 	}
-	_ = auditResp.Body.Close()
+	if !found {
+		t.Fatalf("expected at least 2 events in /v1/audit after 5s, got %d", len(evs))
+	}
 
 	var matchCount int
 	var cachedCount int
