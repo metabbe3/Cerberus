@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/metabbe3/cerberus/internal/audit"
+	"github.com/metabbe3/cerberus/internal/config"
 	"github.com/metabbe3/cerberus/internal/engine"
 	"github.com/metabbe3/cerberus/internal/policy"
 	"github.com/metabbe3/cerberus/internal/proxy"
@@ -114,10 +115,7 @@ func run() error {
 	}
 	defer func() { _ = auditLog.Close() }()
 
-	eng, err := engine.New(store, auditLog, engine.Options{
-		CacheSize:   10000,
-		EvalTimeout: 50 * time.Millisecond,
-	})
+	eng, err := engine.New(store, auditLog, engineOptions())
 	if err != nil {
 		return fmt.Errorf("cerberus-proxy: engine: %w", err)
 	}
@@ -229,4 +227,18 @@ func requireAdminAuth(token string, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// engineOptions returns engine options using config.DefaultEvalTimeout (or CERBERUS_EVAL_TIMEOUT override).
+func engineOptions() engine.Options {
+	timeout := config.DefaultEvalTimeout
+	if v := os.Getenv("CERBERUS_EVAL_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			timeout = d
+		}
+	}
+	return engine.Options{
+		CacheSize:   10000,
+		EvalTimeout: timeout,
+	}
 }

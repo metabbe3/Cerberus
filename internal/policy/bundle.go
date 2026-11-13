@@ -420,7 +420,10 @@ func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, err
 	if oldCov <= 0 && s.policyDir != "" {
 		if curCov, _ := ComputeCoverage(s.policyDir); curCov != nil && curCov.TotalLines > 0 {
 			oldCov = curCov.Coverage
-			old.Coverage = oldCov
+			next := *old
+			next.Coverage = oldCov
+			s.ptr.Store(&next)
+			old = &next
 		}
 	}
 	if oldCov > 0 {
@@ -437,26 +440,57 @@ func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, err
 	// If store has paths configured on disk, persist the bundle contents so
 	// reload or disk readers also observe them.
 	var addedFiles []string
+	overwritten := make(map[string][]byte)
+	var written []string
+
+	cleanupOnFail := func() {
+		for _, w := range written {
+			rel, err := filepath.Rel(s.policyDir, w)
+			if err == nil {
+				if orig, ok := overwritten[rel]; ok {
+					if err := writeAtomic(w, orig); err != nil {
+						slog.Error("bundle: cleanup restore overwritten failed", "path", w, "err", err)
+					}
+					continue
+				}
+			}
+			if err := os.Remove(w); err != nil && !os.IsNotExist(err) {
+				slog.Error("bundle: cleanup remove failed", "path", w, "err", err)
+			}
+		}
+	}
+
 	if s.policyDir != "" {
 		for name, content := range b.RegoFiles {
 			rel, err := safeRel(name)
 			if err != nil {
+				cleanupOnFail()
 				return nil, err
 			}
 			dest := filepath.Join(s.policyDir, rel)
-			if _, err := os.Stat(dest); os.IsNotExist(err) {
+			if orig, err := os.ReadFile(dest); err == nil { //nolint:gosec // G304 sanitized relative path within policyDir
+				overwritten[rel] = orig
+			} else if os.IsNotExist(err) {
 				addedFiles = append(addedFiles, rel)
 			}
 			if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
+				cleanupOnFail()
 				return nil, fmt.Errorf("bundle: install mkdir: %w", err)
 			}
 			if err := writeAtomic(dest, content); err != nil {
+				cleanupOnFail()
 				return nil, fmt.Errorf("bundle: install rego: %w", err)
 			}
+			written = append(written, dest)
 		}
 	}
+	var prevData []byte
 	if s.dataPath != "" {
+		if curData, err := os.ReadFile(s.dataPath); err == nil {
+			prevData = curData
+		}
 		if err := writeAtomic(s.dataPath, b.DataJSON); err != nil {
+			cleanupOnFail()
 			return nil, fmt.Errorf("bundle: install data: %w", err)
 		}
 	}
@@ -465,6 +499,8 @@ func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, err
 	s.prevSnapshot = old
 	s.prevBundle = s.currentBundle
 	s.prevAddedFiles = addedFiles
+	s.prevOverwritten = overwritten
+	s.prevDataJSON = prevData
 	s.currentBundle = bundleGz
 
 	// Atomic swap
@@ -507,10 +543,23 @@ func (s *Store) Rollback(ctx context.Context) (*Snapshot, error) {
 		defer func() { _ = os.RemoveAll(tmpDir) }()
 
 		if s.policyDir != "" {
-			_ = copyDir(s.policyDir, tmpDir)
+			if err := copyDir(s.policyDir, tmpDir); err != nil {
+				return nil, fmt.Errorf("rollback: copy dir: %w", err)
+			}
 		}
 		for _, rel := range s.prevAddedFiles {
-			_ = os.Remove(filepath.Join(tmpDir, rel))
+			if err := os.Remove(filepath.Join(tmpDir, rel)); err != nil && !os.IsNotExist(err) {
+				return nil, fmt.Errorf("rollback: remove added file: %w", err)
+			}
+		}
+		for rel, content := range s.prevOverwritten {
+			dest := filepath.Join(tmpDir, rel)
+			if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
+				return nil, fmt.Errorf("rollback: mkdir: %w", err)
+			}
+			if err := os.WriteFile(dest, content, 0o600); err != nil {
+				return nil, fmt.Errorf("rollback: write overwritten rego: %w", err)
+			}
 		}
 		for name, content := range b.RegoFiles {
 			rel, err := safeRel(name)
@@ -538,7 +587,18 @@ func (s *Store) Rollback(ctx context.Context) (*Snapshot, error) {
 
 		if s.policyDir != "" {
 			for _, rel := range s.prevAddedFiles {
-				_ = os.Remove(filepath.Join(s.policyDir, rel))
+				if err := os.Remove(filepath.Join(s.policyDir, rel)); err != nil && !os.IsNotExist(err) {
+					return nil, fmt.Errorf("rollback: remove added file: %w", err)
+				}
+			}
+			for rel, content := range s.prevOverwritten {
+				dest := filepath.Join(s.policyDir, rel)
+				if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
+					return nil, fmt.Errorf("rollback: install mkdir: %w", err)
+				}
+				if err := writeAtomic(dest, content); err != nil {
+					return nil, fmt.Errorf("rollback: restore overwritten rego: %w", err)
+				}
 			}
 			for name, content := range b.RegoFiles {
 				rel, err := safeRel(name)
@@ -555,11 +615,35 @@ func (s *Store) Rollback(ctx context.Context) (*Snapshot, error) {
 			}
 		}
 		if s.dataPath != "" {
-			_ = writeAtomic(s.dataPath, b.DataJSON)
+			if err := writeAtomic(s.dataPath, b.DataJSON); err != nil {
+				return nil, fmt.Errorf("rollback: restore data: %w", err)
+			}
 		}
 
 		rolledBack = snap
 	} else if s.prevSnapshot != nil {
+		if s.policyDir != "" {
+			for _, rel := range s.prevAddedFiles {
+				if err := os.Remove(filepath.Join(s.policyDir, rel)); err != nil && !os.IsNotExist(err) {
+					return nil, fmt.Errorf("rollback: remove added file: %w", err)
+				}
+			}
+			for rel, content := range s.prevOverwritten {
+				dest := filepath.Join(s.policyDir, rel)
+				if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
+					return nil, fmt.Errorf("rollback: install mkdir: %w", err)
+				}
+				if err := writeAtomic(dest, content); err != nil {
+					return nil, fmt.Errorf("rollback: restore overwritten rego: %w", err)
+				}
+			}
+		}
+		if s.dataPath != "" && len(s.prevDataJSON) > 0 {
+			if err := writeAtomic(s.dataPath, s.prevDataJSON); err != nil {
+				return nil, fmt.Errorf("rollback: restore data: %w", err)
+			}
+		}
+
 		rolledBack = &Snapshot{
 			Epoch:    old.Epoch + 1,
 			EpochStr: strconv.FormatUint(old.Epoch+1, 10),
@@ -578,6 +662,8 @@ func (s *Store) Rollback(ctx context.Context) (*Snapshot, error) {
 	s.prevBundle = nil
 	s.prevSnapshot = nil
 	s.prevAddedFiles = nil
+	s.prevOverwritten = nil
+	s.prevDataJSON = nil
 
 	s.ptr.Store(rolledBack)
 	s.notifySwaps(rolledBack)

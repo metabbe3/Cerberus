@@ -517,14 +517,24 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// copy response headers
 	for k, vv := range resp.Header {
+		if len(respBody) > maxBody && strings.EqualFold(k, "Content-Length") {
+			continue
+		}
 		for _, v := range vv {
 			w.Header().Add(k, v)
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(respBody)
+	if len(respBody) > maxBody {
+		_, _ = io.Copy(w, resp.Body)
+	}
 
-	s.st.save(turnRow{KeyID: keyID, Model: modelOf(raw), Kind: "response", Payload: respBody}, lat, resp.StatusCode)
+	savedPayload := respBody
+	if len(savedPayload) > maxBody {
+		savedPayload = savedPayload[:maxBody]
+	}
+	s.st.save(turnRow{KeyID: keyID, Model: modelOf(raw), Kind: "response", Payload: savedPayload}, lat, resp.StatusCode)
 }
 
 // proxySSE tees the stream to the client while reassembling thinking/text/tool_use.
@@ -532,12 +542,15 @@ func (s *server) proxySSE(w http.ResponseWriter, resp *http.Response, keyID, mod
 	flusher, _ := w.(http.Flusher)
 	// kill-switch hook: registering lets /tap/kill sever this stream mid-flight.
 	var killID int64
-	var killCancel context.CancelFunc
+	var killCtx context.Context
 	if s.kills != nil {
-		killID, killCancel = s.kills.add()
+		killID, killCtx = s.kills.add()
 		defer s.kills.remove(killID)
+		go func() {
+			<-killCtx.Done()
+			_ = resp.Body.Close()
+		}()
 	}
-	_ = killCancel
 	for k, vv := range resp.Header {
 		for _, v := range vv {
 			w.Header().Add(k, v)
@@ -569,11 +582,6 @@ func (s *server) proxySSE(w http.ResponseWriter, resp *http.Response, keyID, mod
 		heldLines = nil
 	}
 
-	// killCtx: severed by /tap/kill via the registry cancel.
-	var killCtx context.Context
-	if killCancel != nil {
-		killCtx = killCtxFromCancel(killCancel)
-	}
 	for {
 		if killCtx != nil {
 			select {
@@ -739,14 +747,14 @@ func newKillRegistry() *killRegistry {
 	return &killRegistry{cancels: make(map[int64]context.CancelFunc)}
 }
 
-func (k *killRegistry) add() (int64, context.CancelFunc) {
+func (k *killRegistry) add() (int64, context.Context) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.nextID++
 	id := k.nextID
-	_, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
 	k.cancels[id] = cancel
-	return id, cancel
+	return id, ctx
 }
 
 func (k *killRegistry) remove(id int64) {
@@ -768,17 +776,6 @@ func (k *killRegistry) killAll() int {
 	}
 	k.cancels = make(map[int64]context.CancelFunc)
 	return n
-}
-
-// killCtxFromCancel wraps the registry cancel into a context whose Done fires
-// when EITHER killAll() or stream completion calls cancel().
-func killCtxFromCancel(cancel context.CancelFunc) context.Context {
-	ctx, c := context.WithCancel(context.Background())
-	go func() {
-		cancel()
-		c()
-	}()
-	return ctx
 }
 
 // parseSSE extracts delta text from anthropic-style SSE events.

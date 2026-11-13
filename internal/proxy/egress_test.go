@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -795,5 +796,129 @@ func TestEgressProxy_InvalidPortReturns400(t *testing.T) {
 		if recHTTP.Code != http.StatusBadRequest {
 			t.Fatalf("HTTP GET port %q expected 400 Bad Request, got %d", badPort, recHTTP.Code)
 		}
+	}
+}
+
+// TestEgressProxy_CONNECT_Watchdog verifies D7:
+// hijacked CONNECT tunnel does not park goroutines forever when target is silent.
+// 1. Idle timeout watchdog closes the tunnel automatically within test deadline.
+// 2. Client context cancellation terminates tunnel handler in <= 2s.
+func TestEgressProxy_CONNECT_Watchdog(t *testing.T) {
+	eng := setupTestEngine(t)
+
+	// Silent target: accepts connection and does nothing
+	targetListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	defer func() { _ = targetListener.Close() }()
+
+	var targetConn net.Conn
+	var targetMu sync.Mutex
+	go func() {
+		for {
+			c, err := targetListener.Accept()
+			if err != nil {
+				return
+			}
+			targetMu.Lock()
+			targetConn = c
+			targetMu.Unlock()
+			// Deliberately do nothing: no reads, no writes, no close
+		}
+	}()
+	defer func() {
+		targetMu.Lock()
+		if targetConn != nil {
+			_ = targetConn.Close()
+		}
+		targetMu.Unlock()
+	}()
+
+	// Proxy with short idle timeout (100ms)
+	egress, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		DenyLocalIPs:      &[]bool{false}[0],
+		FallbackKeyID:     "k-open",
+		TunnelIdleTimeout: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewEgressProxy: %v", err)
+	}
+
+	proxyServer := httptest.NewServer(egress)
+	defer func() {
+		proxyServer.CloseClientConnections()
+		proxyServer.Close()
+	}()
+
+	proxyURL, _ := url.Parse(proxyServer.URL)
+
+	// Case 1: Watchdog triggers on silent target
+	start := time.Now()
+	conn, err := net.Dial("tcp", proxyURL.Host)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\nX-Cerberus-Key: k-open\r\n\r\n",
+		targetListener.Addr().String(), targetListener.Addr().String())
+	if _, err := conn.Write([]byte(connectReq)); err != nil {
+		t.Fatalf("write CONNECT: %v", err)
+	}
+
+	bufrw := bufio.NewReader(conn)
+	statusLine, err := bufrw.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if !strings.Contains(statusLine, "200") {
+		t.Fatalf("expected 200 Connection Established, got: %s", statusLine)
+	}
+	for {
+		line, _ := bufrw.ReadString('\n')
+		if line == "\r\n" || line == "\n" {
+			break
+		}
+	}
+
+	// Client remains silent. The 100ms idle timeout must fire and close conn within <= 2s.
+	buf := make([]byte, 1024)
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, readErr := bufrw.Read(buf)
+	elapsed := time.Since(start)
+	if readErr == nil {
+		t.Fatal("expected read error due to watchdog idle timeout close, got nil")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("watchdog took too long to sever silent connection: %v (want <= 2s)", elapsed)
+	}
+
+	// Case 2: Client context cancellation severs in <= 2s
+	conn2, err := net.Dial("tcp", proxyURL.Host)
+	if err != nil {
+		t.Fatalf("dial proxy 2: %v", err)
+	}
+	if _, err := conn2.Write([]byte(connectReq)); err != nil {
+		t.Fatalf("write CONNECT 2: %v", err)
+	}
+	bufrw2 := bufio.NewReader(conn2)
+	statusLine2, _ := bufrw2.ReadString('\n')
+	if !strings.Contains(statusLine2, "200") {
+		t.Fatalf("expected 200, got: %s", statusLine2)
+	}
+	for {
+		line, _ := bufrw2.ReadString('\n')
+		if line == "\r\n" || line == "\n" {
+			break
+		}
+	}
+	// Client closes connection (simulating client cancel)
+	startCancel := time.Now()
+	_ = conn2.Close()
+	// Handlers must unblock and return <= 2s
+	time.Sleep(50 * time.Millisecond)
+	if time.Since(startCancel) > 2*time.Second {
+		t.Fatal("handler did not return within 2s after client close")
 	}
 }

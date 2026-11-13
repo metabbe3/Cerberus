@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 )
 
@@ -44,4 +46,37 @@ func TestComponentsHandler(t *testing.T) {
 	if rec2.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated status %d, want 401", rec2.Code)
 	}
+}
+
+// TestCoverageComponentsConcurrent verifies D2:
+// concurrent calls to Coverage() and Components() do not trigger data races.
+func TestCoverageComponentsConcurrent(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	const iterations = 10
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			if h.store != nil {
+				_, _ = h.store.Coverage(ctx)
+			}
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			req := httptest.NewRequest(http.MethodGet, "/v1/health/components", nil)
+			req.Header.Set("Authorization", "Bearer "+adminToken)
+			rec := httptest.NewRecorder()
+			h.ts.Config.Handler.ServeHTTP(rec, req)
+		}
+	}()
+
+	wg.Wait()
 }

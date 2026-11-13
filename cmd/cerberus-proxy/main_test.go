@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/metabbe3/cerberus/internal/config"
 )
 
 func TestCerberusProxy_Version(t *testing.T) {
@@ -103,5 +105,21 @@ func TestSubprocessUnauthenticatedWarning(t *testing.T) {
 
 	if !strings.Contains(outStr, "UNAUTHENTICATED mode") {
 		t.Fatalf("expected UNAUTHENTICATED mode warning in startup logs, got:\n%s", outStr)
+	}
+}
+
+func TestEngineOptions(t *testing.T) {
+	// 1. Default matches config.DefaultEvalTimeout
+	t.Setenv("CERBERUS_EVAL_TIMEOUT", "")
+	opts := engineOptions()
+	if opts.EvalTimeout != config.DefaultEvalTimeout {
+		t.Fatalf("expected EvalTimeout %v, got %v", config.DefaultEvalTimeout, opts.EvalTimeout)
+	}
+
+	// 2. Override via CERBERUS_EVAL_TIMEOUT
+	t.Setenv("CERBERUS_EVAL_TIMEOUT", "5s")
+	optsOverride := engineOptions()
+	if optsOverride.EvalTimeout != 5*time.Second {
+		t.Fatalf("expected EvalTimeout 5s, got %v", optsOverride.EvalTimeout)
 	}
 }

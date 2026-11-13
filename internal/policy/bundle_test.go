@@ -664,8 +664,7 @@ func TestStore_BundleCoverageDropGate(t *testing.T) {
 	if err != nil || rep == nil {
 		t.Fatalf("store.Coverage: %v", err)
 	}
-	activeCov := rep.Coverage
-	store.Current().Coverage = activeCov
+	_ = rep.Coverage
 
 	// 2. Create bundle with a large set of completely untested Rego rules
 	// to drop coverage by >5 percentage points.
@@ -884,5 +883,186 @@ func TestReadBundle_ZipBombRejected(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "exceeds max") {
 		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
+// TestStore_BundleRollback_RestoresOverwrittenFileAndFailsOnDataWriteError verifies D8:
+// 1. Loading bundle B overwrites an existing file -> rollback restores original pre-B content.
+// 2. When data.json restore fails (via read-only dir), rollback returns error and does NOT swap snapshot.
+func TestStore_BundleRollback_RestoresOverwrittenFileAndFailsOnDataWriteError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tmpDir := t.TempDir()
+	policyDir := filepath.Join(tmpDir, "policies")
+	if err := os.MkdirAll(policyDir, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	dataDir := filepath.Join(tmpDir, "datadir")
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+		t.Fatalf("mkdir datadir: %v", err)
+	}
+	dataPath := filepath.Join(dataDir, "data.json")
+
+	if err := os.CopyFS(policyDir, os.DirFS("../../policies")); err != nil {
+		t.Fatalf("copy: %v", err)
+	}
+	if err := os.WriteFile(dataPath, loadTestData(t), 0o600); err != nil {
+		t.Fatalf("write data: %v", err)
+	}
+
+	// Create custom pre-B file on disk
+	preBContent := "package stages\n\ndefault pra_b_custom := true\n"
+	customFilePath := filepath.Join(policyDir, "stages/custom_target.rego")
+	if err := os.WriteFile(customFilePath, []byte(preBContent), 0o600); err != nil {
+		t.Fatalf("write custom_target.rego: %v", err)
+	}
+
+	store, err := NewStore(ctx, policyDir, dataPath)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	aiRego, _ := os.ReadFile(filepath.Join(policyDir, "stages/ai.rego"))     //nolint:gosec // G304 test fixture
+	toolRego, _ := os.ReadFile(filepath.Join(policyDir, "stages/tool.rego")) //nolint:gosec // G304 test fixture
+
+	// Bundle A (baseline active bundle)
+	bA := createCustomBundle(t, []string{"stages"}, "rev-A", loadTestData(t), map[string]string{
+		"policies/stages/ai.rego":            string(aiRego),
+		"policies/stages/tool.rego":          string(toolRego),
+		"policies/stages/custom_target.rego": preBContent,
+	}, nil)
+	if _, err := store.LoadBundle(ctx, bA); err != nil {
+		t.Fatalf("LoadBundle A: %v", err)
+	}
+
+	// Bundle B overwrites custom_target.rego with new content
+	postBContent := "package stages\n\ndefault pra_b_custom := false\ndefault post_b := true\n"
+	bB := createCustomBundle(t, []string{"stages"}, "rev-B", loadTestData(t), map[string]string{
+		"policies/stages/ai.rego":            string(aiRego),
+		"policies/stages/tool.rego":          string(toolRego),
+		"policies/stages/custom_target.rego": postBContent,
+	}, nil)
+	snapB, err := store.LoadBundle(ctx, bB)
+	if err != nil {
+		t.Fatalf("LoadBundle B: %v", err)
+	}
+	if snapB.Revision != "rev-B" {
+		t.Fatalf("snapB.Revision = %q, want rev-B", snapB.Revision)
+	}
+
+	// Verify disk file was overwritten
+	diskPostB, err := os.ReadFile(customFilePath) //nolint:gosec // G304 test fixture
+	if err != nil {
+		t.Fatalf("read custom_target.rego: %v", err)
+	}
+	if string(diskPostB) != postBContent {
+		t.Fatalf("expected overwritten content on disk, got: %s", string(diskPostB))
+	}
+
+	// Rollback to Bundle A
+	snapRolled, err := store.Rollback(ctx)
+	if err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if snapRolled.Revision != "rev-A" {
+		t.Fatalf("snapRolled.Revision = %q, want rev-A", snapRolled.Revision)
+	}
+
+	// Verify disk file is restored to pre-B content
+	diskRestored, err := os.ReadFile(customFilePath) //nolint:gosec // G304 test fixture
+	if err != nil {
+		t.Fatalf("read custom_target.rego after rollback: %v", err)
+	}
+	if string(diskRestored) != preBContent {
+		t.Fatalf("expected pre-B content restored after rollback, got: %s", string(diskRestored))
+	}
+
+	// Part 2: Load bundle B again, then make dataDir read-only so writeAtomic(dataPath) fails on Rollback
+	if _, err := store.LoadBundle(ctx, bB); err != nil {
+		t.Fatalf("LoadBundle B second time: %v", err)
+	}
+	if store.Current().Revision != "rev-B" {
+		t.Fatalf("current revision = %q, want rev-B", store.Current().Revision)
+	}
+
+	// Make dataDir read-only
+	if err := os.Chmod(dataDir, 0o500); err != nil { //nolint:gosec // G302 read-only test directory
+		t.Fatalf("chmod dataDir: %v", err)
+	}
+	defer func() { _ = os.Chmod(dataDir, 0o750) }() //nolint:gosec // G302 restore test directory
+
+	// Rollback must fail on data.json write
+	_, rollbackErr := store.Rollback(ctx)
+	if rollbackErr == nil {
+		t.Fatal("expected rollback to fail when data.json directory is read-only, got nil")
+	}
+
+	// Snapshot must NOT be swapped on failure (must remain rev-B)
+	if store.Current().Revision != "rev-B" {
+		t.Fatalf("snapshot was swapped despite restore error: got %q, want rev-B", store.Current().Revision)
+	}
+}
+
+// TestStore_LoadBundle_CleansUpOnPartialFailure verifies D11:
+// when writeAtomic fails midway through installing bundle files,
+// any previously written files from that bundle are removed from policyDir.
+func TestStore_LoadBundle_CleansUpOnPartialFailure(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tmpDir := t.TempDir()
+	policyDir := filepath.Join(tmpDir, "policies")
+	if err := os.MkdirAll(policyDir, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	dataPath := filepath.Join(tmpDir, "data.json")
+
+	if err := os.CopyFS(policyDir, os.DirFS("../../policies")); err != nil {
+		t.Fatalf("copy: %v", err)
+	}
+	if err := os.WriteFile(dataPath, loadTestData(t), 0o600); err != nil {
+		t.Fatalf("write data: %v", err)
+	}
+
+	store, err := NewStore(ctx, policyDir, dataPath)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	// Create a read-only subdirectory to force write failure
+	roDir := filepath.Join(policyDir, "stages/readonly_dir")
+	if err := os.MkdirAll(roDir, 0o500); err != nil {
+		t.Fatalf("mkdir roDir: %v", err)
+	}
+	defer func() {
+		_ = os.Chmod(roDir, 0o750) //nolint:gosec // G302 restore test directory
+	}()
+
+	aiRego, _ := os.ReadFile(filepath.Join(policyDir, "stages/ai.rego"))     //nolint:gosec // G304 test fixture
+	toolRego, _ := os.ReadFile(filepath.Join(policyDir, "stages/tool.rego")) //nolint:gosec // G304 test fixture
+
+	// Bundle contains:
+	// 1. newly added file 1
+	// 2. file destined for readonly_dir (fails to write)
+	file1Name := "policies/stages/new_feature_file1.rego"
+	file2Name := "policies/stages/readonly_dir/new_feature_file2.rego"
+
+	b := createCustomBundle(t, []string{"stages"}, "rev-fail", loadTestData(t), map[string]string{
+		"policies/stages/ai.rego":   string(aiRego),
+		"policies/stages/tool.rego": string(toolRego),
+		file1Name:                   "package stages\ndefault f1 := true\n",
+		file2Name:                   "package stages\ndefault f2 := true\n",
+	}, nil)
+
+	_, err = store.LoadBundle(ctx, b)
+	if err == nil {
+		t.Fatal("expected LoadBundle to fail due to read-only directory, got nil")
+	}
+
+	// Verify file 1 does NOT exist on disk in policyDir
+	dest1 := filepath.Join(policyDir, "stages/new_feature_file1.rego")
+	if _, err := os.Stat(dest1); !os.IsNotExist(err) {
+		t.Fatalf("expected file 1 (%s) to be cleaned up after partial failure, but it exists", dest1)
 	}
 }

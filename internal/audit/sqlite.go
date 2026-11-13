@@ -285,16 +285,22 @@ func (m *dbManager) query(ctx context.Context, f Filter) ([]Event, error) {
 		return nil, fmt.Errorf("audit: read dir: %w", err)
 	}
 
-	var files []string
+	var dailyFiles []string
+	var hasLegacy bool
+	legacyName := filepath.Base(m.origPath)
 	for _, e := range entries {
 		name := e.Name()
 		if strings.HasPrefix(name, "audit-") && strings.HasSuffix(name, ".db") {
-			files = append(files, name)
-		} else if name == filepath.Base(m.origPath) && !strings.HasPrefix(name, "audit-") {
-			files = append(files, name)
+			dailyFiles = append(dailyFiles, name)
+		} else if name == legacyName && !strings.HasPrefix(name, "audit-") {
+			hasLegacy = true
 		}
 	}
-	sort.Sort(sort.Reverse(sort.StringSlice(files)))
+	sort.Sort(sort.Reverse(sort.StringSlice(dailyFiles)))
+	files := dailyFiles
+	if hasLegacy {
+		files = append(files, legacyName)
+	}
 
 	// Non-nil even when empty so JSON encoding yields [] (not null) —
 	// clients (Owl Zod array schemas) fail on null.
@@ -476,16 +482,22 @@ func (m *dbManager) denyCountsSince(ctx context.Context, since time.Time) (int64
 		return 0, nil, err
 	}
 
-	var files []string
+	var dailyFiles []string
+	var hasLegacy bool
+	legacyName := filepath.Base(m.origPath)
 	for _, e := range entries {
 		name := e.Name()
 		if strings.HasPrefix(name, "audit-") && strings.HasSuffix(name, ".db") {
-			files = append(files, name)
-		} else if name == filepath.Base(m.origPath) && !strings.HasPrefix(name, "audit-") {
-			files = append(files, name)
+			dailyFiles = append(dailyFiles, name)
+		} else if name == legacyName && !strings.HasPrefix(name, "audit-") {
+			hasLegacy = true
 		}
 	}
-	sort.Sort(sort.Reverse(sort.StringSlice(files)))
+	sort.Sort(sort.Reverse(sort.StringSlice(dailyFiles)))
+	files := dailyFiles
+	if hasLegacy {
+		files = append(files, legacyName)
+	}
 
 	var globalMaxID int64
 	for _, fn := range files {
@@ -520,7 +532,7 @@ func (m *dbManager) countToolCallsToday(ctx context.Context, keyID string, today
 			return 0, nil
 		}
 		var count int64
-		err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM events WHERE key_id = ? AND stage = 'tool'", keyID).Scan(&count)
+		err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM events WHERE key_id = ? AND stage = 'tool' AND decision = 'allow'", keyID).Scan(&count)
 		return count, err
 	}
 
@@ -529,7 +541,7 @@ func (m *dbManager) countToolCallsToday(ctx context.Context, keyID string, today
 		return 0, err
 	}
 	var count int64
-	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM events WHERE key_id = ? AND stage = 'tool'", keyID).Scan(&count)
+	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM events WHERE key_id = ? AND stage = 'tool' AND decision = 'allow'", keyID).Scan(&count)
 	return count, err
 }
 
@@ -798,14 +810,21 @@ func (m *dbManager) queryAggregate(ctx context.Context, since, until time.Time, 
 		if err != nil {
 			return nil, fmt.Errorf("audit: read dir: %w", err)
 		}
-		var files []string
+		var dailyFiles []string
+		var hasLegacy bool
+		legacyName := filepath.Base(m.origPath)
 		for _, e := range entries {
 			name := e.Name()
 			if strings.HasPrefix(name, "audit-") && strings.HasSuffix(name, ".db") {
-				files = append(files, name)
-			} else if name == filepath.Base(m.origPath) && !strings.HasPrefix(name, "audit-") {
-				files = append(files, name)
+				dailyFiles = append(dailyFiles, name)
+			} else if name == legacyName && !strings.HasPrefix(name, "audit-") {
+				hasLegacy = true
 			}
+		}
+		sort.Sort(sort.Reverse(sort.StringSlice(dailyFiles)))
+		files := dailyFiles
+		if hasLegacy {
+			files = append(files, legacyName)
 		}
 		for _, fn := range files {
 			db, err := openSQLiteRead(filepath.Join(m.baseDir, fn))

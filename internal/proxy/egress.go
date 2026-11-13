@@ -18,14 +18,18 @@ import (
 	"github.com/metabbe3/cerberus/internal/util"
 )
 
+// DefaultTunnelIdleTimeout is the watchdog timeout for hijacked CONNECT tunnels.
+const DefaultTunnelIdleTimeout = 5 * time.Minute
+
 // EgressConfig holds options for the HTTP/HTTPS egress proxy.
 type EgressConfig struct {
 	// DenyLocalIPs blocks loopback/private/link-local/multicast/unspecified
 	// destination IPs at the dial Control hook (OS-level). Default TRUE when
 	// nil — tests that dial 127.0.0.1 backends must set it to false.
-	DenyLocalIPs  *bool
-	FallbackKeyID string
-	DialTimeout   time.Duration
+	DenyLocalIPs      *bool
+	FallbackKeyID     string
+	DialTimeout       time.Duration
+	TunnelIdleTimeout time.Duration
 	// LookupIP overrides DNS lookup; defaults to net.LookupIP.
 	LookupIP func(host string) ([]net.IP, error)
 	Limiter  *ratelimit.Limiter
@@ -302,25 +306,55 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	_, _ = bufrw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n")
 	_ = bufrw.Flush()
 
-	// Bidirectional full-duplex tunnel
+	idleTimeout := p.cfg.TunnelIdleTimeout
+	if idleTimeout <= 0 {
+		idleTimeout = DefaultTunnelIdleTimeout
+	}
+
+	ctx := r.Context()
+	stopWatcher := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = clientConn.Close()
+			_ = targetConn.Close()
+		case <-stopWatcher:
+		}
+	}()
+	defer close(stopWatcher)
+
+	// Bidirectional full-duplex tunnel with activity watchdog
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	go func() {
+	copyHalf := func(dst io.Writer, src io.Reader, readConn, writeConn net.Conn) {
 		defer wg.Done()
-		_, _ = io.Copy(targetConn, bufrw)
-		if tc, ok := targetConn.(*net.TCPConn); ok {
+		buf := make([]byte, 32*1024)
+		for {
+			_ = readConn.SetDeadline(time.Now().Add(idleTimeout))
+			n, err := src.Read(buf)
+			if n > 0 {
+				_ = readConn.SetDeadline(time.Now().Add(idleTimeout))
+				_ = writeConn.SetDeadline(time.Now().Add(idleTimeout))
+				if _, werr := dst.Write(buf[:n]); werr != nil {
+					break
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+		if tc, ok := dst.(*net.TCPConn); ok {
+			_ = tc.CloseWrite()
+		} else if tc, ok := writeConn.(*net.TCPConn); ok {
 			_ = tc.CloseWrite()
 		}
-	}()
+		_ = readConn.Close()
+		_ = writeConn.Close()
+	}
 
-	go func() {
-		defer wg.Done()
-		_, _ = io.Copy(clientConn, targetConn)
-		if cc, ok := clientConn.(*net.TCPConn); ok {
-			_ = cc.CloseWrite()
-		}
-	}()
+	go copyHalf(targetConn, bufrw, clientConn, targetConn)
+	go copyHalf(clientConn, targetConn, targetConn, clientConn)
 
 	wg.Wait()
 }

@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash"
 	"log/slog"
 	"path/filepath"
 	"strconv"
@@ -442,30 +441,43 @@ func subject(in Input) string {
 	}
 }
 
-var shaPool = sync.Pool{
+type encoderHolder struct {
+	buf *bytes.Buffer
+	enc *json.Encoder
+}
+
+var encPool = sync.Pool{
 	New: func() any {
-		return sha256.New()
+		b := new(bytes.Buffer)
+		return &encoderHolder{
+			buf: b,
+			enc: json.NewEncoder(b),
+		}
 	},
 }
 
-// cacheKey is sha256(epoch ‖ json.Marshal(in)) — the epoch invalidates the
-// whole cache on reload, and json.Marshal sorts map keys so equal inputs hash
+// cacheKey is sha256(epoch ‖ json.Encode(in)) — the epoch invalidates the
+// whole cache on reload, and JSON encoding sorts map keys so equal inputs hash
 // equally. Returns ("", false) if in cannot be marshaled into JSON.
+// Reuses bytes.Buffer and json.Encoder via sync.Pool to minimize allocations on the hot path.
 func cacheKey(epoch uint64, in Input) (string, bool) {
-	b, err := json.Marshal(in)
-	if err != nil {
+	holder := encPool.Get().(*encoderHolder)
+	holder.buf.Reset()
+
+	var epochBuf [8]byte
+	binary.BigEndian.PutUint64(epochBuf[:], epoch)
+	_, _ = holder.buf.Write(epochBuf[:])
+
+	if err := holder.enc.Encode(&in); err != nil {
+		encPool.Put(holder)
 		return "", false
 	}
-	var buf [8]byte
-	binary.BigEndian.PutUint64(buf[:], epoch)
-	h := shaPool.Get().(hash.Hash)
-	h.Reset()
-	h.Write(buf[:])
-	h.Write(b)
-	var out [32]byte
-	h.Sum(out[:0])
-	shaPool.Put(h)
-	return string(out[:]), true
+
+	sum := sha256.Sum256(holder.buf.Bytes())
+	if holder.buf.Cap() <= 64*1024 {
+		encPool.Put(holder)
+	}
+	return string(sum[:]), true
 }
 
 // str extracts a string field from the Rego decision object.

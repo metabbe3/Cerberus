@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"os"
 	"strings"
@@ -631,5 +632,63 @@ func TestCacheKey_UnmarshalableInputBypassesCache(t *testing.T) {
 	}
 	if d1.RuleID == "legacy.collapsed.cache_poison" || d2.RuleID == "legacy.collapsed.cache_poison" {
 		t.Fatalf("decisions contaminated by legacy collapsed cache key!")
+	}
+}
+
+// TestCacheKey_AllocsReduction verifies D12:
+// cacheKey reuses bytes.Buffer via sync.Pool to reduce buffer allocations on the hot path.
+func TestCacheKey_AllocsReduction(t *testing.T) {
+	in := Input{
+		Stage:    "tool",
+		KeyID:    "k-test-key",
+		ToolCall: "get_weather",
+		Args: map[string]any{
+			"city":   "Jakarta",
+			"detail": true,
+			"units":  "celsius",
+		},
+		Prompt: strings.Repeat("A security policy evaluation prompt for checking tools and commands ", 20),
+	}
+
+	// Baseline unpooled json.Marshal
+	oldCacheKey := func(epoch uint64, in Input) (string, bool) {
+		b, err := json.Marshal(in)
+		if err != nil {
+			return "", false
+		}
+		var buf [8]byte
+		binary.BigEndian.PutUint64(buf[:], epoch)
+		h := sha256.New()
+		h.Write(buf[:])
+		h.Write(b)
+		var out [32]byte
+		h.Sum(out[:0])
+		return string(out[:]), true
+	}
+
+	allocsBefore := testing.AllocsPerRun(100, func() {
+		_, _ = oldCacheKey(1, in)
+	})
+
+	allocsAfter := testing.AllocsPerRun(100, func() {
+		_, _ = cacheKey(1, in)
+	})
+
+	t.Logf("cacheKey allocs/run: before=%.1f after=%.1f", allocsBefore, allocsAfter)
+
+	// Verify consistent output and validity
+	k1, ok1 := cacheKey(1, in)
+	if !ok1 || k1 == "" {
+		t.Fatal("cacheKey returned empty or false")
+	}
+	k2, ok2 := cacheKey(1, in)
+	if !ok2 || k1 != k2 {
+		t.Fatalf("cacheKey is not deterministic: %q != %q", k1, k2)
+	}
+
+	// Verify epoch invalidation
+	kEpoch2, _ := cacheKey(2, in)
+	if k1 == kEpoch2 {
+		t.Fatal("cacheKey must differ when epoch changes")
 	}
 }

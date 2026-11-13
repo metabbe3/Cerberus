@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -739,5 +740,196 @@ func TestLogger_FilePermissions(t *testing.T) {
 		if perm&0o007 != 0 {
 			t.Fatalf("file %s has insecure permissions %04o (expected 0640/0600)", e.Name(), perm)
 		}
+	}
+}
+
+// TestDailyToolCallsCount_OnlyAllowsCounted verifies D5:
+// countToolCallsToday only counts tool calls with decision = 'allow'.
+// Denied, rate_limited, or non-tool events are excluded.
+func TestDailyToolCallsCount_OnlyAllowsCounted(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "audit.db")
+
+	l, err := Open(ctx, dbPath, Options{
+		BatchSize:  1,
+		FlushEvery: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+
+	// Emit mixed decisions for k-target
+	l.Emit(Event{Stage: "tool", KeyID: "k-target", Decision: "allow", RuleID: "ai.tool.allow"})
+	l.Emit(Event{Stage: "tool", KeyID: "k-target", Decision: "deny", RuleID: "ai.tool.deny"})
+	l.Emit(Event{Stage: "tool", KeyID: "k-target", Decision: "rate_limited", RuleID: "ai.tool.ratelimit"})
+	l.Emit(Event{Stage: "tool", KeyID: "k-target", Decision: "allow", RuleID: "ai.tool.allow"})
+	l.Emit(Event{Stage: "llm", KeyID: "k-target", Decision: "allow", RuleID: "ai.llm.allow"}) // non-tool
+
+	// Emit for another key
+	l.Emit(Event{Stage: "tool", KeyID: "k-other", Decision: "allow", RuleID: "ai.tool.allow"})
+
+	// Give flush worker time to insert
+	time.Sleep(50 * time.Millisecond)
+
+	countTarget, err := l.DailyToolCallsCount(ctx, "k-target", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("DailyToolCallsCount target: %v", err)
+	}
+	if countTarget != 2 {
+		t.Fatalf("expected 2 allow events for k-target, got %d", countTarget)
+	}
+
+	countOther, err := l.DailyToolCallsCount(ctx, "k-other", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("DailyToolCallsCount other: %v", err)
+	}
+	if countOther != 1 {
+		t.Fatalf("expected 1 allow event for k-other, got %d", countOther)
+	}
+}
+
+// TestLogger_ShipOut_JoinedOnClose verifies D9:
+// shipper goroutines must complete and join before Close() returns,
+// even when the shipper destination has significant latency (e.g. 2s delay).
+func TestLogger_ShipOut_JoinedOnClose(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "audit.db")
+	ctx := context.Background()
+
+	var receivedCount atomic.Int32
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+		b, err := io.ReadAll(r.Body)
+		if err == nil {
+			lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+			for _, line := range lines {
+				if strings.TrimSpace(line) != "" {
+					receivedCount.Add(1)
+				}
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	l, err := Open(ctx, dbPath, Options{
+		BatchSize:  5,
+		FlushEvery: 50 * time.Millisecond,
+		ShipURL:    ts.URL,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	for i := range 5 {
+		l.Emit(Event{
+			Stage:    "tool",
+			KeyID:    fmt.Sprintf("k-%d", i),
+			Decision: "allow",
+			RuleID:   "ai.tool.allow",
+		})
+	}
+
+	startClose := time.Now()
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	closeElapsed := time.Since(startClose)
+
+	// All 5 events must be accounted for BEFORE Close() returned
+	cnt := receivedCount.Load()
+	if cnt != 5 {
+		t.Fatalf("expected all 5 events delivered before Close returned, got %d", cnt)
+	}
+	if closeElapsed < 1800*time.Millisecond {
+		t.Fatalf("Close returned in %v, expected it to wait for the 2s server delay", closeElapsed)
+	}
+}
+
+// TestQuery_DailyBeforeLegacy verifies D10:
+// query orders daily files (newest first) before legacy database files,
+// so that limit truncation does not drop recent events in favor of old legacy data.
+func TestQuery_DailyBeforeLegacy(t *testing.T) {
+	dir := t.TempDir()
+	legacyPath := filepath.Join(dir, "cerberus.db")
+	ctx := context.Background()
+
+	// 1. Seed legacy file directly with 5 old events
+	legacyDB, err := openSQLite(legacyPath)
+	if err != nil {
+		t.Fatalf("init legacy: %v", err)
+	}
+	tOld := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		_, err := legacyDB.Exec(`
+			INSERT INTO events (time, stage, key_id, subject, decision, rule_id, reason, latency_us)
+			VALUES (?, 'tool', ?, 'test-subj', 'allow', 'legacy.rule', 'legacy test', 1000)`,
+			tOld.Add(time.Duration(i)*time.Minute).UnixNano(),
+			fmt.Sprintf("legacy-%d", i),
+		)
+		if err != nil {
+			t.Fatalf("insert legacy event: %v", err)
+		}
+	}
+	_ = legacyDB.Close()
+
+	// 2. Open Logger pointing to the legacyPath as origPath
+	l, err := Open(ctx, legacyPath, Options{
+		BatchSize:  1,
+		FlushEvery: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	today := time.Now().UTC()
+	yesterday := today.Add(-24 * time.Hour)
+
+	// Emit 2 events yesterday
+	l.Emit(Event{Time: yesterday, Stage: "tool", KeyID: "yesterday-1", Decision: "allow", RuleID: "ai.tool.allow"})
+	l.Emit(Event{Time: yesterday.Add(time.Minute), Stage: "tool", KeyID: "yesterday-2", Decision: "allow", RuleID: "ai.tool.allow"})
+
+	// Emit 2 events today
+	l.Emit(Event{Time: today, Stage: "tool", KeyID: "today-1", Decision: "allow", RuleID: "ai.tool.allow"})
+	l.Emit(Event{Time: today.Add(time.Minute), Stage: "tool", KeyID: "today-2", Decision: "allow", RuleID: "ai.tool.allow"})
+
+	// Flush to disk
+	_ = l.Close()
+
+	// 3. Re-open to query
+	lReader, err := Open(ctx, legacyPath, Options{})
+	if err != nil {
+		t.Fatalf("Open reader: %v", err)
+	}
+	defer func() { _ = lReader.Close() }()
+
+	// Query with limit 5
+	events, err := lReader.Query(ctx, Filter{Limit: 5})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+
+	if len(events) != 5 {
+		t.Fatalf("expected 5 events returned, got %d", len(events))
+	}
+
+	// Must be: today events first, then yesterday events, then legacy event last
+	if !strings.HasPrefix(events[0].KeyID, "today") {
+		t.Fatalf("events[0] want today event, got %s", events[0].KeyID)
+	}
+	if !strings.HasPrefix(events[1].KeyID, "today") {
+		t.Fatalf("events[1] want today event, got %s", events[1].KeyID)
+	}
+	if !strings.HasPrefix(events[2].KeyID, "yesterday") {
+		t.Fatalf("events[2] want yesterday event, got %s", events[2].KeyID)
+	}
+	if !strings.HasPrefix(events[3].KeyID, "yesterday") {
+		t.Fatalf("events[3] want yesterday event, got %s", events[3].KeyID)
+	}
+	if !strings.HasPrefix(events[4].KeyID, "legacy") {
+		t.Fatalf("events[4] want legacy event, got %s", events[4].KeyID)
 	}
 }

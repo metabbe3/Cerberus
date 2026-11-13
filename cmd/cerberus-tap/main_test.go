@@ -651,4 +651,218 @@ func clip(s string, n int) string {
 	return s
 }
 
+// TestKillSwitchDoesNotSeverSSEByDefault verifies D1:
+// constructing a server with kills: newKillRegistry() must stream SSE events
+// without the kill-switch prematurely aborting the stream.
+func TestKillSwitchDoesNotSeverSSEByDefault(t *testing.T) {
+	eventsSent := 5
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl, ok := w.(http.Flusher)
+		if !ok {
+			t.Errorf("expected http.Flusher")
+			return
+		}
+		for i := 0; i < eventsSent; i++ {
+			_, _ = fmt.Fprintf(w, "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"chunk-%d \"}}\n\n", i)
+			fl.Flush()
+		}
+	}))
+	defer up.Close()
+
+	srv := &server{
+		upstream: up.URL,
+		client:   &http.Client{Timeout: 10 * time.Second},
+		st:       newStore(t.TempDir(), 14),
+		kills:    newKillRegistry(),
+	}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	req, _ := http.NewRequest("POST", ts.URL+"/v1/messages", strings.NewReader(`{"model":"claude-3-5-sonnet","stream":true,"messages":[]}`))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	sc := bufio.NewScanner(resp.Body)
+	chunksReceived := 0
+	for sc.Scan() {
+		line := sc.Text()
+		if strings.HasPrefix(line, "data:") && strings.Contains(line, "chunk-") {
+			chunksReceived++
+		}
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	if chunksReceived != eventsSent {
+		t.Fatalf("expected %d events streamed, got %d (stream was truncated)", eventsSent, chunksReceived)
+	}
+}
+
+// TestKillSwitchSeverInFlightStream verifies D1:
+// POST /tap/kill severs an active in-flight SSE stream.
+func TestKillSwitchSeverInFlightStream(t *testing.T) {
+	streamStarted := make(chan struct{})
+	var once sync.Once
+
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl, ok := w.(http.Flusher)
+		if !ok {
+			return
+		}
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			default:
+				_, _ = fmt.Fprintf(w, "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"streaming-token\"}}\n\n")
+				fl.Flush()
+				once.Do(func() { close(streamStarted) })
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+	}))
+	defer up.Close()
+
+	adminTok := "test-admin-token"
+	srv := &server{
+		upstream: up.URL,
+		client:   &http.Client{Timeout: 10 * time.Second},
+		st:       newStore(t.TempDir(), 14),
+		kills:    newKillRegistry(),
+		adminTok: adminTok,
+	}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	streamDone := make(chan struct{})
+	var linesCount int
+	var countMu sync.Mutex
+
+	go func() {
+		defer close(streamDone)
+		req, _ := http.NewRequest("POST", ts.URL+"/v1/messages", strings.NewReader(`{"model":"claude-3-5-sonnet","stream":true,"messages":[]}`))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		sc := bufio.NewScanner(resp.Body)
+		for sc.Scan() {
+			line := sc.Text()
+			if strings.Contains(line, "streaming-token") {
+				countMu.Lock()
+				linesCount++
+				countMu.Unlock()
+			}
+		}
+	}()
+
+	select {
+	case <-streamStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not start in time")
+	}
+
+	// Give client a moment to receive at least one token
+	time.Sleep(100 * time.Millisecond)
+
+	// Trigger kill switch
+	killReq, _ := http.NewRequest("POST", ts.URL+"/tap/kill", nil)
+	killReq.Header.Set("Authorization", "Bearer "+adminTok)
+	killResp, err := http.DefaultClient.Do(killReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = killResp.Body.Close() }()
+
+	var killResult struct {
+		KilledStreams int `json:"killed_streams"`
+	}
+	if err := json.NewDecoder(killResp.Body).Decode(&killResult); err != nil {
+		t.Fatal(err)
+	}
+	if killResult.KilledStreams != 1 {
+		t.Fatalf("expected 1 killed stream, got %d", killResult.KilledStreams)
+	}
+
+	// Stream should be severed and terminate quickly despite infinite upstream
+	select {
+	case <-streamDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream was not severed within deadline")
+	}
+
+	countMu.Lock()
+	count := linesCount
+	countMu.Unlock()
+	if count == 0 {
+		t.Fatal("expected to have received at least 1 token before kill")
+	}
+}
+
+// TestNonSSEResponseLargePayload verifies D6:
+// upstream returns 3MB non-SSE payload, client receives full 3MB without hang.
+func TestNonSSEResponseLargePayload(t *testing.T) {
+	payloadSize := 3 * 1024 * 1024 // 3MB (> maxBody 2MB)
+	chunk := bytes.Repeat([]byte("X"), 512*1024)
+
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", payloadSize))
+		written := 0
+		for written < payloadSize {
+			toWrite := len(chunk)
+			if payloadSize-written < toWrite {
+				toWrite = payloadSize - written
+			}
+			n, err := w.Write(chunk[:toWrite])
+			if err != nil {
+				return
+			}
+			written += n
+		}
+	}))
+	defer up.Close()
+
+	srv := &server{
+		upstream: up.URL,
+		client:   &http.Client{Timeout: 30 * time.Second},
+		st:       newStore(t.TempDir(), 14),
+	}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, _ := http.NewRequest("POST", ts.URL+"/v1/custom", strings.NewReader(`{"hello":"large"}`))
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("failed to read full body: %v", err)
+	}
+
+	if len(body) != payloadSize {
+		t.Fatalf("expected %d bytes, got %d bytes (truncated or corrupt)", payloadSize, len(body))
+	}
+}
+
 var _ = bytes.TrimSpace

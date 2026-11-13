@@ -21,11 +21,13 @@ type Store struct {
 	mu              sync.Mutex
 	// onSwaps holds callbacks invoked after each successful swap.
 	// Protected by mu.
-	onSwaps        []func(*Snapshot)
-	prevSnapshot   *Snapshot
-	prevBundle     []byte
-	prevAddedFiles []string
-	currentBundle  []byte
+	onSwaps         []func(*Snapshot)
+	prevSnapshot    *Snapshot
+	prevBundle      []byte
+	prevAddedFiles  []string
+	prevOverwritten map[string][]byte
+	prevDataJSON    []byte
+	currentBundle   []byte
 }
 
 // SetVerificationKey sets the public key used to verify incoming bundles.
@@ -107,9 +109,13 @@ func (s *Store) Coverage(_ context.Context) (*CoverageReport, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.mu.Lock()
 	if snap := s.ptr.Load(); snap != nil && rep != nil {
-		snap.Coverage = rep.Coverage
+		next := *snap
+		next.Coverage = rep.Coverage
+		s.ptr.Store(&next)
 	}
+	s.mu.Unlock()
 	return rep, nil
 }
 

@@ -289,3 +289,15 @@ func p99Of(latencies []float64) float64 {
 	}
 	return latencies[idx]
 }
+
+func BenchmarkCacheKey(b *testing.B) {
+	in := toolInput("k-glob", "kubernetes_get_pods", map[string]any{
+		"namespace": "production",
+		"label":     "app=cerberus",
+	})
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = cacheKey(1, in)
+	}
+}

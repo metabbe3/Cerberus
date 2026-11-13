@@ -58,6 +58,10 @@ func (s *Server) decide(stage string) http.HandlerFunc {
 			breakGlassActive, breakGlassReason = s.breakGlass.IsActive(in.KeyID)
 		}
 		if h := r.Header.Get("X-Break-Glass"); h != "" {
+			if in.KeyID == "" {
+				writeErr(w, http.StatusBadRequest, "key_id is required for break-glass (use '*' for explicit global bypass)")
+				return
+			}
 			if s.isPrivilegedAdmin(r) {
 				breakGlassActive = true
 				if breakGlassReason == "" {

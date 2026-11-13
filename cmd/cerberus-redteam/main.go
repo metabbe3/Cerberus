@@ -39,9 +39,11 @@ func main() {
 		log.Fatal("admin token required: set CERBERUS_ADMIN_TOKEN or -admin-token")
 	}
 
-	macSock := "/Users/nicholasandriansurjadi/.docker/run/docker.sock"
-	if _, err := os.Stat(macSock); err == nil {
-		*dockerSock = macSock
+	if home, err := os.UserHomeDir(); err == nil {
+		userDockerSock := filepath.Join(home, ".docker/run/docker.sock")
+		if _, err := os.Stat(userDockerSock); err == nil {
+			*dockerSock = userDockerSock
+		}
 	}
 
 	attacks := []struct {

@@ -391,7 +391,7 @@ func (l *Logger) run(context.Context) {
 // runShipper runs the background worker that POSTs batch JSON lines to ship_url with backoff.
 func (l *Logger) runShipper() {
 	defer close(l.shipDone)
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := &http.Client{Timeout: 5 * time.Second}
 	batch := make([]Event, 0, l.opts.BatchSize)
 
 	sendBatch := func() {
@@ -410,27 +410,29 @@ func (l *Logger) runShipper() {
 		data := buf.Bytes()
 		batch = batch[:0]
 
-		// Post with exponential backoff (up to 3 retries, capped delay)
-		go func(body []byte) {
-			backoff := 50 * time.Millisecond
-			for attempt := 0; attempt < 3; attempt++ {
-				req, err := http.NewRequest(http.MethodPost, l.opts.ShipURL, bytes.NewReader(body))
-				if err != nil {
+		// Post with exponential backoff (up to 3 retries, capped delay) synchronously
+		backoff := 50 * time.Millisecond
+		for attempt := 0; attempt < 3; attempt++ {
+			req, err := http.NewRequest(http.MethodPost, l.opts.ShipURL, bytes.NewReader(data))
+			if err != nil {
+				return
+			}
+			req.Header.Set("Content-Type", "application/x-ndjson")
+			resp, err := client.Do(req)
+			if err == nil {
+				_ = resp.Body.Close()
+				if resp.StatusCode < 300 {
 					return
 				}
-				req.Header.Set("Content-Type", "application/x-ndjson")
-				resp, err := client.Do(req)
-				if err == nil {
-					_ = resp.Body.Close()
-					if resp.StatusCode < 300 {
-						return
-					}
-				}
-				time.Sleep(backoff)
-				backoff *= 2
 			}
-			slog.Warn("audit: ship-out failed after retries", "url", l.opts.ShipURL)
-		}(data)
+			select {
+			case <-l.stop:
+				return
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+		}
+		slog.Warn("audit: ship-out failed after retries", "url", l.opts.ShipURL)
 	}
 
 	ticker := time.NewTicker(l.opts.FlushEvery)

@@ -84,14 +84,14 @@ echo "----------------------------------------------------------"
 echo "  Active Listening Ports:"
 lsof -i :2377 -i :8088 -i :8089 2>/dev/null | grep -v COMMAND | awk '{printf "    - %-12s PID %-6s listening on %s\n", $1, $2, $9}' || echo "    None detected"
 
-DOCKER_SOCK="/Users/nicholasandriansurjadi/.docker/run/docker.sock"
+DOCKER_SOCK="${HOME}/.docker/run/docker.sock"
 [[ ! -e "$DOCKER_SOCK" ]] && DOCKER_SOCK="/var/run/docker.sock"
 if [[ -e "$DOCKER_SOCK" ]]; then
   SOCK_PERM=$(ls -l "$DOCKER_SOCK" | awk '{print $1, $3":"$4}')
   echo -e "\n  Original Docker Socket:"
   echo "    Path:        $DOCKER_SOCK"
   echo "    Permissions: $SOCK_PERM"
-  echo "    Accessibility: REACHABLE by current user nicholasandriansurjadi"
+  echo "    Accessibility: REACHABLE by current user $(whoami)"
   echo "    RESIDUAL RISK NOTICE: In macOS/OrbStack user-owned Docker environments,"
   echo "    the local user account owns the unix socket. Full kernel-level sandboxing"
   echo "    is not enforced against the host user. Docker enforcer proxy is advisory"
