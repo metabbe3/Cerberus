@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/metabbe3/cerberus/internal/engine"
 )
@@ -12,11 +13,30 @@ func TestDecide_ExplainQueryParam(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 
-	// POST /v1/decide?explain=true with dangerous command (rm -rf)
+	sub, cancel := h.auditLog.Subscribe()
+	defer cancel()
+
+	// 1. POST /v1/decide?explain=true without auth must return 401 Unauthorized
 	reqBody := `{"stage": "tool", "key_id": "k-open", "tool_call": "bash", "args": {"cmd": "rm -rf /"}}`
-	resp := h.do(t, http.MethodPost, "/v1/decide?explain=true", "application/json", reqBody, false)
+	respNoAuth := h.do(t, http.MethodPost, "/v1/decide?explain=true", "application/json", reqBody, false)
+	if respNoAuth.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("decide explain without auth status = %d, want 401", respNoAuth.StatusCode)
+	}
+
+	// 2. POST /v1/decide?explain=true with auth must return 200 OK
+	resp := h.do(t, http.MethodPost, "/v1/decide?explain=true", "application/json", reqBody, true)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("decide explain status = %d, want 200", resp.StatusCode)
+	}
+
+	// 3. Verify audit event was emitted with RuleID "admin.explain"
+	select {
+	case ev := <-sub:
+		if ev.RuleID != "admin.explain" {
+			t.Fatalf("audit event RuleID = %q, want admin.explain", ev.RuleID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for audit event for admin.explain")
 	}
 
 	var d engine.Decision

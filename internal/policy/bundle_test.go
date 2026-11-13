@@ -648,3 +648,156 @@ func TestReadBundle_AppleDoubleRegoSkipped(t *testing.T) {
 		t.Error("policies/stages/foo.rego should be present in RegoFiles")
 	}
 }
+
+func TestSafeRel(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{"normal rego", "policies/stages/ai.rego", "stages/ai.rego", false},
+		{"direct rego", "stages/ai.rego", "stages/ai.rego", false},
+		{"data json", "data.json", "data.json", false},
+		{"manifest", ".manifest", ".manifest", false},
+		{"policies dot dot evil", "policies/../../evil.rego", "", true},
+		{"dot dot escape", "../escape", "", true},
+		{"a dot dot b", "a/../../b", "", true},
+		{"root absolute", "/etc/passwd", "", true},
+		{"empty", "", "", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rel, err := safeRel(tc.input)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("safeRel(%q): expected error, got %q", tc.input, rel)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("safeRel(%q): unexpected error: %v", tc.input, err)
+			}
+			if rel != tc.want {
+				t.Fatalf("safeRel(%q) = %q, want %q", tc.input, rel, tc.want)
+			}
+		})
+	}
+}
+
+func TestReadBundle_PathTraversalRejected(t *testing.T) {
+	t.Parallel()
+
+	traversalEntries := []string{
+		"policies/../../evil.rego",
+		"../escape",
+		"a/../../b",
+	}
+
+	for _, entryName := range traversalEntries {
+		t.Run("reject_"+entryName, func(t *testing.T) {
+			var buf bytes.Buffer
+			gw := gzip.NewWriter(&buf)
+			tw := tar.NewWriter(gw)
+
+			content := []byte("package malicious\ndefault allow = true\n")
+			if err := tw.WriteHeader(&tar.Header{
+				Name: entryName,
+				Size: int64(len(content)),
+				Mode: 0o600,
+			}); err != nil {
+				t.Fatalf("WriteHeader: %v", err)
+			}
+			if _, err := tw.Write(content); err != nil {
+				t.Fatalf("Write: %v", err)
+			}
+			_ = tw.Close()
+			_ = gw.Close()
+
+			_, err := ReadBundle(bytes.NewReader(buf.Bytes()))
+			if err == nil {
+				t.Fatalf("expected ReadBundle to reject path traversal entry %q, got nil", entryName)
+			}
+		})
+	}
+
+	t.Run("normal_entry_allowed", func(t *testing.T) {
+		var buf bytes.Buffer
+		gw := gzip.NewWriter(&buf)
+		tw := tar.NewWriter(gw)
+
+		dataJSON := []byte(`{}`)
+		if err := tw.WriteHeader(&tar.Header{
+			Name: "data.json",
+			Size: int64(len(dataJSON)),
+			Mode: 0o600,
+		}); err != nil {
+			t.Fatalf("WriteHeader data.json: %v", err)
+		}
+		if _, err := tw.Write(dataJSON); err != nil {
+			t.Fatalf("Write data.json: %v", err)
+		}
+
+		content := []byte("package stages.test\ndefault allow = true\n")
+		if err := tw.WriteHeader(&tar.Header{
+			Name: "policies/stages/test.rego",
+			Size: int64(len(content)),
+			Mode: 0o600,
+		}); err != nil {
+			t.Fatalf("WriteHeader: %v", err)
+		}
+		if _, err := tw.Write(content); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		_ = tw.Close()
+		_ = gw.Close()
+
+		b, err := ReadBundle(bytes.NewReader(buf.Bytes()))
+		if err != nil {
+			t.Fatalf("expected normal entry to pass, got error: %v", err)
+		}
+		if _, ok := b.RegoFiles["policies/stages/test.rego"]; !ok {
+			t.Fatal("expected policies/stages/test.rego in RegoFiles")
+		}
+	})
+}
+
+func TestReadBundle_ZipBombRejected(t *testing.T) {
+	t.Parallel()
+
+	// Create a tar archive with a 100MB zero-filled entry.
+	// With gzip compression, 100MB of zeros compresses to a tiny file (<100KB).
+	const bombSize = 100 << 20 // 100MB
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "policies/stages/huge.rego",
+		Size: bombSize,
+		Mode: 0o600,
+	}); err != nil {
+		t.Fatalf("WriteHeader: %v", err)
+	}
+
+	chunk := make([]byte, 1<<20) // 1MB buffer
+	for i := 0; i < 100; i++ {
+		if _, err := tw.Write(chunk); err != nil {
+			t.Fatalf("Write chunk: %v", err)
+		}
+	}
+	_ = tw.Close()
+	_ = gw.Close()
+
+	t.Logf("compressed 100MB zeros size: %d bytes", buf.Len())
+
+	_, err := ReadBundle(bytes.NewReader(buf.Bytes()))
+	if err == nil {
+		t.Fatal("expected ReadBundle to reject 100MB entry exceeding maxPerEntry, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds max") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}

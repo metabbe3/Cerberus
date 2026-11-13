@@ -19,10 +19,9 @@ type Store struct {
 	dataPath        string
 	verificationKey ed25519.PublicKey
 	mu              sync.Mutex
-	// onSwap, when non-nil, runs after each successful swap. Callers set it
-	// once before serving traffic (the engine keeps cerberus_policy_epoch
-	// live through it); read only under mu, so no race with Reload.
-	onSwap        func(*Snapshot)
+	// onSwaps holds callbacks invoked after each successful swap.
+	// Protected by mu.
+	onSwaps       []func(*Snapshot)
 	prevSnapshot  *Snapshot
 	prevBundle    []byte
 	currentBundle []byte
@@ -57,8 +56,22 @@ func (s *Store) SetCurrentBundle(b []byte) {
 }
 
 // OnSwap registers f to run after each successful snapshot swap (Reload,
-// ReplaceData). Call before serving traffic.
-func (s *Store) OnSwap(f func(*Snapshot)) { s.onSwap = f }
+// ReplaceData, LoadBundle, Rollback). Callbacks are executed under mu in registration order.
+func (s *Store) OnSwap(f func(*Snapshot)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if f != nil {
+		s.onSwaps = append(s.onSwaps, f)
+	}
+}
+
+func (s *Store) notifySwaps(snap *Snapshot) {
+	for _, fn := range s.onSwaps {
+		if fn != nil {
+			fn(snap)
+		}
+	}
+}
 
 // NewStore builds the first Snapshot (epoch 1) from policyDir and dataPath.
 func NewStore(ctx context.Context, policyDir, dataPath string) (*Store, error) {
@@ -109,10 +122,11 @@ func (s *Store) Reload(ctx context.Context) (*Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.ptr.Store(snap)
-	if s.onSwap != nil {
-		s.onSwap(snap)
+	if err := DryRunSmoke(ctx, snap); err != nil {
+		return nil, fmt.Errorf("smoke test failed: %w", err)
 	}
+	s.ptr.Store(snap)
+	s.notifySwaps(snap)
 	return snap, nil
 }
 
@@ -134,9 +148,7 @@ func (s *Store) ReplaceData(ctx context.Context, dataJSON []byte) (*Snapshot, er
 		return nil, err
 	}
 	s.ptr.Store(snap)
-	if s.onSwap != nil {
-		s.onSwap(snap)
-	}
+	s.notifySwaps(snap)
 	return snap, nil
 }
 

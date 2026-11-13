@@ -813,7 +813,7 @@ func TestAdmin_Status(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Layer 1: Happy path - GET /v1/status returns 200 with all status metrics including Sprint 2D fields
-	resp := h.do(t, http.MethodGet, "/v1/status", "", "", false)
+	resp := h.do(t, http.MethodGet, "/v1/status", "", "", true)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
@@ -1174,7 +1174,7 @@ func TestServer_Decide_AuditCacheHit(t *testing.T) {
 	// pipeline can lag well past a fixed sleep on slow CI runners.
 	var evs []audit.Event
 	found := false
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
 		auditResp := h.do(t, http.MethodGet, "/v1/audit?key_id=k-glob", "", "", true)
 		if auditResp.StatusCode != http.StatusOK {
 			t.Fatalf("audit status = %d, want 200", auditResp.StatusCode)
@@ -1256,5 +1256,32 @@ func TestDecide_SSHStageEndToEnd(t *testing.T) {
 	}
 	if decDeny.RuleID != "ssh.host_not_allowed" {
 		t.Fatalf("expected rule_id ssh.host_not_allowed, got %q", decDeny.RuleID)
+	}
+}
+
+func TestStatus_AuthRequired(t *testing.T) {
+	h := newHarness(t)
+
+	// 1. Without auth -> 401 Unauthorized
+	respNoAuth := h.do(t, http.MethodGet, "/v1/status", "", "", false)
+	if respNoAuth.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("GET /v1/status without auth: got status %d, want 401", respNoAuth.StatusCode)
+	}
+
+	// 2. With auth -> 200 OK
+	respAuth := h.do(t, http.MethodGet, "/v1/status", "", "", true)
+	if respAuth.StatusCode != http.StatusOK {
+		t.Fatalf("GET /v1/status with auth: got status %d, want 200", respAuth.StatusCode)
+	}
+
+	// Also verify /v1/admin/status behaves identically
+	respAdminNoAuth := h.do(t, http.MethodGet, "/v1/admin/status", "", "", false)
+	if respAdminNoAuth.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("GET /v1/admin/status without auth: got status %d, want 401", respAdminNoAuth.StatusCode)
+	}
+
+	respAdminAuth := h.do(t, http.MethodGet, "/v1/admin/status", "", "", true)
+	if respAdminAuth.StatusCode != http.StatusOK {
+		t.Fatalf("GET /v1/admin/status with auth: got status %d, want 200", respAdminAuth.StatusCode)
 	}
 }

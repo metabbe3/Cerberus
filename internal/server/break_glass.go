@@ -56,10 +56,7 @@ func (bg *breakGlassManager) Deactivate(keyID string) {
 	}
 }
 
-func (bg *breakGlassManager) IsActive(keyID string) (bool, string) {
-	bg.mu.RLock()
-	defer bg.mu.RUnlock()
-	now := time.Now()
+func (bg *breakGlassManager) isActiveLocked(keyID string, now time.Time) (bool, string) {
 	if !bg.globalUntil.IsZero() && now.Before(bg.globalUntil) {
 		return true, bg.globalReason
 	}
@@ -71,11 +68,17 @@ func (bg *breakGlassManager) IsActive(keyID string) (bool, string) {
 	return false, ""
 }
 
+func (bg *breakGlassManager) IsActive(keyID string) (bool, string) {
+	bg.mu.RLock()
+	defer bg.mu.RUnlock()
+	return bg.isActiveLocked(keyID, time.Now())
+}
+
 func (bg *breakGlassManager) Status(keyID string) map[string]any {
 	bg.mu.RLock()
 	defer bg.mu.RUnlock()
 	now := time.Now()
-	active, reason := bg.IsActive(keyID)
+	active, reason := bg.isActiveLocked(keyID, now)
 	res := map[string]any{
 		"active": active,
 		"reason": reason,

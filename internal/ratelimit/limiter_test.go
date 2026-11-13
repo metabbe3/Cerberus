@@ -2,8 +2,12 @@ package ratelimit
 
 import (
 	"context"
+	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/metabbe3/cerberus/internal/policy"
 )
@@ -193,5 +197,93 @@ func TestLimiter_ResetOnEpoch(t *testing.T) {
 	// Now should be allowed again
 	if !lim.Allow(ctx, "k-reset", "llm").Allowed {
 		t.Fatalf("should allow after reset epoch")
+	}
+}
+
+type errorThenSuccessAuditCounter struct {
+	calls      atomic.Int32
+	shouldFail atomic.Bool
+	count      int64
+}
+
+func (m *errorThenSuccessAuditCounter) DailyToolCallsCount(_ context.Context, _ string, _ time.Time) (int64, error) {
+	m.calls.Add(1)
+	if m.shouldFail.Load() {
+		return 0, errors.New("database connection refused")
+	}
+	return m.count, nil
+}
+
+func TestLimiter_DailyToolQuota_RetryOnError(t *testing.T) {
+	data := map[string]any{
+		"agents": map[string]any{
+			"k-retry": map[string]any{
+				"rate_limit": map[string]any{
+					"daily_tool_calls": 3,
+				},
+			},
+		},
+	}
+
+	snap := &policy.Snapshot{
+		Epoch: 1,
+		Data:  data,
+	}
+
+	store := policy.NewStoreWithSnapshot(snap)
+
+	mockAudit := &errorThenSuccessAuditCounter{}
+	mockAudit.shouldFail.Store(true)
+
+	lim := NewLimiter(store, mockAudit)
+	ctx := context.Background()
+
+	// 1st call fails to query audit log, should not lock dailyChecked, allowed
+	v1 := lim.Allow(ctx, "k-retry", "tool")
+	if !v1.Allowed {
+		t.Fatalf("first call should be allowed despite audit query failure: %v", v1.Reason)
+	}
+	if mockAudit.calls.Load() != 1 {
+		t.Fatalf("expected 1 audit call, got %d", mockAudit.calls.Load())
+	}
+
+	// 2nd call: audit counter recovers and reports 3 calls already today
+	mockAudit.shouldFail.Store(false)
+	mockAudit.count = 3
+
+	// Limiter must retry calling DailyToolCallsCount because it failed previously
+	v2 := lim.Allow(ctx, "k-retry", "tool")
+	if mockAudit.calls.Load() != 2 {
+		t.Fatalf("expected 2 audit calls (retry occurred), got %d", mockAudit.calls.Load())
+	}
+	if v2.Allowed {
+		t.Fatalf("second call should be denied (quota exhausted after retry retrieved count)")
+	}
+	if !v2.IsQuotaAlert {
+		t.Errorf("expected IsQuotaAlert=true")
+	}
+
+	// 3rd call: dailyChecked is now true, so DailyToolCallsCount should NOT be called again
+	v3 := lim.Allow(ctx, "k-retry", "tool")
+	if v3.Allowed {
+		t.Fatalf("third call should be denied")
+	}
+	if mockAudit.calls.Load() != 2 {
+		t.Fatalf("expected audit calls to remain 2 after successful check, got %d", mockAudit.calls.Load())
+	}
+}
+
+func TestLimiter_UnkeyedIncrementsMetric(t *testing.T) {
+	before := testutil.ToFloat64(RateLimitUnkeyedTotal)
+
+	lim := NewLimiter(nil, nil)
+	v := lim.Allow(context.Background(), "", "tool")
+	if !v.Allowed {
+		t.Fatal("empty keyID should be allowed")
+	}
+
+	after := testutil.ToFloat64(RateLimitUnkeyedTotal)
+	if after != before+1 {
+		t.Fatalf("expected RateLimitUnkeyedTotal to increment by 1, got before=%v, after=%v", before, after)
 	}
 }

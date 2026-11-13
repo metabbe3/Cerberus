@@ -5,9 +5,11 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -32,23 +34,9 @@ func main() {
 	dockerSock := flag.String("docker-sock", "/var/run/docker.sock", "Original Docker unix socket path")
 	flag.Parse()
 
-	tok := *adminToken
-	if tok == "" {
-		tok = os.Getenv("CERBERUS_ADMIN_TOKEN")
-	}
-	if tok == "" {
-		// Try reading /tmp/owl_deploy.env
-		if b, err := os.ReadFile("/tmp/owl_deploy.env"); err == nil {
-			for _, line := range strings.Split(string(b), "\n") {
-				if strings.HasPrefix(line, "CERBERUS_ADMIN_TOKEN=") {
-					tok = strings.TrimSpace(strings.TrimPrefix(line, "CERBERUS_ADMIN_TOKEN="))
-					break
-				}
-			}
-		}
-	}
-	if tok == "" {
-		tok = "IQk1EHpteAAdgxrEcbBsPUC6ZM2uGTxjQtkChlLR"
+	tok, err := resolveAdminToken(*adminToken, os.Getenv("CERBERUS_ADMIN_TOKEN"))
+	if err != nil {
+		log.Fatal("admin token required: set CERBERUS_ADMIN_TOKEN or -admin-token")
 	}
 
 	macSock := "/Users/nicholasandriansurjadi/.docker/run/docker.sock"
@@ -726,4 +714,16 @@ func testQualityPortValidation(egressAddr string) AttackResult {
 		Result: "warn",
 		Detail: fmt.Sprintf("port 25 response: %q (live process pending Sprint 8 binary reload)", line),
 	}
+}
+
+// resolveAdminToken returns the administrative bearer token from either the CLI flag
+// or the CERBERUS_ADMIN_TOKEN environment variable. If neither is set, an error is returned.
+func resolveAdminToken(flagVal, envVal string) (string, error) {
+	if strings.TrimSpace(flagVal) != "" {
+		return strings.TrimSpace(flagVal), nil
+	}
+	if strings.TrimSpace(envVal) != "" {
+		return strings.TrimSpace(envVal), nil
+	}
+	return "", errors.New("admin token required: set CERBERUS_ADMIN_TOKEN or -admin-token")
 }

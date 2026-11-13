@@ -202,6 +202,8 @@ func (e *Engine) Decide(ctx context.Context, in Input) Decision {
 
 // Explain evaluates input with full OPA query tracing enabled, bypassing cache.
 // It returns the decision along with the ordered rule trace and pretty formatted trace.
+// Note: Explain does not emit audit events directly; audit emission is handled
+// at the HTTP handler layer to avoid double emission and preserve caller context.
 func (e *Engine) Explain(ctx context.Context, in Input) Decision {
 	start := time.Now()
 	snap := e.store.Current()

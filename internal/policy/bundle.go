@@ -44,6 +44,32 @@ type Bundle struct {
 	RawFiles       map[string][]byte
 }
 
+const (
+	maxBundleBytes   = 64 << 20 // 64MB max total size across all entries
+	maxBundleEntries = 5000     // max bundle entry count
+	maxPerEntry      = 8 << 20  // 8MB max size per individual entry
+)
+
+// safeRel validates that name does not escape its target directory via path traversal.
+// It rejects if strings.Contains(name, "..") in any path segment or if !filepath.IsLocal(rel)
+// after Clean and TrimPrefix.
+func safeRel(name string) (string, error) {
+	slashName := filepath.ToSlash(name)
+	for _, seg := range strings.Split(slashName, "/") {
+		if strings.Contains(seg, "..") {
+			return "", fmt.Errorf("bundle: %w: path traversal detected in entry %q", ErrData, name)
+		}
+	}
+	rel := filepath.Clean(name)
+	rel = strings.TrimPrefix(rel, "policies/")
+	rel = strings.TrimPrefix(rel, "policies\\")
+	rel = filepath.Clean(rel)
+	if !filepath.IsLocal(rel) || rel == "." || rel == "" {
+		return "", fmt.Errorf("bundle: %w: path is not local: %q", ErrData, name)
+	}
+	return rel, nil
+}
+
 // ReadBundle extracts an OPA bundle (.tar.gz) from r.
 func ReadBundle(r io.Reader) (*Bundle, error) {
 	gz, err := gzip.NewReader(r)
@@ -59,6 +85,11 @@ func ReadBundle(r io.Reader) (*Bundle, error) {
 		RawFiles:  make(map[string][]byte),
 	}
 
+	var (
+		totalBytes   int64
+		entriesCount int
+	)
+
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -71,12 +102,29 @@ func ReadBundle(r io.Reader) (*Bundle, error) {
 			continue
 		}
 
+		entriesCount++
+		if entriesCount > maxBundleEntries {
+			return nil, fmt.Errorf("bundle: %w: bundle exceeds max entries (%d)", ErrData, maxBundleEntries)
+		}
+
 		name := strings.TrimPrefix(hdr.Name, "/")
 		name = strings.TrimPrefix(name, "./")
+		if _, err := safeRel(name); err != nil {
+			return nil, err
+		}
 
 		var buf bytes.Buffer
-		if _, err := io.Copy(&buf, tr); err != nil { //nolint:gosec // G110 signed bundle, size-capped
+		lr := io.LimitReader(tr, maxPerEntry+1)
+		n, err := io.Copy(&buf, lr) //nolint:gosec // G110 signed bundle, size-capped with LimitReader
+		if err != nil {
 			return nil, fmt.Errorf("bundle: read entry %s: %w", name, err)
+		}
+		if n > maxPerEntry {
+			return nil, fmt.Errorf("bundle: %w: entry %s exceeds max entry size (%d bytes)", ErrData, name, maxPerEntry)
+		}
+		totalBytes += n
+		if totalBytes > maxBundleBytes {
+			return nil, fmt.Errorf("bundle: %w: bundle exceeds max total size (%d bytes)", ErrData, maxBundleBytes)
 		}
 		content := buf.Bytes()
 		b.RawFiles[name] = content
@@ -120,8 +168,10 @@ func ReadBundle(r io.Reader) (*Bundle, error) {
 
 	// Also verify that no rego file attempts to overwrite local core modules
 	for name := range b.RegoFiles {
-		rel := filepath.Clean(name)
-		rel = strings.TrimPrefix(rel, "policies/")
+		rel, err := safeRel(name)
+		if err != nil {
+			return nil, err
+		}
 		if strings.HasPrefix(rel, "gateway/") || strings.HasPrefix(rel, "shield/") || rel == "gateway.rego" || rel == "shield.rego" {
 			slog.Warn("bundle refused: rego file overlaps with local core", "file", name)
 			return nil, fmt.Errorf("bundle: %w: file %s overwrites local core module (gateway/shield)", ErrData, name)
@@ -339,8 +389,10 @@ func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, err
 
 	// Unpack bundle's rego files into tmpDir
 	for name, content := range b.RegoFiles {
-		rel := filepath.Clean(name)
-		rel = strings.TrimPrefix(rel, "policies/")
+		rel, err := safeRel(name)
+		if err != nil {
+			return nil, err
+		}
 		dest := filepath.Join(tmpDir, rel)
 		if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
 			return nil, fmt.Errorf("bundle: mkdir: %w", err)
@@ -386,8 +438,10 @@ func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, err
 	// reload or disk readers also observe them.
 	if s.policyDir != "" {
 		for name, content := range b.RegoFiles {
-			rel := filepath.Clean(name)
-			rel = strings.TrimPrefix(rel, "policies/")
+			rel, err := safeRel(name)
+			if err != nil {
+				return nil, err
+			}
 			dest := filepath.Join(s.policyDir, rel)
 			if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
 				return nil, fmt.Errorf("bundle: install mkdir: %w", err)
@@ -410,9 +464,7 @@ func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, err
 
 	// Atomic swap
 	s.ptr.Store(snap)
-	if s.onSwap != nil {
-		s.onSwap(snap)
-	}
+	s.notifySwaps(snap)
 	return snap, nil
 }
 
@@ -453,11 +505,17 @@ func (s *Store) Rollback(ctx context.Context) (*Snapshot, error) {
 			_ = copyDir(s.policyDir, tmpDir)
 		}
 		for name, content := range b.RegoFiles {
-			rel := filepath.Clean(name)
-			rel = strings.TrimPrefix(rel, "policies/")
+			rel, err := safeRel(name)
+			if err != nil {
+				return nil, err
+			}
 			dest := filepath.Join(tmpDir, rel)
-			_ = os.MkdirAll(filepath.Dir(dest), 0o750)
-			_ = os.WriteFile(dest, content, 0o600)
+			if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
+				return nil, fmt.Errorf("rollback: mkdir: %w", err)
+			}
+			if err := os.WriteFile(dest, content, 0o600); err != nil {
+				return nil, fmt.Errorf("rollback: write rego: %w", err)
+			}
 		}
 
 		snap, err := Load(ctx, tmpDir, b.DataJSON, old.Epoch+1)
@@ -468,11 +526,17 @@ func (s *Store) Rollback(ctx context.Context) (*Snapshot, error) {
 
 		if s.policyDir != "" {
 			for name, content := range b.RegoFiles {
-				rel := filepath.Clean(name)
-				rel = strings.TrimPrefix(rel, "policies/")
+				rel, err := safeRel(name)
+				if err != nil {
+					return nil, err
+				}
 				dest := filepath.Join(s.policyDir, rel)
-				_ = os.MkdirAll(filepath.Dir(dest), 0o750)
-				_ = writeAtomic(dest, content)
+				if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
+					return nil, fmt.Errorf("rollback: install mkdir: %w", err)
+				}
+				if err := writeAtomic(dest, content); err != nil {
+					return nil, fmt.Errorf("rollback: install rego: %w", err)
+				}
 			}
 		}
 		if s.dataPath != "" {
@@ -497,8 +561,6 @@ func (s *Store) Rollback(ctx context.Context) (*Snapshot, error) {
 	s.prevSnapshot = nil
 
 	s.ptr.Store(rolledBack)
-	if s.onSwap != nil {
-		s.onSwap(rolledBack)
-	}
+	s.notifySwaps(rolledBack)
 	return rolledBack, nil
 }

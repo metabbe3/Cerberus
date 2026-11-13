@@ -4,12 +4,22 @@ package ratelimit
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math"
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+
 	"github.com/metabbe3/cerberus/internal/policy"
 )
+
+// RateLimitUnkeyedTotal tracks rate limit evaluations requested without a keyID.
+var RateLimitUnkeyedTotal = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "rate_limit_unkeyed_total",
+	Help: "Total number of rate-limit evaluations requested without a keyID.",
+})
 
 // AuditCounter provides today's tool calls count for daily quota enforcement.
 type AuditCounter interface {
@@ -72,13 +82,14 @@ func (tb *tokenBucket) allow(now time.Time) (bool, int) {
 }
 
 type keyLimiter struct {
-	mu           sync.Mutex
-	cfg          Config
-	reqBucket    *tokenBucket
-	toolBucket   *tokenBucket
-	dailyCount   int64
-	dayStamp     string
-	dailyChecked bool
+	mu            sync.Mutex
+	cfg           Config
+	reqBucket     *tokenBucket
+	toolBucket    *tokenBucket
+	dailyCount    int64
+	dayStamp      string
+	dailyChecked  bool
+	lastAuditWarn time.Time
 }
 
 // Limiter coordinates token-bucket rate limiting and daily tool call quotas across keys.
@@ -118,7 +129,11 @@ func (l *Limiter) Reset(epoch uint64) {
 
 // Allow evaluates whether an incoming request from keyID at stage is within rate limits.
 func (l *Limiter) Allow(ctx context.Context, keyID string, stage string) Verdict {
-	if keyID == "" || l.store == nil {
+	if keyID == "" {
+		RateLimitUnkeyedTotal.Inc()
+		return Verdict{Allowed: true}
+	}
+	if l.store == nil {
 		return Verdict{Allowed: true}
 	}
 
@@ -176,10 +191,17 @@ func (l *Limiter) Allow(ctx context.Context, keyID string, stage string) Verdict
 			}
 
 			if !kl.dailyChecked && l.audit != nil {
-				if cnt, err := l.audit.DailyToolCallsCount(ctx, keyID, now.UTC()); err == nil {
+				cnt, err := l.audit.DailyToolCallsCount(ctx, keyID, now.UTC())
+				if err != nil {
+					if now.Sub(kl.lastAuditWarn) >= time.Minute {
+						kl.lastAuditWarn = now
+						slog.Warn("ratelimit: failed to fetch daily tool calls count; retrying on next call",
+							"key_id", keyID, "err", err)
+					}
+				} else {
 					kl.dailyCount = cnt
+					kl.dailyChecked = true
 				}
-				kl.dailyChecked = true
 			}
 
 			if kl.dailyCount >= int64(cfg.DailyToolCalls) {

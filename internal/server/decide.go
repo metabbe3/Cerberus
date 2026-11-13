@@ -134,7 +134,27 @@ func (s *Server) decide(stage string) http.HandlerFunc {
 		}
 
 		if r.URL.Query().Get("explain") == "true" {
+			if !s.isPrivilegedAdmin(r) {
+				writeErr(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
 			d := s.deps.Engine.Explain(r.Context(), in)
+			if s.deps.Audit != nil {
+				var epoch uint64
+				if s.deps.Store != nil && s.deps.Store.Current() != nil {
+					epoch = s.deps.Store.Current().Epoch
+				}
+				s.deps.Audit.Emit(audit.Event{
+					Time:     time.Now(),
+					Stage:    in.Stage,
+					KeyID:    in.KeyID,
+					Subject:  d.RuleID,
+					Decision: d.Decision,
+					RuleID:   "admin.explain",
+					Reason:   d.Reason,
+					Epoch:    epoch,
+				})
+			}
 			writeJSON(w, http.StatusOK, d)
 			return
 		}

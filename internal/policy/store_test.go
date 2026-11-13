@@ -214,3 +214,99 @@ func TestStore_ReplaceData_GlobalKillSwitchAllowed(t *testing.T) {
 		t.Fatalf("epoch = %d, want 2", snap.Epoch)
 	}
 }
+
+func TestStore_OnSwap_MultipleCallbacks(t *testing.T) {
+	s, _ := newTestStore(t)
+
+	var cb1Calls, cb2Calls atomic.Int32
+	var cb1Epoch, cb2Epoch atomic.Uint64
+
+	s.OnSwap(func(snap *Snapshot) {
+		cb1Calls.Add(1)
+		cb1Epoch.Store(snap.Epoch)
+	})
+	s.OnSwap(func(snap *Snapshot) {
+		cb2Calls.Add(1)
+		cb2Epoch.Store(snap.Epoch)
+	})
+
+	snap, err := s.Reload(context.Background())
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	if cb1Calls.Load() != 1 {
+		t.Fatalf("cb1 called %d times, want 1", cb1Calls.Load())
+	}
+	if cb2Calls.Load() != 1 {
+		t.Fatalf("cb2 called %d times, want 1", cb2Calls.Load())
+	}
+	if cb1Epoch.Load() != snap.Epoch {
+		t.Fatalf("cb1 received epoch %d, want %d", cb1Epoch.Load(), snap.Epoch)
+	}
+	if cb2Epoch.Load() != snap.Epoch {
+		t.Fatalf("cb2 received epoch %d, want %d", cb2Epoch.Load(), snap.Epoch)
+	}
+}
+
+func TestStore_Reload_RejectsCorruptDataWithoutAgents(t *testing.T) {
+	s, dataPath := newTestStore(t)
+	oldSnap := s.Current()
+
+	// Data without required "agents" key
+	brokenData := []byte(`{"config":{}}`)
+	if err := os.WriteFile(dataPath, brokenData, 0o600); err != nil {
+		t.Fatalf("write broken data: %v", err)
+	}
+
+	_, err := s.Reload(context.Background())
+	if err == nil {
+		t.Fatal("expected Reload to fail with corrupted data missing agents, got nil")
+	}
+
+	// Snapshot must not change
+	if s.Current() != oldSnap {
+		t.Fatal("Current() snapshot changed despite failed Reload")
+	}
+	if s.Current().Epoch != 1 {
+		t.Fatalf("epoch changed to %d, want 1", s.Current().Epoch)
+	}
+}
+
+func TestStore_Reload_FailsSmokeTest(t *testing.T) {
+	tmpPolicy := t.TempDir()
+	if err := os.CopyFS(tmpPolicy, os.DirFS(policyDir)); err != nil {
+		t.Fatalf("copy policyDir: %v", err)
+	}
+	dataPath := filepath.Join(t.TempDir(), "data.json")
+	if err := os.WriteFile(dataPath, loadTestData(t), 0o600); err != nil {
+		t.Fatalf("stage fixture data: %v", err)
+	}
+	s, err := NewStore(context.Background(), tmpPolicy, dataPath)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	oldSnap := s.Current()
+
+	// Write a rego file into tmpPolicy that forces all decisions to deny,
+	// causing DryRunSmoke ("ls allow") to fail.
+	brokenRego := []byte("package gateway.authz\n\ndecision := {\"decision\": \"deny\", \"rule_id\": \"override_all\"}\n")
+	if err := os.WriteFile(filepath.Join(tmpPolicy, "override.rego"), brokenRego, 0o600); err != nil {
+		t.Fatalf("write override.rego: %v", err)
+	}
+
+	_, err = s.Reload(context.Background())
+	if err == nil {
+		t.Fatal("expected Reload to fail when smoke test fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "smoke test failed") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+
+	if s.Current() != oldSnap {
+		t.Fatal("Current() snapshot changed despite failed Reload smoke check")
+	}
+	if s.Current().Epoch != 1 {
+		t.Fatalf("epoch changed to %d, want 1", s.Current().Epoch)
+	}
+}
