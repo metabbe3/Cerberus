@@ -86,6 +86,7 @@ func cleanPeers(peers []string) []string {
 	return out
 }
 
+// Close stops the cluster manager and releases its resources.
 func (cm *ClusterManager) Close() {
 	cm.closeOnce.Do(func() {
 		close(cm.stop)

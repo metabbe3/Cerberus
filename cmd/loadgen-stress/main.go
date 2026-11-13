@@ -17,8 +17,6 @@ import (
 	"time"
 )
 
-type samp struct{ lat float64 }
-
 var (
 	url     = flag.String("url", "http://127.0.0.1:18089/v1/decide", "decide endpoint")
 	token   = flag.String("token", "", "admin bearer token")
@@ -31,7 +29,7 @@ var (
 func main() {
 	flag.Parse()
 	if *token == "" {
-		fmt.Fprintln(os.Stderr, "token required")
+		_, _ = fmt.Fprintln(os.Stderr, "token required")
 		os.Exit(2)
 	}
 	tr := &http.Transport{MaxIdleConns: 512, MaxIdleConnsPerHost: 512, IdleConnTimeout: 90 * time.Second}
@@ -88,7 +86,8 @@ func main() {
 			wg.Add(1)
 			go func(w int) {
 				defer wg.Done()
-				r := rand.New(rand.NewSource(time.Now().UnixNano() + int64(w)))
+				r := rand.New(rand.NewSource( //nolint:gosec // G404 synthetic load generator
+					time.Now().UnixNano() + int64(w)))
 				var i uint64
 				for time.Now().Before(stop) {
 					i++
@@ -102,8 +101,8 @@ func main() {
 						atomic.AddInt64(&errs, 1)
 						continue
 					}
-					io.Copy(io.Discard, resp.Body)
-					resp.Body.Close()
+					_, _ = io.Copy(io.Discard, resp.Body)
+					_ = resp.Body.Close()
 					if resp.StatusCode >= 400 {
 						// 429 = rate limit (policy working) — count separately as error bucket
 						atomic.AddInt64(&errs, 1)
@@ -117,6 +116,9 @@ func main() {
 			}(w)
 		}
 		wg.Wait()
+		if *verbose {
+			fmt.Printf("  level conc=%d: ok=%d errs=%d\n", conc, ok, errs)
+		}
 		elapsed := *dur
 		tps := float64(ok) / elapsed.Seconds()
 		if len(lats) > 0 {

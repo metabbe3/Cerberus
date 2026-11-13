@@ -1,3 +1,4 @@
+// Package util holds shared HTTP helpers for engine services.
 package util
 
 import (

@@ -252,7 +252,7 @@ func (e *Engine) Explain(ctx context.Context, in Input) Decision {
 	for _, evt := range *tracer {
 		ruleName := ""
 		if r, ok := evt.Node.(*ast.Rule); ok && r != nil {
-			ruleName = r.Path().String()
+			ruleName = r.Path().String() //nolint:staticcheck // SA1019: Ref() migration deferred — audit-format stable
 		} else if evt.Ref != nil {
 			ruleName = evt.Ref.String()
 		} else {
@@ -467,9 +467,4 @@ func cacheKey(epoch uint64, in Input) [32]byte {
 // str extracts a string field from the Rego decision object.
 func str(v any) string {
 	return util.Str(v)
-}
-
-// Stats returns the cache hits and misses totals recorded by the engine.
-func (e *Engine) Stats() (hits uint64, misses uint64) {
-	return EngineStats()
 }

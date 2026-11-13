@@ -24,17 +24,17 @@ func main() {
 	switch os.Args[1] {
 	case "build":
 		if err := runBuild(os.Args[2:]); err != nil {
-			fmt.Fprintf(os.Stderr, "build error: %v\n", err)
+			_, _ = fmt.Fprintf(os.Stderr, "build error: %v\n", err)
 			os.Exit(1)
 		}
 	case "verify":
 		if err := runVerify(os.Args[2:]); err != nil {
-			fmt.Fprintf(os.Stderr, "verify error: %v\n", err)
+			_, _ = fmt.Fprintf(os.Stderr, "verify error: %v\n", err)
 			os.Exit(1)
 		}
 	case "coverage":
 		if err := runCoverage(os.Args[2:]); err != nil {
-			fmt.Fprintf(os.Stderr, "coverage error: %v\n", err)
+			_, _ = fmt.Fprintf(os.Stderr, "coverage error: %v\n", err)
 			os.Exit(1)
 		}
 	default:
@@ -80,7 +80,7 @@ func runBuild(args []string) error {
 		if strings.HasSuffix(rel, "_test.rego") {
 			return nil
 		}
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) //nolint:gosec // G304 operator-supplied path
 		if err != nil {
 			return err
 		}
@@ -92,7 +92,7 @@ func runBuild(args []string) error {
 	}
 
 	if keyFile != "" {
-		keyBytes, err := os.ReadFile(keyFile)
+		keyBytes, err := os.ReadFile(keyFile) //nolint:gosec // G304 operator flag
 		if err != nil {
 			return fmt.Errorf("read private key: %w", err)
 		}
@@ -132,10 +132,12 @@ func runBuild(args []string) error {
 		return fmt.Errorf("close gzip: %w", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(outFile), 0o755); err != nil && filepath.Dir(outFile) != "." {
+	//nolint:gosec // G301 bundle out dir
+	if err := os.MkdirAll(filepath.Dir(outFile), 0o750); err != nil && filepath.Dir(outFile) != "." {
 		return fmt.Errorf("mkdir: %w", err)
 	}
-	if err := os.WriteFile(outFile, buf.Bytes(), 0o644); err != nil {
+	//nolint:gosec // G306 signed bundle
+	if err := os.WriteFile(outFile, buf.Bytes(), 0o600); err != nil {
 		return fmt.Errorf("write out file %s: %w", outFile, err)
 	}
 
@@ -158,12 +160,12 @@ func runVerify(args []string) error {
 	}
 	bundlePath := fs.Arg(0)
 
-	bundleBytes, err := os.ReadFile(bundlePath)
+	bundleBytes, err := os.ReadFile(bundlePath) //nolint:gosec // G304 operator-supplied path
 	if err != nil {
 		return fmt.Errorf("read bundle: %w", err)
 	}
 
-	pubBytes, err := os.ReadFile(pubKeyFile)
+	pubBytes, err := os.ReadFile(pubKeyFile) //nolint:gosec // G304 operator flag
 	if err != nil {
 		return fmt.Errorf("read public key: %w", err)
 	}

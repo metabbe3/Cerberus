@@ -393,11 +393,11 @@ func (p *DockerProxy) resolveKey(r *http.Request, containerID string) string {
 
 func (p *DockerProxy) fetchContainerLabel(ctx context.Context, containerID string) (string, error) {
 	reqURL := fmt.Sprintf("http://docker/containers/%s/json", containerID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil) //nolint:gosec // G704 fixed docker socket over unix tunnel
 	if err != nil {
 		return "", err
 	}
-	resp, err := p.client.Do(req)
+	resp, err := p.client.Do(req) //nolint:gosec // G704 fixed docker socket
 	if err != nil {
 		return "", err
 	}

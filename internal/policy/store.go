@@ -85,7 +85,7 @@ func (s *Store) Current() *Snapshot { return s.ptr.Load() }
 func (s *Store) PolicyDir() string { return s.policyDir }
 
 // Coverage computes the current test coverage across policies.
-func (s *Store) Coverage(ctx context.Context) (*CoverageReport, error) {
+func (s *Store) Coverage(_ context.Context) (*CoverageReport, error) {
 	if s.policyDir == "" {
 		return &CoverageReport{}, nil
 	}

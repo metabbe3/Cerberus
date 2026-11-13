@@ -1,3 +1,4 @@
+// Package ratelimit provides token-bucket per-key rate limiting for decide calls.
 package ratelimit
 
 import (

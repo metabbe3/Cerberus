@@ -18,7 +18,7 @@ import (
 
 func newTestUpstream(t *testing.T, mode string) *httptest.Server {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { //nolint:revive
 		if mode == "block" {
 			// engine says deny — never reached if enforcement works
 			t.Errorf("upstream reached despite deny verdict")
@@ -37,14 +37,14 @@ func newTestUpstream(t *testing.T, mode string) *httptest.Server {
 				`data: {"type":"message_stop"}`,
 			}
 			for _, e := range events {
-				fmt.Fprintln(w, e)
-				fmt.Fprintln(w)
+				_, _ = fmt.Fprintln(w, e)
+				_, _ = fmt.Fprintln(w)
 				fl.Flush()
 			}
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"id":"msg_1","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}`)
+		_, _ = fmt.Fprint(w, `{"id":"msg_1","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}`)
 	}))
 }
 
@@ -90,7 +90,7 @@ func TestRoundtripNonStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
@@ -109,7 +109,7 @@ func TestRoundtripNonStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	var n int
-	db.QueryRow(`SELECT COUNT(*) FROM turns WHERE kind='response'`).Scan(&n)
+	_ = db.QueryRow(`SELECT COUNT(*) FROM turns WHERE kind='response'`).Scan(&n)
 	if n != 1 {
 		t.Fatalf("response turns = %d, want 1", n)
 	}
@@ -117,16 +117,16 @@ func TestRoundtripNonStream(t *testing.T) {
 	// auth token must NEVER be persisted
 	var payload string
 	rows, _ := db.Query(`SELECT payload FROM turns`)
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
-		rows.Scan(&payload)
+		_ = rows.Scan(&payload)
 		if strings.Contains(payload, "sk-secret-do-not-persist-123") {
 			t.Fatal("AUTH TOKEN LEAKED INTO STORE")
 		}
 	}
 	// request turn should carry parsed fields incl. tools + messages
 	var reqPayload string
-	db.QueryRow(`SELECT payload FROM turns WHERE kind='request'`).Scan(&reqPayload)
+	_ = db.QueryRow(`SELECT payload FROM turns WHERE kind='request'`).Scan(&reqPayload)
 	if !strings.Contains(reqPayload, "get_quote") || !strings.Contains(reqPayload, "berapa BBCA") {
 		t.Fatalf("request payload missing fields: %s", clip(reqPayload, 200))
 	}
@@ -146,7 +146,7 @@ func TestSSEReassembly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
 		t.Fatalf("client content-type = %s", ct)
 	}
@@ -168,7 +168,7 @@ func TestSSEReassembly(t *testing.T) {
 		t.Fatal(err)
 	}
 	var payload string
-	db.QueryRow(`SELECT payload FROM turns WHERE kind='sse_assembled'`).Scan(&payload)
+	_ = db.QueryRow(`SELECT payload FROM turns WHERE kind='sse_assembled'`).Scan(&payload)
 	var asm map[string]any
 	if err := json.Unmarshal([]byte(payload), &asm); err != nil {
 		t.Fatalf("assembled payload invalid: %v", err)
@@ -188,9 +188,9 @@ func TestSSEReassembly(t *testing.T) {
 func TestDenyBlocks(t *testing.T) {
 	up := newTestUpstream(t, "block")
 	defer up.Close()
-	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { //nolint:revive
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"decision":"deny","rule_id":"ai.llm.blocked_prompt","reason":"prompt injection pattern"}`)
+		_, _ = fmt.Fprint(w, `{"decision":"deny","rule_id":"ai.llm.blocked_prompt","reason":"prompt injection pattern"}`)
 	}))
 	defer engine.Close()
 	dir := t.TempDir()
@@ -204,14 +204,14 @@ func TestDenyBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 403 {
 		t.Fatalf("status = %d, want 403", resp.StatusCode)
 	}
 	time.Sleep(100 * time.Millisecond)
 	db, _, _ := srv.st.current(time.Now())
 	var n int
-	db.QueryRow(`SELECT COUNT(*) FROM turns WHERE kind='blocked'`).Scan(&n)
+	_ = db.QueryRow(`SELECT COUNT(*) FROM turns WHERE kind='blocked'`).Scan(&n)
 	if n != 1 {
 		t.Fatalf("blocked turn = %d, want 1", n)
 	}
@@ -220,7 +220,7 @@ func TestDenyBlocks(t *testing.T) {
 func TestRetentionPrune(t *testing.T) {
 	dir := t.TempDir()
 	old := filepath.Join(dir, "tap-20200101.db")
-	os.WriteFile(old, []byte("x"), 0644)
+	_ = os.WriteFile(old, []byte("x"), 0644) //nolint:gosec
 	st := newStore(dir, 14)
 	st.prune(time.Now())
 	if _, err := os.Stat(old); !os.IsNotExist(err) {
@@ -245,7 +245,7 @@ func TestConcurrentSaves(t *testing.T) {
 		t.Fatal(err)
 	}
 	var n int
-	db.QueryRow(`SELECT COUNT(*) FROM turns`).Scan(&n)
+	_ = db.QueryRow(`SELECT COUNT(*) FROM turns`).Scan(&n)
 	if n != 20 {
 		t.Fatalf("rows = %d, want 20", n)
 	}
@@ -263,25 +263,25 @@ func TestTapEndpointsRequireAuth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != 401 {
 		t.Fatalf("no-token turns = %d, want 401", resp.StatusCode)
 	}
 	// token salah -> 401
 	resp2, _ := http.Get(ts.URL + "/tap/turns?token=wrong")
-	resp2.Body.Close()
+	_ = resp2.Body.Close()
 	if resp2.StatusCode != 401 {
 		t.Fatalf("wrong-token turns = %d, want 401", resp2.StatusCode)
 	}
 	// token benar -> 200
 	resp3, _ := http.Get(ts.URL + "/tap/turns?token=adm-secret-token")
-	resp3.Body.Close()
+	_ = resp3.Body.Close()
 	if resp3.StatusCode != 200 {
 		t.Fatalf("good-token turns = %d, want 200", resp3.StatusCode)
 	}
 	// healthz bebas
 	resp4, _ := http.Get(ts.URL + "/tap/healthz")
-	resp4.Body.Close()
+	_ = resp4.Body.Close()
 	if resp4.StatusCode != 200 {
 		t.Fatalf("healthz = %d, want 200", resp4.StatusCode)
 	}
@@ -300,7 +300,7 @@ func TestStrictDeniesWhenEngineDown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != 403 {
 		t.Fatalf("strict engine-down = %d, want 403", resp.StatusCode)
 	}
@@ -313,12 +313,13 @@ func TestStrictDeniesWhenEngineDown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp2.Body.Close()
+	_ = resp2.Body.Close()
 	if resp2.StatusCode != 200 {
 		t.Fatalf("non-strict engine-down = %d, want 200", resp2.StatusCode)
 	}
 }
 
+//nolint:gosec // G101: dummy fixture string for masking test
 func TestAtRestMasking(t *testing.T) {
 	in := `{"messages":[{"role":"user","content":"my key sk-AbCdEfGh12345678 and postgres://user:secretpw@db:5432/x plus admin@teknikal.id"}]}`
 	out := maskAtRest(in)
@@ -338,7 +339,7 @@ func TestOversizedBodyForwardsFullyButCapturesCapped(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		gotLen = int64(len(b))
-		w.Write([]byte(`{}`))
+		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer up.Close()
 	srv := newTap(up.URL, "", t.TempDir(), "", false)
@@ -351,7 +352,7 @@ func TestOversizedBodyForwardsFullyButCapturesCapped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if gotLen != int64(len(big)) {
 		t.Fatalf("forwarded %d bytes, want %d (FULL body must reach upstream)", gotLen, len(big))
 	}
@@ -360,7 +361,7 @@ func TestOversizedBodyForwardsFullyButCapturesCapped(t *testing.T) {
 func TestToolUseBlockedMidStream(t *testing.T) {
 	// upstream streams a tool_use block; engine DENIES the completed tool call
 	// → the held events must NEVER reach the client; client gets tap_tool_blocked.
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { //nolint:revive
 		w.Header().Set("Content-Type", "text/event-stream")
 		fl := w.(http.Flusher)
 		events := []string{
@@ -371,8 +372,8 @@ func TestToolUseBlockedMidStream(t *testing.T) {
 			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"you never see me"}}`,
 		}
 		for _, e := range events {
-			fmt.Fprintln(w, e)
-			fmt.Fprintln(w)
+			_, _ = fmt.Fprintln(w, e)
+			_, _ = fmt.Fprintln(w)
 			fl.Flush()
 		}
 	}))
@@ -380,10 +381,10 @@ func TestToolUseBlockedMidStream(t *testing.T) {
 	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.HasSuffix(r.URL.Path, "/decide/tool") {
-			fmt.Fprint(w, `{"decision":"deny","rule_id":"tool.restricted","reason":"run_shell not allowed"}`)
+			_, _ = fmt.Fprint(w, `{"decision":"deny","rule_id":"tool.restricted","reason":"run_shell not allowed"}`)
 			return
 		}
-		fmt.Fprint(w, `{"decision":"allow","rule_id":"llm.allow"}`)
+		_, _ = fmt.Fprint(w, `{"decision":"allow","rule_id":"llm.allow"}`)
 	}))
 	defer engine.Close()
 	srv := newTap(up.URL, engine.URL, t.TempDir(), "", false)
@@ -396,7 +397,7 @@ func TestToolUseBlockedMidStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var buf strings.Builder
 	sc := bufio.NewScanner(resp.Body)
 	for sc.Scan() {
@@ -414,14 +415,14 @@ func TestToolUseBlockedMidStream(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	db, _, _ := srv.st.current(time.Now())
 	var n int
-	db.QueryRow(`SELECT COUNT(*) FROM turns WHERE kind='tool_blocked'`).Scan(&n)
+	_ = db.QueryRow(`SELECT COUNT(*) FROM turns WHERE kind='tool_blocked'`).Scan(&n)
 	if n != 1 {
 		t.Fatalf("tool_blocked turns = %d, want 1", n)
 	}
 }
 
 func TestToolUseAllowedFlowsThrough(t *testing.T) {
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { //nolint:revive
 		w.Header().Set("Content-Type", "text/event-stream")
 		fl := w.(http.Flusher)
 		events := []string{
@@ -430,15 +431,15 @@ func TestToolUseAllowedFlowsThrough(t *testing.T) {
 			`data: {"type":"content_block_stop"}`,
 		}
 		for _, e := range events {
-			fmt.Fprintln(w, e)
-			fmt.Fprintln(w)
+			_, _ = fmt.Fprintln(w, e)
+			_, _ = fmt.Fprintln(w)
 			fl.Flush()
 		}
 	}))
 	defer up.Close()
-	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { //nolint:revive
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"decision":"allow","rule_id":"tool.allow"}`)
+		_, _ = fmt.Fprint(w, `{"decision":"allow","rule_id":"tool.allow"}`)
 	}))
 	defer engine.Close()
 	srv := newTap(up.URL, engine.URL, t.TempDir(), "", false)
@@ -450,7 +451,7 @@ func TestToolUseAllowedFlowsThrough(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var all strings.Builder
 	sc := bufio.NewScanner(resp.Body)
 	for sc.Scan() {
@@ -473,7 +474,7 @@ func Test413Oversized(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != 413 {
 		t.Fatalf("status = %d, want 413", resp.StatusCode)
 	}

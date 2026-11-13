@@ -68,8 +68,8 @@ func SetBundleRevision(rev string) {
 	bundleRevisionGauge.WithLabelValues(rev).Set(1)
 }
 
-// EngineStats returns the current cache hits and misses totals from metrics.
-func EngineStats() (hits uint64, misses uint64) {
+// Stats returns the current cache hits and misses totals from metrics.
+func (e *Engine) Stats() (hits uint64, misses uint64) {
 	var m1 dto.Metric
 	if err := cacheHitsTotal.Write(&m1); err == nil && m1.Counter != nil {
 		hits = uint64(m1.Counter.GetValue())

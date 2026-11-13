@@ -69,7 +69,7 @@ func NewEgressProxy(eng *engine.Engine, cfg EgressConfig) (*EgressProxy, error) 
 	if cfg.DenyLocalIPs != nil {
 		denyLocal = *cfg.DenyLocalIPs
 	}
-	control := func(network, address string, _ syscall.RawConn) error {
+	control := func(_, address string, _ syscall.RawConn) error { //nolint:revive
 		host, _, err := net.SplitHostPort(address)
 		if err != nil {
 			host = address
@@ -375,7 +375,7 @@ func (p *EgressProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Forward plain HTTP
-	outReq, err := http.NewRequestWithContext(r.Context(), r.Method, destURL, r.Body)
+	outReq, err := http.NewRequestWithContext(r.Context(), r.Method, destURL, r.Body) //nolint:gosec // G704 dial guarded by SecureDialer allowlist
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

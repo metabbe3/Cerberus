@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -19,7 +18,6 @@ import (
 
 // blockingOrKilledSink simulates a dead, blocked, or slow audit sink.
 type blockingOrKilledSink struct {
-	mu     sync.Mutex
 	closed bool
 }
 

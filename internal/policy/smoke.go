@@ -155,7 +155,7 @@ func DryRunSmoke(ctx context.Context, snap *Snapshot) error {
 			// A stranger-key deny under bypass_unknown_keys=false is equally
 			// fail-closed: accept config.unknown_key_closed wherever the case
 			// expected a deny from a stage rule.
-			if !(sc.wantDec == "deny" && gotRule == "config.unknown_key_closed") {
+			if sc.wantDec != "deny" || gotRule != "config.unknown_key_closed" {
 				return fmt.Errorf("smoke test failed on '%s': got rule %s, want %s", sc.name, gotRule, sc.wantRuleID)
 			}
 		}

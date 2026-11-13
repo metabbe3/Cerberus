@@ -16,7 +16,7 @@ func TestTimeseriesBuckets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 
 	base := time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)
 	// 4 allows at t+0h, 2 denies at t+1h, 1 allow at t+2h

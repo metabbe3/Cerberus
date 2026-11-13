@@ -25,7 +25,7 @@ func testPG(t *testing.T) *PG {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	t.Cleanup(func() { p.Close() })
+	t.Cleanup(func() { _ = p.Close() })
 	return p
 }
 

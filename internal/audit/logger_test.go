@@ -379,7 +379,7 @@ func TestLogger_MaskingAtRest(t *testing.T) {
 		t.Fatalf("read dir: %v", err)
 	}
 	for _, e := range entries {
-		raw, err := os.ReadFile(filepath.Join(tmpDir, e.Name()))
+		raw, err := os.ReadFile(filepath.Join(tmpDir, e.Name())) //nolint:gosec // G304 test temp dir
 		if err != nil {
 			continue
 		}
@@ -573,7 +573,7 @@ func TestLogger_TopDenies24h(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 
 	now := time.Now()
 
@@ -646,7 +646,7 @@ func TestLogger_Revisions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("audit: Open: %v", err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 
 	// 1. Record revision with secret in data_json -> must be masked
 	dataWithSecret := []byte(`{"agents":{"k1":{"secret":"sk-1234567890abcdef"}}}`)

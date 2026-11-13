@@ -101,7 +101,7 @@ func TestStore_LoadBundleAndReload(t *testing.T) {
 		t.Fatalf("epoch = %d, want 1", store.Current().Epoch)
 	}
 
-	aiRego, err := os.ReadFile(filepath.Join(policyDir, "stages/ai.rego"))
+	aiRego, err := os.ReadFile(filepath.Join(policyDir, "stages/ai.rego")) //nolint:gosec // G304 test fixture
 	if err != nil {
 		t.Fatalf("read ai: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestStore_BundleSigningAndVerification(t *testing.T) {
 	}
 	store.SetVerificationKey(pub)
 
-	aiRego, err := os.ReadFile(filepath.Join(policyDir, "stages/ai.rego"))
+	aiRego, err := os.ReadFile(filepath.Join(policyDir, "stages/ai.rego")) //nolint:gosec // G304 test fixture
 	if err != nil {
 		t.Fatalf("read ai: %v", err)
 	}
@@ -398,7 +398,7 @@ func TestStore_BundleDryRunSmokeFailure(t *testing.T) {
 		}
 	}`)
 
-	aiRego, _ := os.ReadFile(filepath.Join(policyDir, "stages/ai.rego"))
+	aiRego, _ := os.ReadFile(filepath.Join(policyDir, "stages/ai.rego")) //nolint:gosec // G304 test fixture
 	b := createCustomBundle(t, []string{"stages"}, "rev-smoke-fail", brokenData, map[string]string{
 		"policies/stages/ai.rego": string(aiRego),
 	}, nil)
@@ -443,7 +443,7 @@ func TestStore_BundleRollback(t *testing.T) {
 		t.Fatalf("expected ErrNoRollback, got %v", err)
 	}
 
-	aiRego, _ := os.ReadFile(filepath.Join(policyDir, "stages/ai.rego"))
+	aiRego, _ := os.ReadFile(filepath.Join(policyDir, "stages/ai.rego")) //nolint:gosec // G304 test fixture
 
 	// Load Bundle 1
 	b1 := createCustomBundle(t, []string{"stages"}, "rev-1.0", loadTestData(t), map[string]string{
@@ -590,7 +590,7 @@ func TestStore_BundleCoverageDropGate(t *testing.T) {
 		fmt.Fprintf(&untestedRules, "rule_%d if input.val == %d\n", i, i)
 	}
 
-	aiRego, _ := os.ReadFile(filepath.Join(policyDir, "stages/ai.rego"))
+	aiRego, _ := os.ReadFile(filepath.Join(policyDir, "stages/ai.rego")) //nolint:gosec // G304 test fixture
 	bDrop := createCustomBundle(t, []string{"stages"}, "rev-drop-cov", loadTestData(t), map[string]string{
 		"policies/stages/ai.rego":       string(aiRego),
 		"policies/stages/untested.rego": untestedRules.String(),
@@ -620,7 +620,7 @@ func TestStore_BundleCoverageDropGate(t *testing.T) {
 
 func readFile(t *testing.T, path string) string {
 	t.Helper()
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec // G304 test fixture
 	if err != nil {
 		t.Fatalf("readFile %s: %v", path, err)
 	}

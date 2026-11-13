@@ -39,10 +39,11 @@ func ComputeCoverage(policyDir string) (*CoverageReport, error) {
 	}
 
 	cov := cover.New()
-	runner := tester.NewRunner().
-		SetModules(modules).
-		SetStore(store).
-		SetCoverageTracer(cov)
+	runner := tester.NewRunner(). //nolint:staticcheck // SA1019: SetCoverageQueryTracer migration deferred
+					SetModules(modules).
+					SetStore(store).
+					SetCoverageTracer( //nolint:staticcheck // SA1019: SetCoverageQueryTracer migration deferred
+			cov)
 
 	ch, err := runner.RunTests(ctx, nil)
 	if err != nil {

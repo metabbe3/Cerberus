@@ -947,7 +947,7 @@ func TestAdmin_UploadBundle(t *testing.T) {
 
 	// Include stages rego files
 	for _, rel := range []string{"stages/ai.rego", "stages/llm.rego", "stages/tool.rego"} {
-		content, err := os.ReadFile(filepath.Join(h.policies, rel))
+		content, err := os.ReadFile(filepath.Join(h.policies, rel)) //nolint:gosec // G304 test fixture
 		if err != nil {
 			t.Fatalf("read %s: %v", rel, err)
 		}

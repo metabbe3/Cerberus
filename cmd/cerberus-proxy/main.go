@@ -140,17 +140,17 @@ func run() error {
 	if isUnix {
 		network = "unix"
 		bindPath = strings.TrimPrefix(listenAddr, "unix://")
-		_ = os.Remove(bindPath)
+		_ = os.Remove(bindPath) //nolint:gosec // G703 operator-set unix path
 	}
 
-	listener, err := net.Listen(network, bindPath)
+	listener, err := net.Listen(network, bindPath) //nolint:gosec // G703/G704 bindPath is operator-set flag
 	if err != nil {
 		return fmt.Errorf("cerberus-proxy: listen on %s: %w", listenAddr, err)
 	}
 	defer func() {
 		_ = listener.Close()
 		if isUnix {
-			_ = os.Remove(bindPath)
+			_ = os.Remove(bindPath) //nolint:gosec // G703 operator-set unix path
 		}
 	}()
 

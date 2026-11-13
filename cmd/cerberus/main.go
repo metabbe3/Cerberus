@@ -37,7 +37,7 @@ func main() {
 	if len(os.Args) > 2 && os.Args[1] == "--erase" {
 		id, err := strconv.ParseInt(os.Args[2], 10, 64)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "invalid id: %v\n", err)
+			_, _ = fmt.Fprintf(os.Stderr, "invalid id: %v\n", err)
 			os.Exit(1)
 		}
 		dbPath := "cerberus.db"
@@ -46,14 +46,14 @@ func main() {
 		}
 		al, err := audit.Open(context.Background(), dbPath, audit.Options{})
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "open audit db: %v\n", err)
+			_, _ = fmt.Fprintf(os.Stderr, "open audit db: %v\n", err)
 			os.Exit(1)
 		}
 		defer func() { _ = al.Close() }()
 		ok, err := al.Erase(context.Background(), id)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "erase error: %v\n", err)
-			os.Exit(1)
+			_, _ = fmt.Fprintf(os.Stderr, "erase error: %v\n", err)
+			os.Exit(1) //nolint:gocritic // intentional fast-exit; defers are flush-only
 		}
 		if !ok {
 			fmt.Printf("event %d not found\n", id)
@@ -94,7 +94,7 @@ func run() error {
 		if err != nil {
 			slog.Warn("cerberus: pg unavailable, using flat file", "err", err)
 		} else {
-			defer pgStore.Close()
+			defer func() { _ = pgStore.Close() }()
 			if data, lerr := pgStore.LoadData(ctx); lerr == nil {
 				dataJSON, _ := json.Marshal(data)
 				if snap, serr := store.ReplaceData(ctx, dataJSON); serr != nil {

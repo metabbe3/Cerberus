@@ -100,16 +100,16 @@ func openSQLite(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("audit: open %s: %w", path, err)
 	}
 	if path != ":memory:" {
-		_ = os.Chmod(path, 0o640)
+		_ = os.Chmod(path, 0o640) //nolint:gosec // G302 group-readable for audit ship-out
 	}
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil && path != ":memory:" {
 		_ = db.Close()
 		return nil, fmt.Errorf("audit: journal_mode: %w", err)
 	}
 	if path != ":memory:" {
-		_ = os.Chmod(path, 0o640)
-		_ = os.Chmod(path+"-wal", 0o640)
-		_ = os.Chmod(path+"-shm", 0o640)
+		_ = os.Chmod(path, 0o640)        //nolint:gosec // G302 group-readable for audit ship-out
+		_ = os.Chmod(path+"-wal", 0o640) //nolint:gosec // G302
+		_ = os.Chmod(path+"-shm", 0o640) //nolint:gosec // G302
 	}
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
@@ -230,6 +230,7 @@ func insertBatch(ctx context.Context, db *sql.DB, batch []Event) error {
 		if err != nil {
 			args = nil
 		}
+		//nolint:gosec // G115 nanosecond epoch
 		if _, err := stmt.ExecContext(ctx, ev.ID, ev.Time.UnixNano(), ev.Stage, ev.KeyID, ev.Subject,
 			ev.Decision, ev.RuleID, ev.Reason, int64(ev.Epoch),
 			boolInt(ev.Cached), ev.LatencyUS,
@@ -534,7 +535,7 @@ func scanEvent(scan func(...any) error) (Event, error) {
 		return Event{}, err
 	}
 	ev.Time = time.Unix(0, ts.Int64)
-	ev.Epoch = uint64(epoch.Int64)
+	ev.Epoch = uint64(epoch.Int64) //nolint:gosec // G115 epoch counter
 	ev.Cached = cached.Int64 == 1
 	ev.LatencyUS = latency.Int64
 	if args.Valid && args.String != "" {
@@ -577,7 +578,7 @@ func queryEvents(ctx context.Context, db *sql.DB, f Filter) ([]Event, error) {
 	qargs = append(qargs, limit)
 
 	rows, err := db.QueryContext(ctx,
-		"SELECT "+eventCols+" FROM events WHERE "+strings.Join(where, " AND ")+
+		"SELECT "+eventCols+" FROM events WHERE "+strings.Join(where, " AND ")+ //nolint:gosec // G202 whitelisted filter cols
 			" ORDER BY time DESC, id DESC LIMIT ?", qargs...)
 	if err != nil {
 		return nil, fmt.Errorf("audit: query: %w", err)
@@ -749,15 +750,15 @@ func (m *dbManager) queryAggregate(ctx context.Context, since, until time.Time, 
 		if db == nil {
 			return nil
 		}
-		q := "SELECT ((time - ?) / ?) * ? AS b, " +
+		q := "SELECT ((time - ?) / ?) * ? AS b, " + //nolint:gosec // G202 whitelisted bucket cols
 			"SUM(CASE WHEN decision = 'allow' THEN 1 ELSE 0 END), COUNT(*) " +
-			"FROM events WHERE " + strings.Join(where, " AND ") +
+			"FROM events WHERE " + strings.Join(where, " AND ") + //nolint:gosec // G202 whitelisted filter cols
 			" GROUP BY b ORDER BY b"
 		rows, err := db.QueryContext(ctx, q, append([]any{since.UnixNano(), widthNS, widthNS}, qargs...)...)
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 			var b, allows, total int64
 			if err := rows.Scan(&b, &allows, &total); err != nil {
@@ -791,10 +792,10 @@ func (m *dbManager) queryAggregate(ctx context.Context, since, until time.Time, 
 				continue // unreadable day file: skip, don't kill the aggregate
 			}
 			if err := runOne(db); err != nil {
-				db.Close()
+				_ = db.Close()
 				return nil, fmt.Errorf("audit: timeseries: %w", err)
 			}
-			db.Close()
+			_ = db.Close()
 		}
 	}
 	// merge buckets across daily files (same bucket id can appear in 2 files)

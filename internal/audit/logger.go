@@ -38,7 +38,7 @@ var AuditShipDroppedTotal = promauto.NewCounter(prometheus.CounterOpts{
 var (
 	activeLogger atomic.Pointer[Logger]
 
-	auditQueueDepth = promauto.NewGaugeFunc(prometheus.GaugeOpts{
+	auditQueueDepth = promauto.NewGaugeFunc(prometheus.GaugeOpts{ //nolint:unused // registered Prometheus metric
 		Name: "cerberus_audit_queue_depth",
 		Help: "Current number of pending events waiting in the audit channel buffer.",
 	}, func() float64 {
@@ -110,7 +110,7 @@ func Open(ctx context.Context, dbPath string, opts Options) (*Logger, error) {
 		return nil, err
 	}
 	if dbPath != ":memory:" {
-		_ = os.Chmod(dbPath, 0o640)
+		_ = os.Chmod(dbPath, 0o640) //nolint:gosec // G302 group-readable for audit ship-out
 	}
 
 	maxID, err := mgr.maxID(context.Background())

@@ -1,3 +1,4 @@
+// Command cerberus-redteam runs the deterministic gateway verification suite.
 package main
 
 import (
@@ -66,7 +67,7 @@ func main() {
 		{"decide_bypass_key_spoof", func() AttackResult { return testDecideKeySpoof(*engineURL, tok) }},
 		{"rate_limit_bypass_burst", func() AttackResult { return testRateLimitBurst(*engineURL) }},
 		{"kill_switch_honor", func() AttackResult { return testKillSwitch(*engineURL, tok) }},
-		{"audit_tamper_permissions", func() AttackResult { return testAuditTamper() }},
+		{"audit_tamper_permissions", testAuditTamper},
 		{"auth_missing_admin_endpoints", func() AttackResult { return testAuthMissing(*engineURL) }},
 		{"fuzz_regress_half_requests", func() AttackResult { return testFuzzHalfRequests(*engineURL, *egressAddr, *dockerProxy) }},
 		{"quality_malformed_request_rejection", func() AttackResult { return testQualityMalformedRequest(*egressAddr) }},
@@ -253,7 +254,7 @@ func testEgressNoProxyStripping(egressAddr string) AttackResult {
 }
 
 // 5. Decide bypass via key spoof: POST /v1/decide with k-owner without admin token -> 401
-func testDecideKeySpoof(engineURL, adminToken string) AttackResult {
+func testDecideKeySpoof(engineURL, _ string) AttackResult { //nolint:revive
 	client := &http.Client{Timeout: 3 * time.Second}
 	body := `{"stage":"tool","key_id":"k-owner","tool_call":"bash","args":{"cmd":"whoami"}}`
 
@@ -320,9 +321,10 @@ func testRateLimitBurst(engineURL string) AttackResult {
 				return
 			}
 			defer func() { _ = resp.Body.Close() }()
-			if resp.StatusCode == http.StatusOK {
+			switch resp.StatusCode {
+			case http.StatusOK:
 				count200.Add(1)
-			} else if resp.StatusCode == http.StatusTooManyRequests {
+			case http.StatusTooManyRequests:
 				count429.Add(1)
 			}
 		}()
@@ -591,7 +593,7 @@ func testAuthMissing(engineURL string) AttackResult {
 }
 
 // 10. Fuzz regress: half-requests: CONNECT without host, request line 2MB, header count 500 -> 4xx/431, NO crash
-func testFuzzHalfRequests(engineURL, egressAddr, dockerProxy string) AttackResult {
+func testFuzzHalfRequests(engineURL, egressAddr, _ string) AttackResult {
 	// 10A: CONNECT without host on egress proxy
 	conn1, err := net.DialTimeout("tcp", egressAddr, 2*time.Second)
 	if err == nil {
@@ -619,7 +621,7 @@ func testFuzzHalfRequests(engineURL, egressAddr, dockerProxy string) AttackResul
 		var buf bytes.Buffer
 		buf.WriteString("GET /healthz HTTP/1.1\r\nHost: localhost\r\n")
 		for i := 0; i < 500; i++ {
-			buf.WriteString(fmt.Sprintf("X-Fuzz-Header-%d: %s\r\n", i, strings.Repeat("x", 20)))
+			_, _ = fmt.Fprintf(&buf, "X-Fuzz-Header-%d: %s\r\n", i, strings.Repeat("x", 20))
 		}
 		buf.WriteString("\r\n")
 		_, _ = conn3.Write(buf.Bytes())

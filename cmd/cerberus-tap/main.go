@@ -30,7 +30,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const maxBody = 2 << 20 // 2MB capture cap per body
+const maxBody = 2 << 20 // 2MB capture limit per body
 
 // at-rest masking: applied to every persisted payload. Secrets inside
 // prompts/thinking/tool args never reach the tap DB in cleartext.
@@ -88,8 +88,8 @@ func (s *store) current(now time.Time) (*sql.DB, *sql.Stmt, error) {
 		return s.db, s.ins, nil
 	}
 	if s.db != nil {
-		s.ins.Close()
-		s.db.Close()
+		_ = s.ins.Close()
+		_ = s.db.Close()
 	}
 	path := filepath.Join(s.dir, "tap-"+day+".db")
 	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)")
@@ -108,12 +108,12 @@ func (s *store) current(now time.Time) (*sql.DB, *sql.Stmt, error) {
 	);
 	CREATE INDEX IF NOT EXISTS turns_ts ON turns(ts);
 	CREATE INDEX IF NOT EXISTS turns_key ON turns(key_id, ts);`); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, nil, err
 	}
 	ins, err := db.Prepare(`INSERT INTO turns (ts, key_id, model, kind, payload, latency_ms, status) VALUES (?,?,?,?,?,?,?)`)
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, nil, err
 	}
 	s.db, s.ins, s.day = db, ins, day
@@ -139,9 +139,9 @@ func (s *store) prune(now time.Time) {
 		}
 		day := strings.TrimSuffix(strings.TrimPrefix(name, "tap-"), ".db")
 		if len(day) == 8 && day < cutoff {
-			os.Remove(filepath.Join(s.dir, name))
-			os.Remove(filepath.Join(s.dir, name+"-wal"))
-			os.Remove(filepath.Join(s.dir, name+"-shm"))
+			_ = os.Remove(filepath.Join(s.dir, name))
+			_ = os.Remove(filepath.Join(s.dir, name+"-wal"))
+			_ = os.Remove(filepath.Join(s.dir, name+"-shm"))
 		}
 	}
 }
@@ -166,10 +166,10 @@ func (s *store) close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ins != nil {
-		s.ins.Close()
+		_ = s.ins.Close()
 	}
 	if s.db != nil {
-		s.db.Close()
+		_ = s.db.Close()
 	}
 }
 
@@ -211,7 +211,7 @@ func askEngine(engineURL, token, keyID string, body []byte, strict bool) (decide
 		log.Printf("[tap] engine decide unreachable (allowing): %v", err)
 		return decideResp{Decision: "allow", RuleID: "tap.engine_unreachable"}, true
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var dr decideResp
 	if err := json.NewDecoder(resp.Body).Decode(&dr); err != nil || dr.Decision == "" {
 		if strict {
@@ -227,7 +227,7 @@ func modelOf(body []byte) string {
 	var p struct {
 		Model string `json:"model"`
 	}
-	json.Unmarshal(body, &p)
+	_ = json.Unmarshal(body, &p)
 	return p.Model
 }
 
@@ -309,23 +309,22 @@ type server struct {
 }
 
 func (s *server) handleTap(w http.ResponseWriter, r *http.Request) {
-	switch r.URL.Path {
-	case "/tap/healthz":
-		w.Write([]byte("ok"))
+	if r.URL.Path == "/tap/healthz" {
+		_, _ = w.Write([]byte("ok"))
 		return
 	}
 	// Inspection endpoints carry other agents' prompts/thinking — admin-only.
 	if s.adminTok != "" {
 		got := r.Header.Get("Authorization")
 		if got != "Bearer "+s.adminTok && r.URL.Query().Get("token") != s.adminTok {
-			http.Error(w, `{"error":"unauthorized"}`, 401)
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
 	}
 	switch r.URL.Path {
 	case "/tap/turns":
 		limit := 50
-		fmt.Sscanf(r.URL.Query().Get("limit"), "%d", &limit)
+		_, _ = fmt.Sscanf(r.URL.Query().Get("limit"), "%d", &limit)
 		if limit <= 0 || limit > 500 {
 			limit = 50
 		}
@@ -340,7 +339,7 @@ func (s *server) handleTap(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		type row struct {
 			Ts        string          `json:"ts"`
 			KeyID     string          `json:"key_id"`
@@ -360,7 +359,7 @@ func (s *server) handleTap(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(out)
+		_ = json.NewEncoder(w).Encode(out)
 	case "/tap/stats":
 		db, _, err := s.st.current(time.Now())
 		if err != nil {
@@ -372,7 +371,7 @@ func (s *server) handleTap(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		type stat struct {
 			KeyID string `json:"key_id"`
 			Model string `json:"model"`
@@ -387,14 +386,14 @@ func (s *server) handleTap(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(out)
+		_ = json.NewEncoder(w).Encode(out)
 	case "/tap/kill":
 		n := 0
 		if s.kills != nil {
 			n = s.kills.killAll()
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"killed_streams":%d}`, n)
+		_, _ = fmt.Fprintf(w, `{"killed_streams":%d}`, n)
 	default:
 		http.NotFound(w, r)
 	}
@@ -408,12 +407,12 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
 	// Read FULL body — policy MUST see exactly what we forward. Bodies larger
-	// than the hard cap (32MB) are rejected with 413: no oversized body is ever
+	// than the hard limit (32MB) are rejected with 413: no oversized body is ever
 	// inspected partially and forwarded fully (closes truncation smuggling).
 	const hardCap = 32 << 20
 	limited := io.LimitReader(r.Body, hardCap+1)
 	raw, err := io.ReadAll(limited)
-	r.Body.Close()
+	_ = r.Body.Close()
 	if err != nil {
 		http.Error(w, "read body: "+err.Error(), 400)
 		return
@@ -421,7 +420,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if len(raw) > hardCap {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusRequestEntityTooLarge)
-		w.Write([]byte(`{"error":{"type":"tap_too_large","message":"request exceeds 32MB inspection limit"}}`))
+		_, _ = w.Write([]byte(`{"error":{"type":"tap_too_large","message":"request exceeds 32MB inspection limit"}}`))
 		return
 	}
 
@@ -436,7 +435,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !allowed {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
-		w.Write([]byte(`{"error":{"type":"tap_blocked","message":"blocked by cerberus policy"}}`))
+		_, _ = w.Write([]byte(`{"error":{"type":"tap_blocked","message":"blocked by cerberus policy"}}`))
 		s.st.save(turnRow{KeyID: keyID, Model: modelOf(raw), Kind: "blocked", Payload: mustJSON(map[string]any{
 			"verdict": verdict, "path": r.URL.Path,
 		})}, time.Since(start).Milliseconds(), 403)
@@ -455,15 +454,15 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.st.save(turnRow{KeyID: keyID, Model: modelOf(raw), Kind: "request", Payload: sanitizedBody(capture, truncated)}, 0, 0)
 
 	// Forward upstream — the FULL body, byte-identical to what was inspected.
-	fwd, _ := http.NewRequestWithContext(r.Context(), r.Method, s.upstream+r.URL.Path, bytes.NewReader(raw))
+	fwd, _ := http.NewRequestWithContext(r.Context(), r.Method, s.upstream+r.URL.Path, bytes.NewReader(raw)) //nolint:gosec // G704 upstream set by operator env
 	fwd.Header = r.Header.Clone()
 	fwd.Header.Del("X-Tap-Key")
-	resp, err := s.client.Do(fwd)
+	resp, err := s.client.Do(fwd) //nolint:gosec // G704 operator-configured upstream
 	if err != nil {
-		http.Error(w, "upstream: "+err.Error(), 502)
+		http.Error(w, "upstream: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	isSSE := strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")
 	if isSSE {
@@ -480,7 +479,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	w.Write(respBody)
+	_, _ = w.Write(respBody)
 
 	s.st.save(turnRow{KeyID: keyID, Model: modelOf(raw), Kind: "response", Payload: respBody}, lat, resp.StatusCode)
 }
@@ -521,8 +520,8 @@ func (s *server) proxySSE(w http.ResponseWriter, resp *http.Response, keyID, mod
 
 	flushHeld := func() {
 		for _, hl := range heldLines {
-			w.Write(hl)
-			w.Write([]byte("\n"))
+			_, _ = w.Write(hl)
+			_, _ = w.Write([]byte("\n"))
 		}
 		heldLines = nil
 	}
@@ -558,11 +557,10 @@ func (s *server) proxySSE(w http.ResponseWriter, resp *http.Response, keyID, mod
 					flushHeld()
 					inToolBlock = false
 				} else {
-					w.Write([]byte("data: {\"type\":\"error\",\"error\":{\"type\":\"tap_tool_blocked\",\"message\":\"tool_use blocked by cerberus policy: " + verdict.Reason + "\"}}\n\n"))
+					_, _ = w.Write([]byte("data: {\"type\":\"error\",\"error\":{\"type\":\"tap_tool_blocked\",\"message\":\"tool_use blocked by cerberus policy: " + verdict.Reason + "\"}}\n\n"))
 					if flusher != nil {
 						flusher.Flush()
 					}
-					aborted = true
 					s.st.save(turnRow{KeyID: keyID, Model: model, Kind: "tool_blocked", Payload: mustJSON(map[string]any{
 						"tool": toolName, "verdict": verdict,
 					})}, time.Since(start).Milliseconds(), 403)
@@ -583,13 +581,13 @@ func (s *server) proxySSE(w http.ResponseWriter, resp *http.Response, keyID, mod
 			continue
 		}
 		if len(lineCopy) > 0 {
-			w.Write(lineCopy)
-			w.Write([]byte("\n"))
+			_, _ = w.Write(lineCopy)
+			_, _ = w.Write([]byte("\n"))
 			if flusher != nil {
 				flusher.Flush()
 			}
 		} else {
-			w.Write([]byte("\n"))
+			_, _ = w.Write([]byte("\n"))
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -675,7 +673,7 @@ func (s *server) askToolEngine(keyID, model, tool, inputJSON string) (decideResp
 		}
 		return decideResp{Decision: "allow", RuleID: "tap.tool_engine_unreachable"}, true
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var dr decideResp
 	if err := json.NewDecoder(resp.Body).Decode(&dr); err != nil || dr.Decision == "" {
 		if s.strict {
@@ -731,11 +729,6 @@ func (k *killRegistry) killAll() int {
 
 // killCtxFromCancel wraps the registry cancel into a context whose Done fires
 // when EITHER killAll() or stream completion calls cancel().
-type killCtxWatcher struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-}
-
 func killCtxFromCancel(cancel context.CancelFunc) context.Context {
 	ctx, c := context.WithCancel(context.Background())
 	go func() {
@@ -791,13 +784,13 @@ func parseSSE(line []byte, thinking, text *strings.Builder, toolName *string, to
 // sanitizedBody returns a persisted copy of the request WITHOUT auth headers
 // (they were never copied) and with a truncation marker if needed.
 func sanitizedBody(body []byte, truncated bool) json.RawMessage {
-	var cap int = 2000
-	if len(body) < cap {
-		cap = len(body)
+	limit := 2000
+	if len(body) < limit {
+		limit = len(body)
 	}
 	var p map[string]any
 	if json.Unmarshal(body, &p) != nil {
-		return mustJSON(map[string]any{"raw_prefix": string(body[:cap]), "truncated": truncated})
+		return mustJSON(map[string]any{"raw_prefix": string(body[:limit]), "truncated": truncated})
 	}
 	if truncated {
 		p["_truncated"] = true
@@ -842,7 +835,7 @@ func main() {
 		st:        st,
 	}
 
-	httpSrv := &http.Server{Addr: *listen, Handler: srv}
+	httpSrv := &http.Server{Addr: *listen, Handler: srv, ReadHeaderTimeout: 10 * time.Second} //nolint:gosec // G112
 	go func() {
 		log.Printf("[tap] listening on %s -> %s (engine: %s)", *listen, *upstream, orDefault(*engineURL, "off"))
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -855,7 +848,7 @@ func main() {
 	<-stop
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	httpSrv.Shutdown(ctx)
+	_ = httpSrv.Shutdown(ctx)
 	st.close()
 }
 

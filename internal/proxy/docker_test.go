@@ -103,19 +103,19 @@ func newFakeDockerDaemon(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("POST /v1.41/containers/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /v1.41/containers/{id}/stop", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"stopped"}`))
 	})
-	mux.HandleFunc("DELETE /v1.41/containers/{id}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("DELETE /v1.41/containers/{id}", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"removed"}`))
 	})
-	mux.HandleFunc("POST /v1.41/containers/create", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /v1.41/containers/create", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"Id":"c123456","Warnings":[]}`))
 	})
-	mux.HandleFunc("POST /v1.41/containers/{id}/exec", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /v1.41/containers/{id}/exec", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"Id":"exec123"}`))
 	})

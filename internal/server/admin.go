@@ -611,7 +611,7 @@ func (s *Server) uploadBundle(w http.ResponseWriter, r *http.Request) {
 }
 
 // getBundle handles GET /v1/admin/bundle for exporting the active bundle.tar.gz.
-func (s *Server) getBundle(w http.ResponseWriter, r *http.Request) {
+func (s *Server) getBundle(w http.ResponseWriter, _ *http.Request) {
 	if s.deps.Store == nil {
 		writeErr(w, http.StatusServiceUnavailable, "store unavailable")
 		return
@@ -729,7 +729,7 @@ type listPoliciesResponse struct {
 }
 
 // listPolicies handles GET /v1/policies returning list of policy modules + revision + hash.
-func (s *Server) listPolicies(w http.ResponseWriter, r *http.Request) {
+func (s *Server) listPolicies(w http.ResponseWriter, _ *http.Request) {
 	if s.deps.Store == nil || s.deps.Store.Current() == nil {
 		writeErr(w, http.StatusServiceUnavailable, "store unavailable")
 		return
@@ -750,7 +750,7 @@ func (s *Server) listPolicies(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 		rel = filepath.ToSlash(rel)
-		content, err := os.ReadFile(path)
+		content, err := os.ReadFile(path) //nolint:gosec // G304 bundle member, sanitized
 		if err != nil {
 			return nil
 		}
@@ -1060,13 +1060,14 @@ func (s *Server) replayAudit(w http.ResponseWriter, r *http.Request) {
 		} else {
 			resp.DiffCount++
 			var shift string
-			if ev.Decision == "allow" && dec.Decision == "deny" {
+			switch {
+			case ev.Decision == "allow" && dec.Decision == "deny":
 				shift = "stricter"
 				resp.StricterCount++
-			} else if ev.Decision == "deny" && dec.Decision == "allow" {
+			case ev.Decision == "deny" && dec.Decision == "allow":
 				shift = "looser"
 				resp.LooserCount++
-			} else {
+			default:
 				shift = "rule_changed"
 				resp.RuleChangedCount++
 			}

@@ -28,7 +28,8 @@ func TestCerberusBundle_BuildAndVerify(t *testing.T) {
 	pubBytes, _ := x509.MarshalPKIXPublicKey(pub)
 	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubBytes})
 	pubFile := filepath.Join(tmpDir, "pub.pem")
-	if err := os.WriteFile(pubFile, pubPEM, 0o644); err != nil {
+	//nolint:gosec // G306 test
+	if err := os.WriteFile(pubFile, pubPEM, 0o600); err != nil {
 		t.Fatalf("write pub.pem: %v", err)
 	}
 
@@ -70,7 +71,8 @@ func TestCerberusBundle_BuildAndVerify(t *testing.T) {
 	wrongPubBytes, _ := x509.MarshalPKIXPublicKey(wrongPub)
 	wrongPubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: wrongPubBytes})
 	wrongPubFile := filepath.Join(tmpDir, "wrong_pub.pem")
-	if err := os.WriteFile(wrongPubFile, wrongPubPEM, 0o644); err != nil {
+	//nolint:gosec // G306 test
+	if err := os.WriteFile(wrongPubFile, wrongPubPEM, 0o600); err != nil {
 		t.Fatalf("write wrong_pub.pem: %v", err)
 	}
 

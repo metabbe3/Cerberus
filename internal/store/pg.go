@@ -31,7 +31,7 @@ func Open(ctx context.Context, dsn string) (*PG, error) {
 	db.SetMaxOpenConns(4)
 	db.SetConnMaxIdleTime(2 * time.Minute)
 	if err := db.PingContext(ctx); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("store: ping pg: %w", err)
 	}
 	return &PG{db: db, log: slog.Default().With("component", "pg_store")}, nil
@@ -81,7 +81,7 @@ func (p *PG) loadData(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("store: load agents: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var key, pol string
 		if err := rows.Scan(&key, &pol); err != nil {
@@ -104,7 +104,7 @@ func (p *PG) loadData(ctx context.Context) (map[string]any, error) {
 	teams := map[string]any{}
 	trows, err := p.db.QueryContext(ctx, `SELECT team_id, policy FROM teams`)
 	if err == nil {
-		defer trows.Close()
+		defer func() { _ = trows.Close() }()
 		for trows.Next() {
 			var id, pol string
 			if trows.Scan(&id, &pol) == nil {
@@ -120,7 +120,7 @@ func (p *PG) loadData(ctx context.Context) (map[string]any, error) {
 	patterns := []string{}
 	prows, err := p.db.QueryContext(ctx, `SELECT pattern FROM blocked_patterns ORDER BY created_at`)
 	if err == nil {
-		defer prows.Close()
+		defer func() { _ = prows.Close() }()
 		for prows.Next() {
 			var pat string
 			if prows.Scan(&pat) == nil {
@@ -133,7 +133,7 @@ func (p *PG) loadData(ctx context.Context) (map[string]any, error) {
 	domains := map[string]any{}
 	drows, err := p.db.QueryContext(ctx, `SELECT domain, policy FROM domains`)
 	if err == nil {
-		defer drows.Close()
+		defer func() { _ = drows.Close() }()
 		for drows.Next() {
 			var id, pol string
 			if drows.Scan(&id, &pol) == nil {
@@ -183,7 +183,7 @@ func (p *PG) saveData(ctx context.Context, data map[string]any) error {
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	cfg, _ := json.Marshal(data["config"])
 	if _, err := tx.ExecContext(ctx, `
@@ -292,7 +292,7 @@ func (p *PG) ListTemplates(ctx context.Context) ([]map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("store: list templates: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []map[string]any
 	for rows.Next() {
 		var id, name, desc, stage, pol string

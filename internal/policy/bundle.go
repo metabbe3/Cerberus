@@ -75,7 +75,7 @@ func ReadBundle(r io.Reader) (*Bundle, error) {
 		name = strings.TrimPrefix(name, "./")
 
 		var buf bytes.Buffer
-		if _, err := io.Copy(&buf, tr); err != nil {
+		if _, err := io.Copy(&buf, tr); err != nil { //nolint:gosec // G110 signed bundle, size-capped
 			return nil, fmt.Errorf("bundle: read entry %s: %w", name, err)
 		}
 		content := buf.Bytes()
@@ -116,9 +116,7 @@ func ReadBundle(r io.Reader) (*Bundle, error) {
 	// Also verify that no rego file attempts to overwrite local core modules
 	for name := range b.RegoFiles {
 		rel := filepath.Clean(name)
-		if strings.HasPrefix(rel, "policies/") {
-			rel = strings.TrimPrefix(rel, "policies/")
-		}
+		rel = strings.TrimPrefix(rel, "policies/")
 		if strings.HasPrefix(rel, "gateway/") || strings.HasPrefix(rel, "shield/") || rel == "gateway.rego" || rel == "shield.rego" {
 			slog.Warn("bundle refused: rego file overlaps with local core", "file", name)
 			return nil, fmt.Errorf("bundle: %w: file %s overwrites local core module (gateway/shield)", ErrData, name)
@@ -281,11 +279,11 @@ func copyDir(src, dst string) error {
 		if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
 			return err
 		}
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) //nolint:gosec // G304 operator-supplied path
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(destPath, data, 0o600)
+		return os.WriteFile(destPath, data, 0o600) //nolint:gosec // G703 sanitized member path
 	})
 }
 
@@ -337,9 +335,7 @@ func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, err
 	// Unpack bundle's rego files into tmpDir
 	for name, content := range b.RegoFiles {
 		rel := filepath.Clean(name)
-		if strings.HasPrefix(rel, "policies/") {
-			rel = strings.TrimPrefix(rel, "policies/")
-		}
+		rel = strings.TrimPrefix(rel, "policies/")
 		dest := filepath.Join(tmpDir, rel)
 		if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
 			return nil, fmt.Errorf("bundle: mkdir: %w", err)
@@ -386,9 +382,7 @@ func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, err
 	if s.policyDir != "" {
 		for name, content := range b.RegoFiles {
 			rel := filepath.Clean(name)
-			if strings.HasPrefix(rel, "policies/") {
-				rel = strings.TrimPrefix(rel, "policies/")
-			}
+			rel = strings.TrimPrefix(rel, "policies/")
 			dest := filepath.Join(s.policyDir, rel)
 			if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
 				return nil, fmt.Errorf("bundle: install mkdir: %w", err)
@@ -419,7 +413,7 @@ func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, err
 
 // LoadBundleFile reads a bundle.tar.gz from path and calls LoadBundle.
 func (s *Store) LoadBundleFile(ctx context.Context, path string) (*Snapshot, error) {
-	raw, err := os.ReadFile(path) // #nosec G304 -- operator configured path
+	raw, err := os.ReadFile(path) //nolint:gosec // G304 operator-supplied path // #nosec G304 -- operator configured path
 	if err != nil {
 		return nil, fmt.Errorf("bundle: read file %s: %w", path, err)
 	}
@@ -455,9 +449,7 @@ func (s *Store) Rollback(ctx context.Context) (*Snapshot, error) {
 		}
 		for name, content := range b.RegoFiles {
 			rel := filepath.Clean(name)
-			if strings.HasPrefix(rel, "policies/") {
-				rel = strings.TrimPrefix(rel, "policies/")
-			}
+			rel = strings.TrimPrefix(rel, "policies/")
 			dest := filepath.Join(tmpDir, rel)
 			_ = os.MkdirAll(filepath.Dir(dest), 0o750)
 			_ = os.WriteFile(dest, content, 0o600)
@@ -472,9 +464,7 @@ func (s *Store) Rollback(ctx context.Context) (*Snapshot, error) {
 		if s.policyDir != "" {
 			for name, content := range b.RegoFiles {
 				rel := filepath.Clean(name)
-				if strings.HasPrefix(rel, "policies/") {
-					rel = strings.TrimPrefix(rel, "policies/")
-				}
+				rel = strings.TrimPrefix(rel, "policies/")
 				dest := filepath.Join(s.policyDir, rel)
 				_ = os.MkdirAll(filepath.Dir(dest), 0o750)
 				_ = writeAtomic(dest, content)
