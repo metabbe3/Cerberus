@@ -33,6 +33,7 @@ func newTestUpstream(t *testing.T, mode string) *httptest.Server {
 				`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Rp9.800 (+1,2%)."}}`,
 				`data: {"type":"content_block_start","content_block":{"type":"tool_use","name":"get_quote","input":{}}}`,
 				`data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"ticker\":\"BBCA\"}"}}`,
+				`data: {"type":"content_block_stop"}`,
 				`data: {"type":"message_stop"}`,
 			}
 			for _, e := range events {
@@ -157,8 +158,8 @@ func TestSSEReassembly(t *testing.T) {
 			got = append(got, sc.Text())
 		}
 	}
-	if len(got) != 7 {
-		t.Fatalf("client events = %d, want 7", len(got))
+	if len(got) != 8 {
+		t.Fatalf("client events = %d, want 8", len(got))
 	}
 
 	time.Sleep(100 * time.Millisecond)
@@ -353,6 +354,128 @@ func TestOversizedBodyForwardsFullyButCapturesCapped(t *testing.T) {
 	resp.Body.Close()
 	if gotLen != int64(len(big)) {
 		t.Fatalf("forwarded %d bytes, want %d (FULL body must reach upstream)", gotLen, len(big))
+	}
+}
+
+func TestToolUseBlockedMidStream(t *testing.T) {
+	// upstream streams a tool_use block; engine DENIES the completed tool call
+	// → the held events must NEVER reach the client; client gets tap_tool_blocked.
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl := w.(http.Flusher)
+		events := []string{
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"thinking aloud "}}`,
+			`data: {"type":"content_block_start","content_block":{"type":"tool_use","name":"run_shell","input":{}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"cmd\":\"rm -rf /\"}"}}`,
+			`data: {"type":"content_block_stop"}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"you never see me"}}`,
+		}
+		for _, e := range events {
+			fmt.Fprintln(w, e)
+			fmt.Fprintln(w)
+			fl.Flush()
+		}
+	}))
+	defer up.Close()
+	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/decide/tool") {
+			fmt.Fprint(w, `{"decision":"deny","rule_id":"tool.restricted","reason":"run_shell not allowed"}`)
+			return
+		}
+		fmt.Fprint(w, `{"decision":"allow","rule_id":"llm.allow"}`)
+	}))
+	defer engine.Close()
+	srv := newTap(up.URL, engine.URL, t.TempDir(), "", false)
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	req, _ := http.NewRequest("POST", ts.URL+"/v1/messages", strings.NewReader(`{"model":"m","stream":true,"messages":[]}`))
+	req.Header.Set("X-Tap-Key", "t")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var buf strings.Builder
+	sc := bufio.NewScanner(resp.Body)
+	for sc.Scan() {
+		buf.WriteString(sc.Text())
+		buf.WriteString("\n")
+	}
+	all := buf.String()
+	if strings.Contains(all, "rm -rf") || strings.Contains(all, "content_block_start") || strings.Contains(all, "input_json_delta") {
+		t.Fatalf("tool_use block leaked to client:\n%s", all)
+	}
+	if !strings.Contains(all, "tap_tool_blocked") {
+		t.Fatalf("expected tap_tool_blocked error event:\n%s", all)
+	}
+	// blocked turn recorded
+	time.Sleep(100 * time.Millisecond)
+	db, _, _ := srv.st.current(time.Now())
+	var n int
+	db.QueryRow(`SELECT COUNT(*) FROM turns WHERE kind='tool_blocked'`).Scan(&n)
+	if n != 1 {
+		t.Fatalf("tool_blocked turns = %d, want 1", n)
+	}
+}
+
+func TestToolUseAllowedFlowsThrough(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl := w.(http.Flusher)
+		events := []string{
+			`data: {"type":"content_block_start","content_block":{"type":"tool_use","name":"get_quote","input":{}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"t\":\"BBCA\"}"}}`,
+			`data: {"type":"content_block_stop"}`,
+		}
+		for _, e := range events {
+			fmt.Fprintln(w, e)
+			fmt.Fprintln(w)
+			fl.Flush()
+		}
+	}))
+	defer up.Close()
+	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"decision":"allow","rule_id":"tool.allow"}`)
+	}))
+	defer engine.Close()
+	srv := newTap(up.URL, engine.URL, t.TempDir(), "", false)
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	req, _ := http.NewRequest("POST", ts.URL+"/v1/messages", strings.NewReader(`{"model":"m","stream":true,"messages":[]}`))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var all strings.Builder
+	sc := bufio.NewScanner(resp.Body)
+	for sc.Scan() {
+		all.WriteString(sc.Text())
+	}
+	if !strings.Contains(all.String(), "get_quote") {
+		t.Fatal("allowed tool_use must reach the client")
+	}
+}
+
+func Test413Oversized(t *testing.T) {
+	up := newTestUpstream(t, "json")
+	defer up.Close()
+	srv := newTap(up.URL, "", t.TempDir(), "", false)
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+	// 33MB > hard cap 32MB → 413
+	big := strings.Repeat("x", (32<<20)+100_000)
+	resp, err := http.Post(ts.URL+"/v1/messages", "application/json", strings.NewReader(big))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 413 {
+		t.Fatalf("status = %d, want 413", resp.StatusCode)
 	}
 }
 

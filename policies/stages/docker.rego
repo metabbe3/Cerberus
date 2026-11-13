@@ -45,6 +45,12 @@ docker_decision := {
 	host_namespace
 } else := {
 	"decision": "deny",
+	"rule_id": "docker.write_not_allowlisted",
+	"reason": sprintf("mutating docker action %q is not allowlisted for this key", [action]),
+} if {
+	docker_write_action
+} else := {
+	"decision": "deny",
 	"rule_id": "docker.mount_forbidden",
 	"reason": "mounting docker.sock is forbidden",
 } if {
@@ -67,6 +73,12 @@ docker_decision := {
 	"reason": sprintf("image %q not in allowed_images", [image]),
 } if {
 	image_not_allowed
+} else := {
+	"decision": "deny",
+	"rule_id": "docker.write_not_allowlisted",
+	"reason": sprintf("mutating docker action %q is not allowlisted for this key", [action]),
+} if {
+	docker_write_action
 } else := {
 	"decision": "allow",
 	"rule_id": "docker.allow",
@@ -177,6 +189,21 @@ image_matches(pattern, img) if authz.pattern_matches(pattern, img)
 
 # Read-only actions that never mutate container state (observability stays open).
 docker_readonly_action if action in ["get", "list", "inspect", "logs", "stats", "top", "events", "version", "info", "ping", "diff", "changes", "history", "search"]
+
+# Default-deny writes (Argon round 2): POST/PUT/DELETE on the Docker API are
+# denied UNLESS the agent's key is explicitly allowlisted for that action.
+# docker_write_allowlist on the agent: e.g. {"create": true, "start": ["alpine:*"]}
+docker_write_allowed if {
+	some act, perms in authz.agent.docker_write_allowlist
+	lower(act) == action
+	perms != false
+}
+
+docker_write_action if {
+	not docker_readonly_action
+	not action in ["rm", "rmi", "delete", "down", "stop", "kill"]
+	not docker_write_allowed
+}
 
 # Hardened 13 Nov: a protected container is untouchable for ANY mutating
 # action — not just rm/stop/kill. exec into it, pause, update, attach,

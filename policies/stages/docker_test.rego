@@ -39,9 +39,11 @@ fixture_agents := {
 		"name": "docker-agent",
 		"team_id": "t-docker",
 		"allowed_images": ["python:3.*", "alpine:latest", "registry.internal/*"],
+		"docker_write_allowlist": {"start": true, "create": true, "restart": true, "exec": true},
 	},
 	"k-docker-open": {
 		"name": "docker-open-agent",
+		"docker_write_allowlist": {"start": true, "create": true, "restart": true},
 	},
 }
 
@@ -150,16 +152,17 @@ test_docker_rm_protected_denied if {
 	out.rule_id == "shield.container.protected"
 }
 
-# Layer 3: Bypass
-test_docker_stranger_bypass_allowed if {
+# Layer 3: Bypass — unknown keys (onboarding mode) still cannot mutate docker
+# state: default-deny writes applies to them too (Argon round 2 hardening).
+test_docker_stranger_write_denied if {
 	out := decide({
 		"stage": "docker",
 		"key_id": "stranger-key",
 		"action": "start",
 		"resource": "any-image:latest",
 	})
-	out.decision == "allow"
-	out.rule_id == "config.bypass_unknown_keys"
+	out.decision == "deny"
+	out.rule_id == "docker.write_not_allowlisted"
 }
 
 test_docker_stranger_bypass_closed if {

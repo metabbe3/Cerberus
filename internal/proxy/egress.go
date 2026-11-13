@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/metabbe3/cerberus/internal/audit"
@@ -29,9 +31,10 @@ type EgressConfig struct {
 // EgressProxy inspects all outbound HTTP and HTTPS (via CONNECT) traffic,
 // evaluating destination hosts against stage http and PROD SHIELD CIDRs.
 type EgressProxy struct {
-	engine    *engine.Engine
-	cfg       EgressConfig
-	transport *http.Transport
+	engine      *engine.Engine
+	cfg         EgressConfig
+	transport   *http.Transport
+	dialControl func(network, address string, c syscall.RawConn) error
 }
 
 // NewEgressProxy constructs an EgressProxy handler.
@@ -52,11 +55,70 @@ func NewEgressProxy(eng *engine.Engine, cfg EgressConfig) (*EgressProxy, error) 
 		DisableCompression: false,
 	}
 
+	// DNS-rebinding (TOCTOU) guard: the pre-check resolves the host and
+	// evaluates policy, but a second resolver run at dial time could return a
+	// different IP (TTL=0 rebind to 127.0.0.1 / 169.254.169.254 / prod CIDR).
+	// The Control hook sees the ACTUAL connection IP — validate it there,
+	// post-resolution, pre-handshake. Both the forward transport and the
+	// CONNECT tunnel dialer share this guard.
+	control := func(network, address string, _ syscall.RawConn) error {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			host = address
+		}
+		ipStr := NormalizeIPString(host)
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			return fmt.Errorf("egress: unparseable dial address %q", address)
+		}
+		return DenyHostIP(context.Background(), eng, ipStr)
+	}
+	tr.DialContext = (&net.Dialer{
+		Timeout: cfg.DialTimeout,
+		Control: control,
+	}).DialContext
+
 	return &EgressProxy{
-		engine:    eng,
-		cfg:       cfg,
-		transport: tr,
+		engine:      eng,
+		cfg:         cfg,
+		transport:   tr,
+		dialControl: control,
 	}, nil
+}
+
+// DenyHostIP evaluates shield policy against a concrete post-resolution IP.
+// Used by the dial Control hook — any deny verdict aborts the connection
+// before the TCP handshake completes.
+func DenyHostIP(ctx context.Context, eng *engine.Engine, ipStr string) error {
+	ipStr = NormalizeIPString(ipStr)
+	ipIn := engine.Input{
+		Stage:    "http",
+		KeyID:    "egress-dial-guard",
+		Action:   "DIAL",
+		Resource: ipStr,
+		Args: map[string]any{
+			"method": "DIAL",
+			"host":   ipStr,
+		},
+	}
+	dec := eng.Decide(ctx, ipIn)
+	if !dec.Allowed() {
+		return fmt.Errorf("egress: %s blocked: %s", ipStr, dec.RuleID)
+	}
+	return nil
+}
+
+// NormalizeIPString unwraps IPv4-mapped IPv6 ("::ffff:10.0.0.1" → "10.0.0.1")
+// so CIDR checks always see the embedded v4 address.
+func NormalizeIPString(host string) string {
+	h := strings.Trim(host, "[]")
+	if ip := net.ParseIP(h); ip != nil {
+		if v4 := ip.To4(); v4 != nil {
+			return v4.String()
+		}
+		return ip.String()
+	}
+	return h
 }
 
 // ServeHTTP handles both forward HTTP requests and HTTPS CONNECT tunnels.
@@ -181,7 +243,11 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	dialHost, dialPort := util.ExtractHost(dialTarget)
 
-	targetConn, err := net.DialTimeout("tcp", net.JoinHostPort(dialHost, dialPort), p.cfg.DialTimeout)
+	dialer := &net.Dialer{Timeout: p.cfg.DialTimeout}
+	if p.dialControl != nil {
+		dialer.Control = p.dialControl
+	}
+	targetConn, err := dialer.Dial("tcp", net.JoinHostPort(dialHost, dialPort))
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)

@@ -308,6 +308,7 @@ type server struct {
 	adminTok  string
 	client    *http.Client
 	st        *store
+	kills     *killRegistry
 }
 
 func (s *server) handleTap(w http.ResponseWriter, r *http.Request) {
@@ -390,6 +391,13 @@ func (s *server) handleTap(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(out)
+	case "/tap/kill":
+		n := 0
+		if s.kills != nil {
+			n = s.kills.killAll()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"killed_streams":%d}`, n)
 	default:
 		http.NotFound(w, r)
 	}
@@ -402,12 +410,21 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	start := time.Now()
 
-	// Read FULL body (no cap on the forwarded bytes — capture is capped separately,
-	// but policy MUST see a body whose hash matches what we forward).
-	raw, err := io.ReadAll(r.Body)
+	// Read FULL body — policy MUST see exactly what we forward. Bodies larger
+	// than the hard cap (32MB) are rejected with 413: no oversized body is ever
+	// inspected partially and forwarded fully (closes truncation smuggling).
+	const hardCap = 32 << 20
+	limited := io.LimitReader(r.Body, hardCap+1)
+	raw, err := io.ReadAll(limited)
 	r.Body.Close()
 	if err != nil {
 		http.Error(w, "read body: "+err.Error(), 400)
+		return
+	}
+	if len(raw) > hardCap {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		w.Write([]byte(`{"error":{"type":"tap_too_large","message":"request exceeds 32MB inspection limit"}}`))
 		return
 	}
 
@@ -474,6 +491,14 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // proxySSE tees the stream to the client while reassembling thinking/text/tool_use.
 func (s *server) proxySSE(w http.ResponseWriter, resp *http.Response, keyID, model string, start time.Time) {
 	flusher, _ := w.(http.Flusher)
+	// kill-switch hook: registering lets /tap/kill sever this stream mid-flight.
+	var killID int64
+	var killCancel context.CancelFunc
+	if s.kills != nil {
+		killID, killCancel = s.kills.add()
+		defer s.kills.remove(killID)
+	}
+	_ = killCancel
 	for k, vv := range resp.Header {
 		for _, v := range vv {
 			w.Header().Add(k, v)
@@ -488,10 +513,80 @@ func (s *server) proxySSE(w http.ResponseWriter, resp *http.Response, keyID, mod
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 64*1024), 2*maxBody)
 
-	for sc.Scan() {
+	// tool_use hold-and-verify: while a tool_use block is open, its events are
+	// buffered instead of streamed. On content_block_stop the completed
+	// tool call is checked via POST /v1/decide/tool; allowed blocks flush
+	// through, denied blocks are replaced with an error event and the stream
+	// is cut (the agent never receives the arguments).
+	inToolBlock := false
+	var heldLines [][]byte
+	aborted := false
+
+	flushHeld := func() {
+		for _, hl := range heldLines {
+			w.Write(hl)
+			w.Write([]byte("\n"))
+		}
+		heldLines = nil
+	}
+
+	// killCtx: severed by /tap/kill via the registry cancel.
+	var killCtx context.Context
+	if killCancel != nil {
+		killCtx = killCtxFromCancel(killCancel)
+	}
+	for {
+		if killCtx != nil {
+			select {
+			case <-killCtx.Done():
+				aborted = true
+			default:
+			}
+			if aborted {
+				break
+			}
+		}
+		if !sc.Scan() {
+			break
+		}
 		line := sc.Bytes()
-		if len(line) > 0 {
-			w.Write(line)
+		lineCopy := append([]byte{}, line...)
+
+		if inToolBlock {
+			if isContentBlockStop(lineCopy) {
+				// verify the completed tool_use before the agent sees it
+				verdict, ok := s.askToolEngine(keyID, model, toolName, strings.TrimSpace(toolInput.String()))
+				if ok {
+					heldLines = append(heldLines, lineCopy)
+					flushHeld()
+					inToolBlock = false
+				} else {
+					w.Write([]byte("data: {\"type\":\"error\",\"error\":{\"type\":\"tap_tool_blocked\",\"message\":\"tool_use blocked by cerberus policy: " + verdict.Reason + "\"}}\n\n"))
+					if flusher != nil {
+						flusher.Flush()
+					}
+					aborted = true
+					s.st.save(turnRow{KeyID: keyID, Model: model, Kind: "tool_blocked", Payload: mustJSON(map[string]any{
+						"tool": toolName, "verdict": verdict,
+					})}, time.Since(start).Milliseconds(), 403)
+					break
+				}
+				continue
+			}
+			parseSSE(lineCopy, &thinking, &text, &toolName, &toolInput)
+			heldLines = append(heldLines, lineCopy)
+			continue
+		}
+		if isToolBlockStart(lineCopy) {
+			inToolBlock = true
+			heldLines = append(heldLines, lineCopy)
+			toolName = ""
+			toolInput.Reset()
+			parseSSE(lineCopy, &thinking, &text, &toolName, &toolInput)
+			continue
+		}
+		if len(lineCopy) > 0 {
+			w.Write(lineCopy)
 			w.Write([]byte("\n"))
 			if flusher != nil {
 				flusher.Flush()
@@ -502,7 +597,7 @@ func (s *server) proxySSE(w http.ResponseWriter, resp *http.Response, keyID, mod
 				flusher.Flush()
 			}
 		}
-		parseSSE(line, &thinking, &text, &toolName, &toolInput)
+		parseSSE(lineCopy, &thinking, &text, &toolName, &toolInput)
 	}
 	lat := time.Since(start).Milliseconds()
 	assembled := map[string]any{}
@@ -518,6 +613,139 @@ func (s *server) proxySSE(w http.ResponseWriter, resp *http.Response, keyID, mod
 	if len(assembled) > 0 {
 		s.st.save(turnRow{KeyID: keyID, Model: model, Kind: "sse_assembled", Payload: mustJSON(assembled)}, lat, resp.StatusCode)
 	}
+}
+
+// isToolBlockStart reports whether an SSE data line opens a tool_use block.
+func isToolBlockStart(line []byte) bool {
+	if !bytes.HasPrefix(line, []byte("data:")) {
+		return false
+	}
+	data := bytes.TrimSpace(line[5:])
+	var ev struct {
+		Type         string `json:"type"`
+		ContentBlock struct {
+			Type string `json:"type"`
+		} `json:"content_block"`
+	}
+	if json.Unmarshal(data, &ev) != nil {
+		return false
+	}
+	return ev.Type == "content_block_start" && ev.ContentBlock.Type == "tool_use"
+}
+
+// isContentBlockStop reports whether an SSE data line closes a content block.
+func isContentBlockStop(line []byte) bool {
+	if !bytes.HasPrefix(line, []byte("data:")) {
+		return false
+	}
+	data := bytes.TrimSpace(line[5:])
+	var ev struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(data, &ev) != nil {
+		return false
+	}
+	return ev.Type == "content_block_stop"
+}
+
+// askToolEngine runs POST /v1/decide/tool for a completed tool_use block.
+// No engine configured or unreachable => allow (visibility mode) unless strict.
+func (s *server) askToolEngine(keyID, model, tool, inputJSON string) (decideResp, bool) {
+	if s.engineURL == "" {
+		return decideResp{Decision: "allow"}, true
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"key_id": keyID,
+		"stage":  "tool",
+		"action": tool,
+		"input": map[string]any{
+			"key_id": keyID,
+			"tool":   tool,
+			"args":   map[string]any{"input_raw": inputJSON, "model": model},
+		},
+	})
+	url := strings.TrimSuffix(s.engineURL, "/") + "/v1/decide/tool"
+	req, _ := http.NewRequest("POST", url, bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	if s.engineTok != "" {
+		req.Header.Set("Authorization", "Bearer "+s.engineTok)
+	}
+	client := &http.Client{Timeout: 4 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil || resp.StatusCode != 200 {
+		if s.strict {
+			return decideResp{Decision: "deny", RuleID: "tap.tool_engine_unreachable_strict", Reason: "engine unreachable (strict)"}, false
+		}
+		return decideResp{Decision: "allow", RuleID: "tap.tool_engine_unreachable"}, true
+	}
+	defer resp.Body.Close()
+	var dr decideResp
+	if err := json.NewDecoder(resp.Body).Decode(&dr); err != nil || dr.Decision == "" {
+		if s.strict {
+			return decideResp{Decision: "deny", RuleID: "tap.tool_engine_bad_response_strict", Reason: "bad engine response (strict)"}, false
+		}
+		return decideResp{Decision: "allow", RuleID: "tap.tool_engine_bad_response"}, true
+	}
+	return dr, dr.Decision == "allow"
+}
+
+// kill registry: per-request CancelFuncs so an external kill signal can sever
+// all in-flight SSE streams and tunnels immediately.
+type killRegistry struct {
+	mu      sync.Mutex
+	cancels map[int64]context.CancelFunc
+	nextID  int64
+}
+
+func newKillRegistry() *killRegistry {
+	return &killRegistry{cancels: make(map[int64]context.CancelFunc)}
+}
+
+func (k *killRegistry) add() (int64, context.CancelFunc) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.nextID++
+	id := k.nextID
+	_, cancel := context.WithCancel(context.Background())
+	k.cancels[id] = cancel
+	return id, cancel
+}
+
+func (k *killRegistry) remove(id int64) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if c, ok := k.cancels[id]; ok {
+		c()
+		delete(k.cancels, id)
+	}
+}
+
+// killAll cancels every registered in-flight stream.
+func (k *killRegistry) killAll() int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	n := len(k.cancels)
+	for _, c := range k.cancels {
+		c()
+	}
+	k.cancels = make(map[int64]context.CancelFunc)
+	return n
+}
+
+// killCtxFromCancel wraps the registry cancel into a context whose Done fires
+// when EITHER killAll() or stream completion calls cancel().
+type killCtxWatcher struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func killCtxFromCancel(cancel context.CancelFunc) context.Context {
+	ctx, c := context.WithCancel(context.Background())
+	go func() {
+		cancel()
+		c()
+	}()
+	return ctx
 }
 
 // parseSSE extracts delta text from anthropic-style SSE events.
@@ -612,6 +840,7 @@ func main() {
 		engineTok: *engineTok,
 		strict:    *strict,
 		adminTok:  adminTok,
+		kills:     newKillRegistry(),
 		client:    &http.Client{Timeout: 300 * time.Second},
 		st:        st,
 	}
