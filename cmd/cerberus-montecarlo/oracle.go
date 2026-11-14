@@ -216,6 +216,10 @@ func prepareChainPayload(raw map[string]any, chainID string, step int) []byte {
 	var cloned map[string]any
 	_ = json.Unmarshal(b, &cloned)
 
+	// Unique session per chain+step so engine taint-marks never
+	// cross-contaminate samples (run-3 artifact: 15k deny from stale marks).
+	cloned["session_id"] = fmt.Sprintf("mc-%s-%d", chainID, step)
+
 	if chainID == "S06" && step == 1 {
 		prefix := strings.Repeat("A", 32768)
 		suffix := strings.Repeat("B", 32768)

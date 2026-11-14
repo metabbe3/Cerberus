@@ -476,6 +476,16 @@ llm_target_prod if {
 	is_string(input.prompt)
 	prod.prod_ip(input.prompt)
 }
+llm_target_prod if {
+	some m in input.messages
+	is_string(m.content)
+	prod.touches_prod(m.content)
+}
+llm_target_prod if {
+	some m in input.messages
+	is_string(m.content)
+	prod.prod_ip(m.content)
+}
 
 llm_target_reason := sprintf("target host %q is a protected production resource", [target_host]) if {
 	target_host != ""
