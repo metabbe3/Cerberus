@@ -13,6 +13,7 @@ import {
   Settings,
   SlidersHorizontal,
   UserRound,
+  UsersRound,
   type LucideIcon,
 } from "lucide-react";
 
@@ -70,6 +71,12 @@ const groups: { title: string; items: Pillar[] }[] = [
   {
     title: "Personal",
     items: [
+      {
+        href: "/users",
+        label: "Users",
+        icon: UsersRound,
+        isActive: (pathname: string) => pathname.startsWith("/users"),
+      },
       {
         href: "/account",
         label: "Akun",

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { AlertCircle, ShieldAlert, ShieldCheck, Users } from "lucide-react";
+import { AlertCircle, ShieldAlert, ShieldCheck } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -156,25 +156,6 @@ export default function SettingsPage() {
             )}
           </div>
         </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <CardTitle>Pengelolaan Pengguna</CardTitle>
-              <CardDescription>
-                Kelola akun pengguna database-backed, hak akses peran (admin atau viewer), dan reset kata sandi.
-              </CardDescription>
-            </div>
-            <Link href="/users">
-              <Button variant="outline" className="gap-1.5 self-start sm:self-auto">
-                <Users className="size-4" />
-                Kelola Pengguna
-              </Button>
-            </Link>
-          </div>
-        </CardHeader>
       </Card>
 
       <UpstreamCard />
