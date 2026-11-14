@@ -13,8 +13,10 @@ import (
 )
 
 var (
+	// ErrPasswordTooShort dikembalikan bila password tidak memenuhi kebijakan minimum 12 karakter.
 	ErrPasswordTooShort = errors.New("kata sandi minimal 12 karakter")
-	ErrInvalidHash      = errors.New("format hash password tidak valid")
+	// ErrInvalidHash dikembalikan bila format hash tersimpan tidak valid.
+	ErrInvalidHash = errors.New("format hash password tidak valid")
 )
 
 // Standard Argon2id parameters (RFC 9106 recommended minimum for interactive logins)
@@ -92,7 +94,11 @@ func CheckPassword(password, encodedHash string) bool {
 		return false
 	}
 
-	hash := argon2.IDKey([]byte(password), salt, time, memory, threads, uint32(len(expectedHash)))
+	expectedLen := uint32(0)
+	if len(expectedHash) > 0 && len(expectedHash) <= int(^uint32(0)>>1) {
+		expectedLen = uint32(len(expectedHash)) // #nosec G115 -- panjang di-clamp: 0 < len <= MaxInt32
+	}
+	hash := argon2.IDKey([]byte(password), salt, time, memory, threads, expectedLen) // #nosec G115 -- expectedLen di-clamp eksplisit di atas
 
 	return subtle.ConstantTimeCompare(hash, expectedHash) == 1
 }

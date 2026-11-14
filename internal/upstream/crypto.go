@@ -1,3 +1,4 @@
+// Package upstream menyimpan konfigurasi LLM upstream (endpoint+key) terenkripsi AES-256-GCM.
 package upstream
 
 import (
@@ -14,9 +15,12 @@ import (
 )
 
 var (
-	ErrInvalidMasterKey  = errors.New("master key harus 32 byte (AES-256)")
+	// ErrInvalidMasterKey dikembalikan bila master key tidak 32 byte.
+	ErrInvalidMasterKey = errors.New("master key harus 32 byte (AES-256)")
+	// ErrInvalidCiphertext dikembalikan bila ciphertext AES-GCM korup atau tidak valid.
 	ErrInvalidCiphertext = errors.New("format ciphertext tidak valid")
-	ErrDecryptFailed     = errors.New("gagal mendekripsi api key (kunci master tidak sesuai atau data rusak)")
+	// ErrDecryptFailed dikembalikan bila dekripsi gagal (master key salah/data rusak).
+	ErrDecryptFailed = errors.New("gagal mendekripsi api key (kunci master tidak sesuai atau data rusak)")
 )
 
 // Encrypt encrypts plaintext using AES-256-GCM with a random 12-byte nonce.

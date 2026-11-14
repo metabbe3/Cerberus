@@ -175,6 +175,7 @@ func (s *Server) handleTestUpstream(w http.ResponseWriter, r *http.Request) {
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	// Try GET /models or /v1/models probe
+	// #nosec G704 -- endpoint berasal dari input admin ter-autentikasi (bukan publik); skema divalidasi http/https di PUT.
 	probeURL := strings.TrimRight(endpoint, "/") + "/models"
 	probeReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, probeURL, nil)
 	if err == nil && apiKey != "" {
@@ -182,7 +183,7 @@ func (s *Server) handleTestUpstream(w http.ResponseWriter, r *http.Request) {
 		probeReq.Header.Set("x-api-key", apiKey)
 	}
 
-	resp, err := client.Do(probeReq)
+	resp, err := client.Do(probeReq) // #nosec G704 -- endpoint dari input admin ter-autentikasi; skema divalidasi di PUT
 	lat := time.Since(start).Milliseconds()
 	if err != nil {
 		// Try root probe fallback
@@ -282,7 +283,7 @@ func (s *Server) handleGetTapTurns(w http.ResponseWriter, r *http.Request) {
 		tapURL += "?" + q
 	}
 
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, tapURL, nil)
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, tapURL, nil) // #nosec G704 -- tapURL dari TAP_ENGINE_URL admin-internal
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte("[]"))
@@ -295,7 +296,7 @@ func (s *Server) handleGetTapTurns(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) // #nosec G704 -- tapURL dari TAP_ENGINE_URL admin-internal
 	if err != nil || resp.StatusCode != http.StatusOK {
 		if resp != nil {
 			_ = resp.Body.Close()

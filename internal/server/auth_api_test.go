@@ -23,6 +23,8 @@ func newTestAuthServer(t *testing.T) (*Server, *httptest.Server, *audit.Logger) 
 		t.Fatalf("audit.Open: %v", err)
 	}
 
+	const testAdminToken = "test-admin-secret-token" // #nosec G101 -- test fixture, bukan kredensial nyata
+
 	authStore, err := auth.NewMemoryStore()
 	if err != nil {
 		t.Fatalf("auth.NewMemoryStore: %v", err)
@@ -31,7 +33,7 @@ func newTestAuthServer(t *testing.T) (*Server, *httptest.Server, *audit.Logger) 
 	srv := New(Deps{
 		Audit:      al,
 		Auth:       authStore,
-		AdminToken: "test-admin-secret-token",
+		AdminToken: testAdminToken,
 		Version:    "test",
 	})
 
@@ -330,8 +332,7 @@ func TestAuth_UserManagementAndRoleViewer(t *testing.T) {
 
 	// 7. Admin disables viewer
 	disableBody, _ := json.Marshal(map[string]bool{"disabled": true})
-	disReq, _ := http.NewRequest("POST", ts.URL+"/v1/admin/users/"+time.Duration(viewerID).String(), bytes.NewReader(disableBody))
-	disReq, _ = http.NewRequest("POST", ts.URL+fmt.Sprintf("/v1/admin/users/%d/disable", viewerID), bytes.NewReader(disableBody))
+	disReq, _ := http.NewRequest("POST", ts.URL+fmt.Sprintf("/v1/admin/users/%d/disable", viewerID), bytes.NewReader(disableBody))
 	disReq.Header.Set("Authorization", "Bearer "+adminToken)
 	disReq.Header.Set("Content-Type", "application/json")
 	res, err = client.Do(disReq)

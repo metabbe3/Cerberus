@@ -1,3 +1,4 @@
+// Tests untuk paket auth: hashing Argon2id, sesi, lockout.
 package auth
 
 import (

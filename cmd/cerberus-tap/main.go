@@ -638,7 +638,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fwd.Header.Set("Authorization", "Bearer "+curTarget.apiKey)
 		fwd.Header.Set("x-api-key", curTarget.apiKey)
 	}
-	resp, err := s.client.Do(fwd)
+	resp, err := s.client.Do(fwd) // #nosec G704 -- target dari upstream-config admin (AES-GCM store), bukan input publik
 	if err != nil {
 		http.Error(w, "upstream: "+err.Error(), http.StatusBadGateway)
 		return

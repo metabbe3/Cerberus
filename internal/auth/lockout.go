@@ -6,8 +6,10 @@ import (
 )
 
 const (
+	// MaxFailedAttempts adalah batas kegagalan login sebelum lockout sementara.
 	MaxFailedAttempts = 5
-	LockoutWindow     = 15 * time.Minute
+	// LockoutWindow adalah durasi lockout setelah MaxFailedAttempts tercapai.
+	LockoutWindow = 15 * time.Minute
 )
 
 type attemptRecord struct {

@@ -156,13 +156,14 @@ func (s *Server) admin(next http.HandlerFunc) http.HandlerFunc {
 		var authedUser *auth.User
 		isMasterAdmin := s.deps.AdminToken != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(s.deps.AdminToken)) == 1
 
-		if isMasterAdmin {
+		switch {
+		case isMasterAdmin:
 			authedUser = &auth.User{
 				ID:       0,
 				Username: "admin",
 				Role:     auth.RoleAdmin,
 			}
-		} else if s.auth != nil {
+		case s.auth != nil:
 			u, err := s.auth.ValidateSession(r.Context(), tok)
 			if err != nil {
 				writeErr(w, http.StatusUnauthorized, "unauthorized")
@@ -173,7 +174,7 @@ func (s *Server) admin(next http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 			authedUser = u
-		} else {
+		default:
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}

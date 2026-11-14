@@ -111,13 +111,14 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- atribut keamanan diatur lengkap di bawah; Secure mengikuti TLS terminator
 		Name:     "owl_session",
 		Value:    token,
 		Path:     "/",
 		Expires:  expiresAt,
 		MaxAge:   int(auth.SessionDuration.Seconds()),
 		HttpOnly: true,
+		Secure:   r.TLS != nil,
 		SameSite: http.SameSiteLaxMode,
 	})
 
@@ -161,13 +162,14 @@ func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- atribut keamanan diatur lengkap di bawah; Secure mengikuti TLS terminator
 		Name:     "owl_session",
 		Value:    "",
 		Path:     "/",
 		Expires:  time.Unix(0, 0),
 		MaxAge:   -1,
 		HttpOnly: true,
+		Secure:   r.TLS != nil,
 		SameSite: http.SameSiteLaxMode,
 	})
 

@@ -1279,13 +1279,13 @@ func TestDownstreamPrivacy_NoCapture(t *testing.T) {
 	secretPrompt := "SUPER_SECRET_FINANCIAL_RECORD_42"
 	secretResponse := "SECRET_CREDIT_CARD_NUMBER_9999"
 
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"content":[{"type":"text","text":"%s"}]}`, secretResponse)
 	}))
 	defer up.Close()
 
-	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cerberus-Capture", "false")
 		_, _ = fmt.Fprint(w, `{"decision":"allow","rule_id":"ai.llm.allow"}`)

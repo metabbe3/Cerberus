@@ -14,19 +14,27 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // driver sqlite murni-Go untuk store auth
 )
 
 var (
+	// ErrInvalidCredentials dikembalikan bila username/password tidak cocok.
 	ErrInvalidCredentials = errors.New("kredensial login tidak valid")
-	ErrUserDisabled       = errors.New("pengguna dinonaktifkan")
-	ErrUserNotFound       = errors.New("pengguna tidak ditemukan")
-	ErrUsernameTaken      = errors.New("username sudah digunakan")
-	ErrSessionExpired     = errors.New("sesi telah kedaluwarsa")
-	ErrSessionRevoked     = errors.New("sesi telah dicabut")
-	ErrAccountLocked      = errors.New("terlalu banyak percobaan gagal, akun terkunci selama 15 menit")
+	// ErrUserDisabled dikembalikan bila akun dinonaktifkan admin.
+	ErrUserDisabled = errors.New("pengguna dinonaktifkan")
+	// ErrUserNotFound dikembalikan bila username tidak terdaftar.
+	ErrUserNotFound = errors.New("pengguna tidak ditemukan")
+	// ErrUsernameTaken dikembalikan bila username sudah dipakai user lain.
+	ErrUsernameTaken = errors.New("username sudah digunakan")
+	// ErrSessionExpired dikembalikan bila sesi lewat masa berlaku.
+	ErrSessionExpired = errors.New("sesi telah kedaluwarsa")
+	// ErrSessionRevoked dikembalikan bila sesi dicabut (logout/admin).
+	ErrSessionRevoked = errors.New("sesi telah dicabut")
+	// ErrAccountLocked dikembalikan bila lockout aktif setelah kegagalan berulang.
+	ErrAccountLocked = errors.New("terlalu banyak percobaan gagal, akun terkunci selama 15 menit")
 )
 
+// SessionDuration adalah masa berlaku sesi login Owl.
 const SessionDuration = 12 * time.Hour
 
 // Store manages database persistence for users and login sessions.
@@ -40,7 +48,7 @@ type Store struct {
 func Open(dbPath string) (*Store, error) {
 	if dbPath != ":memory:" && !strings.Contains(dbPath, "mode=memory") {
 		dir := filepath.Dir(dbPath)
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0700); err != nil {
 			return nil, fmt.Errorf("auth: create dir %s: %w", dir, err)
 		}
 	}

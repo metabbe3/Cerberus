@@ -10,13 +10,17 @@ import (
 	"sync"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // driver sqlite murni-Go untuk store upstream
 )
 
 var (
-	ErrInvalidURL       = errors.New("endpoint URL tidak valid (harus dimulai dengan http:// atau https://)")
-	ErrAPIKeyTooShort   = errors.New("api key minimal 8 karakter")
-	ErrAPIKeyRequired   = errors.New("api key wajib diisi untuk konfigurasi upstream baru")
+	// ErrInvalidURL dikembalikan bila endpoint bukan http/https yang valid.
+	ErrInvalidURL = errors.New("endpoint URL tidak valid (harus dimulai dengan http:// atau https://)")
+	// ErrAPIKeyTooShort dikembalikan bila api key kurang dari 8 karakter.
+	ErrAPIKeyTooShort = errors.New("api key minimal 8 karakter")
+	// ErrAPIKeyRequired dikembalikan bila api key kosong saat konfigurasi baru.
+	ErrAPIKeyRequired = errors.New("api key wajib diisi untuk konfigurasi upstream baru")
+	// ErrNoUpstreamConfig dikembalikan bila belum ada konfigurasi upstream tersimpan.
 	ErrNoUpstreamConfig = errors.New("konfigurasi upstream belum diatur")
 )
 
