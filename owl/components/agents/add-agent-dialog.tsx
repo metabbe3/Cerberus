@@ -312,9 +312,10 @@ export function AddAgentDialog({ open, onOpenChange, teams, initialKeyId }: AddA
         newAgent.budget_limit = budgetNum2;
       }
 
-      if (requestsPerMinute.trim() && !isNaN(Number(requestsPerMinute))) {
+      const rpmNum2 = parseLocalNumber(requestsPerMinute);
+      if (!isNaN(rpmNum2)) {
         newAgent.rate_limit = {
-          requests_per_minute: Number(requestsPerMinute),
+          requests_per_minute: rpmNum2,
         };
       }
 

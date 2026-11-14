@@ -25,6 +25,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Skeleton } from "@/components/ui/skeleton";
 import { mergeEvents, useAudit } from "@/lib/queries";
 import type { AuditEvent } from "@/lib/schema";
 
@@ -277,22 +278,26 @@ function DecisionsContent() {
         </Alert>
       ) : null}
 
-      {events.length === 0 && !history.isPending ? (
-        hasActiveFilters ? (
-          <EmptyState
-            type="filtered-out"
-            title="Tidak Ada Keputusan yang Cocok"
-            hint="Tidak ada event keputusan yang sesuai dengan parameter filter yang sedang aktif."
-            actionLabel="Reset Semua Filter"
-            onAction={clearAllFilters}
-          />
-        ) : (
-          <EmptyState
-            type="zero-data"
-            title="Belum Ada Catatan Keputusan"
-            hint="Kirim request ke gateway melalui curl atau SDK untuk mulai merekam evaluasi kebijakan."
-          />
-        )
+      {history.isPending ? (
+        <div className="space-y-2 rounded-md border p-4">
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-8 w-full" />
+        </div>
+      ) : events.length === 0 ? (
+        <EmptyState
+          type={hasActiveFilters ? "filtered-out" : "zero-data"}
+          title="Belum ada keputusan di jendela ini"
+          hint={
+            hasActiveFilters
+              ? "Tidak ada event keputusan yang sesuai dengan parameter filter yang sedang aktif."
+              : "Kirim request ke gateway melalui curl atau SDK untuk mulai merekam evaluasi kebijakan."
+          }
+          actionLabel="Muat ulang"
+          onAction={() => history.refetch()}
+        />
       ) : (
         <AuditTable
           events={events}

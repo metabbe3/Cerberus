@@ -139,14 +139,24 @@ export default function AgentObservabilityPage() {
     }
 
     // Union allowlist
+    const teamAllowedCalls = Array.isArray(
+      (team as { allowed_tool_calls?: unknown })?.allowed_tool_calls,
+    )
+      ? ((team as { allowed_tool_calls?: string[] }).allowed_tool_calls ?? [])
+      : [];
     const allowedToolsSet = new Set<string>([
       ...(agent.allowed_tools ?? []),
+      ...(agent.allowed_tool_calls ?? []),
       ...(team?.allowed_tools ?? []),
+      ...teamAllowedCalls,
     ]);
 
-    // Restricted wins (union of restricted tools)
+    // Restricted wins (union of restricted tools & tool_calls — wizard menulis
+    // *_tool_calls, editor menulis *_tools; keduanya ditampilkan agar remediasi
+    // selalu terverifikasi di kartu Effective Policy)
     const restrictedToolsSet = new Set<string>([
       ...(agent.restricted_tools ?? []),
+      ...(agent.restricted_tool_calls ?? []),
     ]);
 
     // Allowed models
@@ -659,11 +669,11 @@ export default function AgentObservabilityPage() {
                           <TableCell className="text-right font-mono tabular-nums text-muted-foreground">
                             {new Date(b.time).toLocaleTimeString("id-ID")}
                           </TableCell>
-                          <TableCell className="text-right space-x-1">
+                          <TableCell className="py-1 text-right space-x-1">
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="h-6 text-[10px] px-1.5"
+                              className="h-9 px-2.5 text-xs"
                               onClick={() => setInspectEvent(b)}
                             >
                               Detail
@@ -671,7 +681,7 @@ export default function AgentObservabilityPage() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="h-6 text-[10px] px-1.5"
+                              className="h-9 px-2.5 text-xs"
                               onClick={() => {
                                 setTraceEvent(b);
                                 setTraceOpen(true);
@@ -682,7 +692,7 @@ export default function AgentObservabilityPage() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="h-6 text-[10px] px-1.5"
+                              className="h-9 px-2.5 text-xs"
                               onClick={() =>
                                 setExpandedRows((prev) => ({
                                   ...prev,
@@ -832,11 +842,11 @@ export default function AgentObservabilityPage() {
                             </span>
                           )}
                         </TableCell>
-                        <TableCell className="text-right space-x-1" onClick={(e) => e.stopPropagation()}>
+                        <TableCell className="py-1 text-right space-x-1" onClick={(e) => e.stopPropagation()}>
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="h-6 text-[10px] px-1.5"
+                            className="h-9 px-2.5 text-xs"
                             onClick={() => setInspectEvent(ev)}
                           >
                             Detail
@@ -844,7 +854,7 @@ export default function AgentObservabilityPage() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="h-6 text-[10px] px-1.5"
+                            className="h-9 px-2.5 text-xs"
                             onClick={() => {
                               setTraceEvent(ev);
                               setTraceOpen(true);

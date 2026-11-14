@@ -188,7 +188,16 @@ function BreachCenterContent() {
     } else {
       next.config.kill_switch.keys[keyId] = true;
     }
-    putDataMutation.mutate(next);
+    putDataMutation.mutate(next, {
+      onSuccess: () =>
+        toast.success(
+          isKilled
+            ? `Agen ${keyId} dipulihkan — key aktif kembali.`
+            : `Agen ${keyId} diblokir (kill switch aktif).`,
+        ),
+      onError: () =>
+        toast.error(`Gagal menyimpan kill switch untuk ${keyId}.`),
+    });
   };
 
   const inspectEvent = (ev: AuditEvent) => {

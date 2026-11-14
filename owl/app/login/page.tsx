@@ -67,7 +67,7 @@ function LoginForm() {
         <Label htmlFor="password">Kata sandi</Label>
         <Input
           id="password"
-          aria-label="Admin password"
+          aria-label="Kata sandi"
           type="password"
           autoComplete="current-password"
           required
@@ -86,6 +86,7 @@ function LoginForm() {
 export default function LoginPage() {
   return (
     <div className="relative grid min-h-svh place-items-center bg-[radial-gradient(ellipse_at_top,var(--accent),transparent_60%)] px-4">
+      <h1 className="sr-only">Masuk ke Owl</h1>
       <div className="absolute right-4 top-4">
         <ThemeToggle />
       </div>

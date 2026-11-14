@@ -340,7 +340,7 @@ export default function UsersPage() {
                                 variant={u.disabled ? "outline" : "ghost"}
                                 size="sm"
                                 className={`h-8 gap-1 text-xs ${
-                                  u.disabled ? "text-emerald-600" : "text-destructive"
+                                  u.disabled ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"
                                 }`}
                                 onClick={() => setDisableTargetUser(u)}
                               >

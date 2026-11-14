@@ -56,7 +56,7 @@ export function InspectorDrawer({ open, onOpenChange, event }: InspectorDrawerPr
     onOpenChange(false);
     if (isDeny) {
       // Allowlist exception for this agent
-      router.push(`/agents/${encodeURIComponent(event.key_id)}?prefill=allow:${encodeURIComponent(event.subject)}`);
+      router.push(`/agents/${encodeURIComponent(event.key_id)}/edit?prefill=allow:${encodeURIComponent(event.subject)}`);
     } else {
       // Restrict suspicious allow
       router.push(`/agents/${encodeURIComponent(event.key_id)}/edit?prefill=restricted:${encodeURIComponent(event.subject)}`);

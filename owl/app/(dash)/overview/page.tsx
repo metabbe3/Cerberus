@@ -63,8 +63,14 @@ function fmtUs(us: number): string {
   return `${(us / 1000).toFixed(1)} ms`;
 }
 
-function Sparkline({ data, stroke }: { data: number[]; stroke: string }) {
-  if (!data || data.length === 0) return <div className="h-6" />;
+function Sparkline({ data, stroke }: { data: number[] | null; stroke: string }) {
+  if (!data || data.length === 0) {
+    return (
+      <div className="flex h-6 items-center text-[10px] text-muted-foreground/60">
+        belum ada data
+      </div>
+    );
+  }
   const max = Math.max(...data, 1);
   const w = 120;
   const h = 24;
@@ -190,7 +196,9 @@ export default function OverviewPage() {
       >
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="outline" className="font-mono text-xs">
-            epoch {statusData?.bundle_epoch ?? owlData?.epoch ?? 0}
+            {statusData != null
+              ? `epoch ${statusData.bundle_epoch ?? owlData?.epoch ?? 0}`
+              : "epoch …"}
           </Badge>
           <div className="flex items-center gap-1 rounded-lg border p-1 bg-muted/20">
             {WINDOWS.map((w) => (
@@ -270,25 +278,38 @@ export default function OverviewPage() {
               <span className="text-xs font-medium">Total Keputusan</span>
               <Activity className="size-4" aria-hidden />
             </div>
-            <div className="text-2xl font-bold tracking-tight tabular-nums font-mono">
-              {fmtNum(metrics.curTotal)}
+            <div className="flex items-center gap-2">
+              <div className="text-2xl font-bold tracking-tight tabular-nums font-mono">
+                {statusData == null || tsCur.data == null ? "—" : fmtNum(metrics.curTotal)}
+              </div>
+              {(statusData == null || tsCur.data == null) && (
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-muted-foreground font-normal">
+                  data tidak tersedia
+                </Badge>
+              )}
             </div>
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              {metrics.deltaTotal >= 0 ? (
-                <span className="flex items-center text-emerald-500 font-medium">
-                  <ArrowUpRight className="size-3.5 mr-0.5" />
-                  +{fmtNum(metrics.deltaTotal)}
-                </span>
+              {statusData == null || tsCur.data == null ? (
+                <span>data tidak tersedia</span>
               ) : (
-                <span className="flex items-center text-muted-foreground font-medium">
-                  <ArrowDownRight className="size-3.5 mr-0.5" />
-                  {fmtNum(metrics.deltaTotal)}
-                </span>
+                <>
+                  {metrics.deltaTotal >= 0 ? (
+                    <span className="flex items-center text-emerald-500 font-medium">
+                      <ArrowUpRight className="size-3.5 mr-0.5" />
+                      +{fmtNum(metrics.deltaTotal)}
+                    </span>
+                  ) : (
+                    <span className="flex items-center text-muted-foreground font-medium">
+                      <ArrowDownRight className="size-3.5 mr-0.5" />
+                      {fmtNum(metrics.deltaTotal)}
+                    </span>
+                  )}
+                  <span>vs periode sebelumnya</span>
+                </>
               )}
-              <span>vs periode sebelumnya</span>
             </div>
             <Sparkline
-              data={(tsCur.data ?? []).map((b) => b.total)}
+              data={statusData && tsCur.data ? tsCur.data.map((b) => b.total) : null}
               stroke="var(--primary, #3b82f6)"
             />
           </CardContent>
@@ -302,21 +323,34 @@ export default function OverviewPage() {
               <ShieldCheck className="size-4 text-emerald-500" aria-hidden />
             </div>
             <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-bold tracking-tight text-emerald-500 font-mono tabular-nums">
-                {fmtNum(metrics.curAllow)}
-              </span>
-              <span className="text-sm font-semibold text-muted-foreground">/</span>
-              <span className="text-xl font-bold tracking-tight text-destructive font-mono tabular-nums">
-                {fmtNum(metrics.curDeny)}
-              </span>
+              {statusData == null || tsCur.data == null ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl font-bold tracking-tight font-mono tabular-nums">—</span>
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-muted-foreground font-normal">
+                    data tidak tersedia
+                  </Badge>
+                </div>
+              ) : (
+                <>
+                  <span className="text-2xl font-bold tracking-tight text-emerald-500 font-mono tabular-nums">
+                    {fmtNum(metrics.curAllow)}
+                  </span>
+                  <span className="text-sm font-semibold text-muted-foreground">/</span>
+                  <span className="text-xl font-bold tracking-tight text-destructive font-mono tabular-nums">
+                    {fmtNum(metrics.curDeny)}
+                  </span>
+                </>
+              )}
             </div>
             <div className="text-xs text-muted-foreground">
-              {metrics.curTotal > 0
-                ? `${Math.round((metrics.curAllow / metrics.curTotal) * 100)}% lolos evaluasi`
-                : "Belum ada evaluasi"}
+              {statusData == null || tsCur.data == null
+                ? "data tidak tersedia"
+                : metrics.curTotal > 0
+                  ? `${Math.round((metrics.curAllow / metrics.curTotal) * 100)}% lolos evaluasi`
+                  : "Belum ada evaluasi"}
             </div>
             <Sparkline
-              data={(tsCur.data ?? []).map((b) => b.allow)}
+              data={statusData && tsCur.data ? tsCur.data.map((b) => b.allow) : null}
               stroke="#10b981"
             />
           </CardContent>
@@ -329,27 +363,40 @@ export default function OverviewPage() {
               <span className="text-xs font-medium">Deny Rate (Ternormalisasi)</span>
               <ShieldAlert className="size-4 text-destructive" aria-hidden />
             </div>
-            <div className="text-2xl font-bold tracking-tight text-destructive font-mono tabular-nums">
-              {metrics.curDenyRate.toFixed(1)}%
+            <div className="flex items-center gap-2">
+              <div className="text-2xl font-bold tracking-tight text-destructive font-mono tabular-nums">
+                {statusData == null || tsCur.data == null ? "—" : `${metrics.curDenyRate.toFixed(1)}%`}
+              </div>
+              {(statusData == null || tsCur.data == null) && (
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-muted-foreground font-normal">
+                  data tidak tersedia
+                </Badge>
+              )}
             </div>
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              {metrics.deltaDenyRate > 0 ? (
-                <span className="flex items-center text-destructive font-medium">
-                  <ArrowUpRight className="size-3.5 mr-0.5" />
-                  +{metrics.deltaDenyRate.toFixed(1)}pp
-                </span>
-              ) : metrics.deltaDenyRate < 0 ? (
-                <span className="flex items-center text-emerald-500 font-medium">
-                  <ArrowDownRight className="size-3.5 mr-0.5" />
-                  {metrics.deltaDenyRate.toFixed(1)}pp
-                </span>
+              {statusData == null || tsCur.data == null ? (
+                <span>data tidak tersedia</span>
               ) : (
-                <span className="text-muted-foreground">0.0pp</span>
+                <>
+                  {metrics.deltaDenyRate > 0 ? (
+                    <span className="flex items-center text-destructive font-medium">
+                      <ArrowUpRight className="size-3.5 mr-0.5" />
+                      +{metrics.deltaDenyRate.toFixed(1)}pp
+                    </span>
+                  ) : metrics.deltaDenyRate < 0 ? (
+                    <span className="flex items-center text-emerald-500 font-medium">
+                      <ArrowDownRight className="size-3.5 mr-0.5" />
+                      {metrics.deltaDenyRate.toFixed(1)}pp
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">0.0pp</span>
+                  )}
+                  <span>vs periode sebelumnya</span>
+                </>
               )}
-              <span>vs periode sebelumnya</span>
             </div>
             <Sparkline
-              data={(tsCur.data ?? []).map((b) => (b.total > 0 ? (b.deny / b.total) * 100 : 0))}
+              data={statusData && tsCur.data ? tsCur.data.map((b) => (b.total > 0 ? (b.deny / b.total) * 100 : 0)) : null}
               stroke="#ef4444"
             />
           </CardContent>
@@ -364,17 +411,23 @@ export default function OverviewPage() {
             </div>
             <div className="flex items-baseline gap-2 font-mono tabular-nums">
               <span className="text-xl font-bold tracking-tight">
-                {fmtUs(statusData?.latency_p50_us ?? 0)}
+                {statusData?.latency_p50_us !== undefined ? fmtUs(statusData.latency_p50_us) : "—"}
               </span>
-              <span className="text-xs text-muted-foreground font-medium">p50</span>
+              {statusData?.latency_p50_us !== undefined ? (
+                <span className="text-xs text-muted-foreground font-medium">p50</span>
+              ) : (
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-muted-foreground font-normal">
+                  data tidak tersedia
+                </Badge>
+              )}
             </div>
             <div className="flex items-center gap-2 text-xs text-muted-foreground font-mono tabular-nums">
-              <span>p95: {fmtUs(statusData?.latency_p95_us ?? 0)}</span>
+              <span>p95: {statusData?.latency_p95_us !== undefined ? fmtUs(statusData.latency_p95_us) : "—"}</span>
               <span>•</span>
-              <span>p99: {fmtUs(statusData?.latency_p99_us ?? 0)}</span>
+              <span>p99: {statusData?.latency_p99_us !== undefined ? fmtUs(statusData.latency_p99_us) : "—"}</span>
             </div>
             <Sparkline
-              data={statusData?.latency_sparkline && statusData.latency_sparkline.length > 0 ? statusData.latency_sparkline : [1, 2, 1, 1, 3, 2]}
+              data={statusData?.latency_sparkline && statusData.latency_sparkline.length > 0 ? statusData.latency_sparkline : null}
               stroke="#f59e0b"
             />
           </CardContent>
@@ -387,10 +440,17 @@ export default function OverviewPage() {
               <span className="text-xs font-medium">Cache Hit Rate</span>
               <Clock className="size-4 text-emerald-500" aria-hidden />
             </div>
-            <div className="text-2xl font-bold tracking-tight text-emerald-500 font-mono tabular-nums">
-              {statusData?.cache_hit_rate !== undefined
-                ? `${(statusData.cache_hit_rate * 100).toFixed(1)}%`
-                : "—"}
+            <div className="flex items-center gap-2">
+              <div className="text-2xl font-bold tracking-tight text-emerald-500 font-mono tabular-nums">
+                {statusData?.cache_hit_rate !== undefined
+                  ? `${(statusData.cache_hit_rate * 100).toFixed(1)}%`
+                  : "—"}
+              </div>
+              {statusData == null && (
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-muted-foreground font-normal">
+                  data tidak tersedia
+                </Badge>
+              )}
             </div>
             <div className="text-xs text-muted-foreground">
               Evaluasi OPA disajikan dari cache
@@ -403,17 +463,28 @@ export default function OverviewPage() {
           <CardContent className="space-y-1.5 p-4">
             <div className="flex items-center justify-between text-muted-foreground">
               <span className="text-xs font-medium">Fail-Closed & Timeout</span>
-              <AlertTriangle className={statusData?.fail_closed_count && statusData.fail_closed_count > 0 ? "size-4 text-destructive" : "size-4 text-emerald-500"} aria-hidden />
+              <AlertTriangle className={statusData?.fail_closed_count && statusData.fail_closed_count > 0 ? "size-4 text-destructive" : statusData == null ? "size-4 text-muted-foreground" : "size-4 text-emerald-500"} aria-hidden />
             </div>
-            <div className={`text-2xl font-bold tracking-tight font-mono tabular-nums ${statusData?.fail_closed_count && statusData.fail_closed_count > 0 ? "text-destructive" : "text-emerald-500"}`}>
-              {statusData?.fail_closed_rate !== undefined
-                ? `${(statusData.fail_closed_rate * 100).toFixed(1)}%`
-                : "0.0%"}
+            <div className="flex items-center gap-2">
+              <div className={`text-2xl font-bold tracking-tight font-mono tabular-nums ${statusData?.fail_closed_count && statusData.fail_closed_count > 0 ? "text-destructive" : statusData == null ? "text-muted-foreground" : "text-emerald-500"}`}>
+                {statusData?.fail_closed_rate !== undefined
+                  ? `${(statusData.fail_closed_rate * 100).toFixed(1)}%`
+                  : statusData == null
+                    ? "—"
+                    : "0.0%"}
+              </div>
+              {statusData == null && (
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-muted-foreground font-normal">
+                  data tidak tersedia
+                </Badge>
+              )}
             </div>
             <div className="text-xs text-muted-foreground">
-              {statusData?.fail_closed_count && statusData.fail_closed_count > 0
-                ? `${statusData.fail_closed_count} evaluasi timeout / error (kebijakan tidak berjalan)`
-                : "0.0% (0 error • seluruh evaluasi policy berhasil)"}
+              {statusData == null
+                ? "data tidak tersedia"
+                : statusData?.fail_closed_count && statusData.fail_closed_count > 0
+                  ? `${statusData.fail_closed_count} evaluasi timeout / error (kebijakan tidak berjalan)`
+                  : "0.0% (0 error • seluruh evaluasi policy berhasil)"}
             </div>
           </CardContent>
         </Card>
@@ -425,13 +496,22 @@ export default function OverviewPage() {
               <span className="text-xs font-medium">Antrean Audit Sink</span>
               <Layers className="size-4 text-muted-foreground" aria-hidden />
             </div>
-            <div className="text-2xl font-bold tracking-tight font-mono tabular-nums">
-              {statusData?.audit_queue_depth ?? 0}
+            <div className="flex items-center gap-2">
+              <div className="text-2xl font-bold tracking-tight font-mono tabular-nums">
+                {statusData?.audit_queue_depth !== undefined ? statusData.audit_queue_depth : "—"}
+              </div>
+              {statusData == null && (
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-muted-foreground font-normal">
+                  data tidak tersedia
+                </Badge>
+              )}
             </div>
             <div className="text-xs text-muted-foreground">
-              {(statusData?.audit_queue_depth ?? 0) === 0
-                ? "Antrean sinkron tanpa jeda (0 pending)"
-                : `${statusData?.audit_queue_depth} event antre tulis ke disk`}
+              {statusData == null
+                ? "data tidak tersedia"
+                : statusData.audit_queue_depth === 0
+                  ? "Antrean sinkron tanpa jeda (0 pending)"
+                  : `${statusData.audit_queue_depth} event antre tulis ke disk`}
             </div>
           </CardContent>
         </Card>
@@ -443,8 +523,15 @@ export default function OverviewPage() {
               <span className="text-xs font-medium">Puncak Beban</span>
               <Clock className="size-4 text-amber-500" aria-hidden />
             </div>
-            <div className="text-2xl font-bold tracking-tight font-mono tabular-nums">
-              {fmtNum(metrics.curPeak)}
+            <div className="flex items-center gap-2">
+              <div className="text-2xl font-bold tracking-tight font-mono tabular-nums">
+                {statusData == null || tsCur.data == null ? "—" : fmtNum(metrics.curPeak)}
+              </div>
+              {(statusData == null || tsCur.data == null) && (
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-muted-foreground font-normal">
+                  data tidak tersedia
+                </Badge>
+              )}
             </div>
             <div className="text-xs text-muted-foreground">
               Keputusan terbanyak per bucket {Math.round((selectedWin.hours * 60) / selectedWin.buckets)}m
@@ -472,7 +559,14 @@ export default function OverviewPage() {
         </CardHeader>
         <CardContent>
           {(() => {
-            const buckets = tsCur.data ?? [];
+            if (tsCur.data == null) {
+              return (
+                <div className="py-12 text-center text-sm text-muted-foreground">
+                  data tidak tersedia
+                </div>
+              );
+            }
+            const buckets = tsCur.data;
             if (buckets.length === 0) {
               return (
                 <div className="py-12 text-center text-sm text-muted-foreground">
@@ -648,7 +742,11 @@ export default function OverviewPage() {
             <ShieldAlert className="size-4 text-destructive" />
           </CardHeader>
           <CardContent>
-            {topRules.length === 0 ? (
+            {statusData == null ? (
+              <div className="py-8 text-center text-xs text-muted-foreground">
+                data tidak tersedia
+              </div>
+            ) : topRules.length === 0 ? (
               <div className="py-8 text-center text-xs text-muted-foreground">
                 Tidak ada penolakan kebijakan dalam 24 jam terakhir.
               </div>
@@ -694,7 +792,11 @@ export default function OverviewPage() {
             <Activity className="size-4 text-amber-500" />
           </CardHeader>
           <CardContent>
-            {topOffenders.length === 0 ? (
+            {agentsSummary == null ? (
+              <div className="py-8 text-center text-xs text-muted-foreground">
+                data tidak tersedia
+              </div>
+            ) : topOffenders.length === 0 ? (
               <div className="py-8 text-center text-xs text-muted-foreground">
                 Seluruh agen beroperasi tanpa penolakan (0 pelanggaran).
               </div>
