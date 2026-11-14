@@ -90,3 +90,25 @@
 - P1 BATCH FIXED `f40dae3`: DebouncedFilterInput 400ms di /decisions (sebelumnya router.replace+refetch per keystroke) · autocomplete=new-password dialog Tambah/Reset user · aria-label Switch bypass flags · Table container role=region tabIndex=0 + th scope=col (berlaku semua tabel).
 - P1 yang ditunda ke post-v0.1.0 (ACCEPTED sementara, bukan blocker rilis): stacked mobile table variant · h1 di /login SSR · konsistensi bahasa ID/EN campur di beberapa card · dua implementasi kill-switch (detail vs editor) digabung satu kontrak · wizard 3-step keluar dari modal jadi halaman penuh di mobile.
 - P2 (30) = polish: di-schedule post-v0.1.0 (queue UI backlog).
+
+## 2026-11-14 · MC 3-layer sweep batch-1+2 (source: agy Flash audit + Hermes live verify)
+| ID | Sev | Temuan | Status | Commit | Bukti verify |
+|---|---|---|---|---|---|
+| MC-01 | P0 | userinfo URL bypass denied_hosts (http.allow) | FIXED | a8c8a0e | live: http.host_denied |
+| MC-02 | P0 | bastion ssh_exec 100% ditolak engine | FIXED | a8c8a0e | live: ssh.allow (uptime) |
+| MC-03 | P0→P1 | tap capConversation truncation scan gap | MITIGATED | (engine guard) | ai.llm.oversized_uninspected deny 69KB live; P1 fix queued |
+| MC-04 | P1 | trailing-dot host bypass (webhook.site.) | FIXED | 637701b | live: 403 |
+| MC-05 | P1 | ssh host:port mismatch allow/deny list | FIXED | a8c8a0e | live: ssh.allow |
+| MC-06 | P1 | args.port diabaikan (bypass port 22-only) | FIXED | a8c8a0e | live: ssh.port_not_allowed |
+| MC-07 | P1 | admin+key-header spoof key_id body (audit attribution) | FIXED | a8c8a0e | live: 401 mismatch |
+| MC-08 | P1 | unauth decide-as-elevated-key (k-prod) | FIXED | a8c8a0e | live: 401; k-open dev tetap allow |
+| MC-09 | P1 | tool_result nested text tak discan tap | FIXED | a8c8a0e | live: 403 tap_blocked |
+| MC-10 | P1 | role=system injection client lolos tap | FIXED | a8c8a0e | live: 403; kontrol sah 200 |
+| SSH-case | P1 | sudo SU kapital bypass deny_commands | FIXED | 637701b | live: ssh.command_denied |
+| MC-11 | P1 | base64-encoded injection tak terdeteksi | OPEN | — | queued |
+| MC-12 | P1 | IPv6 ekspansi (::1 forms) engine decide | OPEN | — | queued; egress transport layer tertutup (Argon R2) |
+| MC-13 | P1 | egress pre-check r.Host vs destURL | OPEN | — | queued |
+| MC-14 | P2 | homoglyph di host_matches (normalize tak dipanggil) | OPEN | — | queued |
+| MC-15 | P2 | filler-word ID bypass scanner imperatives | OPEN | — | queued |
+| MC-16 | P2 | SSE replay→subscribe race (event ms-window hilang) | OPEN | — | queued, low-impact |
+Gates: OPA 292/292 · go test ./... 22 pkts OK · live payload verify engine+tap+egress PASS.
