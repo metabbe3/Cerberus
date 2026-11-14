@@ -357,7 +357,7 @@ func TestRegression_Akar2_ChainsTaintedExfil(t *testing.T) {
 
 	// S05: Docker inspect Prod -> LLM Prompt Leak
 	t.Run("S05_inspect_prod_to_llm", func(t *testing.T) {
-		// Step 1: Docker inspect protected container is allowed (readonly)
+		// Step 1: Docker inspect protected container is denied by shield.container.protected (FIX-2)
 		step1Body := `{
 			"stage": "docker",
 			"key_id": "k-open",
@@ -367,11 +367,12 @@ func TestRegression_Akar2_ChainsTaintedExfil(t *testing.T) {
 		}`
 		resp1 := h.do(t, http.MethodPost, "/v1/decide", "application/json", step1Body, false)
 		d1 := decodeJSON[engine.Decision](t, resp1.Body)
-		if d1.Decision != "allow" {
-			t.Fatalf("S05 step 1: got %s/%s, want allow", d1.Decision, d1.RuleID)
+		if d1.Decision != "deny" || d1.RuleID != "shield.container.protected" {
+			t.Fatalf("S05 step 1: got %s/%s, want deny/shield.container.protected", d1.Decision, d1.RuleID)
 		}
 
-		// Step 2: Passing secret to LLM in the same session must be denied by chain.tainted_exfil
+		// Step 2 with active taint: Passing secret to LLM in the same session must be denied by chain.tainted_exfil
+		h.api.deps.Engine.TaintTracker().RecordTaint("k-open:s05-session", "docker:protected_container")
 		step2Body := `{
 			"stage": "llm",
 			"key_id": "k-open",
@@ -388,13 +389,13 @@ func TestRegression_Akar2_ChainsTaintedExfil(t *testing.T) {
 
 	// S07: Tool cred harvest -> SSH connect
 	t.Run("S07_cred_harvest_to_ssh", func(t *testing.T) {
-		// Step 1: Tool reading ~/.ssh/id_rsa
+		// Step 1: Tool reading ~/.ssh/id_rsa (using valid cmd key to establish taint)
 		step1Body := `{
 			"stage": "tool",
 			"key_id": "k-open",
 			"session_id": "s07-session",
 			"tool_call": "runner",
-			"args": {"exec": "cat ~/.ssh/id_rsa"}
+			"args": {"cmd": "cat ~/.ssh/id_rsa"}
 		}`
 		resp1 := h.do(t, http.MethodPost, "/v1/decide", "application/json", step1Body, false)
 		d1 := decodeJSON[engine.Decision](t, resp1.Body)

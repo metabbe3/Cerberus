@@ -29,17 +29,18 @@ var StandardRuleFamilies = []string{
 
 // StageReport summarizes metrics for an individual stage.
 type StageReport struct {
-	Stage     string  `json:"stage"`
-	Samples   int64   `json:"samples"`
-	Duration  string  `json:"duration"`
-	TPS       float64 `json:"tps"`
-	P50MS     float64 `json:"p50_ms"`
-	P99MS     float64 `json:"p99_ms"`
-	HitsAllow int64   `json:"hits_allow"`
-	HitsDeny  int64   `json:"hits_deny"`
-	Flaky     int64   `json:"flaky"`
-	Escapes   int64   `json:"escapes"`
-	PUB99     float64 `json:"p_ub99"`
+	Stage       string  `json:"stage"`
+	Samples     int64   `json:"samples"`
+	Duration    string  `json:"duration"`
+	TPS         float64 `json:"tps"`
+	P50MS       float64 `json:"p50_ms"`
+	P99MS       float64 `json:"p99_ms"`
+	HitsAllow   int64   `json:"hits_allow"`
+	HitsDeny    int64   `json:"hits_deny"`
+	Flaky       int64   `json:"flaky"`
+	Escapes     int64   `json:"escapes"`
+	ChainBroken int64   `json:"chain_broken,omitempty"`
+	PUB99       float64 `json:"p_ub99"`
 }
 
 // RuleFamilyCoverage metrics for a single rule family.
@@ -51,24 +52,25 @@ type RuleFamilyCoverage struct {
 
 // MonteCarloReport represents the full statistical coverage evaluation.
 type MonteCarloReport struct {
-	Version        string                        `json:"version"`
-	GeneratedAt    time.Time                     `json:"generated_at"`
-	MasterSeed     uint64                        `json:"master_seed"`
-	TotalSamples   int64                         `json:"total_samples"`
-	TotalDuration  string                        `json:"total_duration"`
-	OverallTPS     float64                       `json:"overall_tps"`
-	OverallP50MS   float64                       `json:"overall_p50_ms"`
-	OverallP99MS   float64                       `json:"overall_p99_ms"`
-	TotalAllow     int64                         `json:"total_allow"`
-	TotalDeny      int64                         `json:"total_deny"`
-	TotalFlaky     int64                         `json:"total_flaky"`
-	TotalEscapes   int64                         `json:"total_escapes"`
-	OverallPUB99   float64                       `json:"overall_p_ub99"`
-	Stages         map[string]StageReport        `json:"stages"`
-	CoverageMatrix map[string]RuleFamilyCoverage `json:"coverage_matrix"`
-	DeadRules      []string                      `json:"dead_rules"`
-	FlakyRecords   []FlakyRecord                 `json:"flaky_records,omitempty"`
-	Escapes        []EscapeRecord                `json:"escapes,omitempty"`
+	Version          string                        `json:"version"`
+	GeneratedAt      time.Time                     `json:"generated_at"`
+	MasterSeed       uint64                        `json:"master_seed"`
+	TotalSamples     int64                         `json:"total_samples"`
+	TotalDuration    string                        `json:"total_duration"`
+	OverallTPS       float64                       `json:"overall_tps"`
+	OverallP50MS     float64                       `json:"overall_p50_ms"`
+	OverallP99MS     float64                       `json:"overall_p99_ms"`
+	TotalAllow       int64                         `json:"total_allow"`
+	TotalDeny        int64                         `json:"total_deny"`
+	TotalFlaky       int64                         `json:"total_flaky"`
+	TotalEscapes     int64                         `json:"total_escapes"`
+	TotalChainBroken int64                         `json:"total_chain_broken,omitempty"`
+	OverallPUB99     float64                       `json:"overall_p_ub99"`
+	Stages           map[string]StageReport        `json:"stages"`
+	CoverageMatrix   map[string]RuleFamilyCoverage `json:"coverage_matrix"`
+	DeadRules        []string                      `json:"dead_rules"`
+	FlakyRecords     []FlakyRecord                 `json:"flaky_records,omitempty"`
+	Escapes          []EscapeRecord                `json:"escapes,omitempty"`
 }
 
 // ComputePUB99 calculates the 99% binomial upper bound for escape rate (alpha = 0.01).

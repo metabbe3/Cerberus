@@ -626,3 +626,35 @@ test_db_cte_sensitive_table_violation if {
 	out.decision == "deny"
 	out.rule_id == "db.sensitive_table"
 }
+
+# 37. COPY ... TO 'file' is forbidden file-drop
+test_db_copy_to_file_drop_denied if {
+	out := decide({
+		"stage": "db",
+		"key_id": "k-db-readonly",
+		"tool_call": "sql_exec",
+		"args": {
+			"dialect": "postgres",
+			"sql": "COPY (SELECT * FROM orders LIMIT 9) TO '/tmp/f'",
+			"database": "customers-prod",
+		},
+	})
+	out.decision == "deny"
+	out.rule_id == "db.file_drop_forbidden"
+}
+
+# 38. COPY ... TO STDOUT is allowed
+test_db_copy_to_stdout_allowed if {
+	out := decide({
+		"stage": "db",
+		"key_id": "k-db-readonly",
+		"tool_call": "sql_exec",
+		"args": {
+			"dialect": "postgres",
+			"sql": "COPY (SELECT 1) TO STDOUT",
+			"database": "customers-prod",
+		},
+	})
+	out.decision == "allow"
+	out.rule_id == "db.allow"
+}

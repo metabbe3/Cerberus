@@ -271,7 +271,7 @@ func TestEngine_TaintTrackingFlow(t *testing.T) {
 	// Step 1: Docker inspect protected container with session_id "sess-A"
 	step1 := Input{
 		Stage:     "docker",
-		KeyID:     "k-open",
+		KeyID:     "k-owner",
 		SessionID: "sess-A",
 		Action:    "inspect",
 		Resource:  "teknikalidnew-db-1",
@@ -282,9 +282,9 @@ func TestEngine_TaintTrackingFlow(t *testing.T) {
 	}
 
 	// Verify taint is active for sess-A
-	mark, ok := eng.TaintTracker().GetActiveTaint("k-open:sess-A")
+	mark, ok := eng.TaintTracker().GetActiveTaint("k-owner:sess-A")
 	if !ok {
-		t.Fatal("expected active taint mark for k-open:sess-A")
+		t.Fatal("expected active taint mark for k-owner:sess-A")
 	}
 	if mark.Source != "docker:protected_container" {
 		t.Fatalf("expected source docker:protected_container, got %s", mark.Source)
@@ -293,7 +293,7 @@ func TestEngine_TaintTrackingFlow(t *testing.T) {
 	// Step 2: session "sess-B" on same key tries to egress (POST to github) -> should NOT be blocked
 	step2OtherSession := Input{
 		Stage:     "http",
-		KeyID:     "k-open",
+		KeyID:     "k-owner",
 		SessionID: "sess-B",
 		Action:    "POST",
 		Resource:  "https://api.github.com/gists",
@@ -306,7 +306,7 @@ func TestEngine_TaintTrackingFlow(t *testing.T) {
 	// Step 3: session "sess-A" tries to egress (POST to github) -> MUST be blocked by chain.tainted_exfil
 	step2TaintedSession := Input{
 		Stage:     "http",
-		KeyID:     "k-open",
+		KeyID:     "k-owner",
 		SessionID: "sess-A",
 		Action:    "POST",
 		Resource:  "https://api.github.com/gists",

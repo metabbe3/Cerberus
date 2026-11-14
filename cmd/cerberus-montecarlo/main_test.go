@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -261,5 +262,191 @@ func TestOracleEscape(t *testing.T) {
 	}
 	if !strings.Contains(escs[0].ReproCurl, "curl -s -X POST") {
 		t.Fatalf("invalid repro_curl: %s", escs[0].ReproCurl)
+	}
+}
+
+// TestOracle_ChainBrokenSemantics_S06_S10_S11_S12 verifies HARNESS-1:
+// escape step-2 HANYA dihitung bila step-1 == allow (rantai hidup).
+// Kalau step-1 deny -> step-2 allow = RANTAI PUTUS = bukan escape (log sebagai chain_broken metric, bukan escapes[]).
+func TestOracle_ChainBrokenSemantics_S06_S10_S11_S12(t *testing.T) {
+	chainIDs := []string{"S06", "S10", "S11", "S12"}
+
+	for _, cid := range chainIDs {
+		t.Run(cid+"_broken_chain_produces_zero_escapes", func(t *testing.T) {
+			stepCallCount := 0
+			// Mock server: returns DENY for step 1, ALLOW for step 2
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				stepCallCount++
+				if stepCallCount%2 == 1 {
+					// Step 1: Denied by policy (blocking attack chain)
+					_ = json.NewEncoder(w).Encode(DecisionResponse{
+						Decision: "deny",
+						RuleID:   "shield.test.blocked",
+					})
+				} else {
+					// Step 2: In isolation on clean session it returns allow
+					_ = json.NewEncoder(w).Encode(DecisionResponse{
+						Decision: "allow",
+						RuleID:   "tool.allow",
+					})
+				}
+			}))
+			defer srv.Close()
+
+			chain := OracleChain{
+				ID:   cid,
+				Name: cid + "_test",
+				Step1: map[string]any{
+					"stage": "tool",
+					"cmd":   "attack_step1",
+				},
+				Expected1: OracleVerdict{
+					Decision:   "deny",
+					RuleFamily: "shield.",
+				},
+				Step2: map[string]any{
+					"stage": "tool",
+					"cmd":   "attack_step2",
+				},
+				Expected2: &OracleVerdict{
+					Decision:   "deny",
+					RuleFamily: "chain.",
+				},
+			}
+
+			oracle := NewOracle(srv.Client(), srv.URL, "adm-token", []OracleChain{chain})
+			escs, _, _, err := oracle.RunChain(context.Background(), chain, 9999, 0)
+			if err != nil {
+				t.Fatalf("RunChain: %v", err)
+			}
+
+			// Rantai putus: Step 1 denied, so Step 2 allow must NOT be counted as an escape
+			if len(escs) != 0 {
+				t.Fatalf("[%s] expected 0 escapes for broken chain, got %d: %+v", cid, len(escs), escs)
+			}
+			if oracle.EscapeCount() != 0 {
+				t.Fatalf("[%s] oracle.EscapeCount() = %d, want 0", cid, oracle.EscapeCount())
+			}
+			if oracle.ChainBrokenCount() != 1 {
+				t.Fatalf("[%s] oracle.ChainBrokenCount() = %d, want 1", cid, oracle.ChainBrokenCount())
+			}
+		})
+
+		t.Run(cid+"_alive_chain_records_escape_on_step2", func(t *testing.T) {
+			stepCallCount := 0
+			// Mock server: returns ALLOW for step 1 (alive chain!), ALLOW for step 2 (escape!)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				stepCallCount++
+				_ = json.NewEncoder(w).Encode(DecisionResponse{
+					Decision: "allow",
+					RuleID:   "tool.allow",
+				})
+			}))
+			defer srv.Close()
+
+			chain := OracleChain{
+				ID:   cid,
+				Name: cid + "_test_alive",
+				Step1: map[string]any{
+					"stage": "tool",
+					"cmd":   "attack_step1",
+				},
+				// Expected1 is allow (so step1 does NOT escape, leaving chain alive)
+				Expected1: OracleVerdict{
+					Decision:   "allow",
+					RuleFamily: "tool.",
+				},
+				Step2: map[string]any{
+					"stage": "tool",
+					"cmd":   "attack_step2",
+				},
+				Expected2: &OracleVerdict{
+					Decision:   "deny",
+					RuleFamily: "chain.",
+				},
+			}
+
+			oracle := NewOracle(srv.Client(), srv.URL, "adm-token", []OracleChain{chain})
+			escs, _, _, err := oracle.RunChain(context.Background(), chain, 9999, 0)
+			if err != nil {
+				t.Fatalf("RunChain: %v", err)
+			}
+
+			// Rantai hidup: Step 1 was allow, Step 2 returned allow when Expected2 was deny -> MUST record escape
+			if len(escs) != 1 {
+				t.Fatalf("[%s] expected 1 escape for alive chain, got %d", cid, len(escs))
+			}
+			if escs[0].ChainID != cid+"-step2" {
+				t.Fatalf("[%s] expected escape on step2, got %s", cid, escs[0].ChainID)
+			}
+			if oracle.EscapeCount() != 1 {
+				t.Fatalf("[%s] oracle.EscapeCount() = %d, want 1", cid, oracle.EscapeCount())
+			}
+		})
+	}
+}
+
+// TestSampler_IPVariantAndUnicodeMutators verifies HARNESS-2 mutator generation.
+func TestSampler_IPVariantAndUnicodeMutators(t *testing.T) {
+	space, err := LoadScenarioSpace("scenario-space.json")
+	if err != nil {
+		t.Fatalf("LoadScenarioSpace: %v", err)
+	}
+
+	sampler := NewSampler(space)
+	r := rand.New(rand.NewPCG(42, 84)) // #nosec G404 // deterministic MC seed by design
+
+	// Test GenerateIPVariant
+	for i := 0; i < 20; i++ {
+		v := sampler.GenerateIPVariant("10.0.0.1", r)
+		if v == "" {
+			t.Fatalf("expected non-empty IP variant")
+		}
+	}
+
+	// Test mutateString
+	seenWordJoiner := false
+	seenSoftHyphen := false
+	seenBOM := false
+	seenHomoglyph := false
+
+	for i := 0; i < 200; i++ {
+		res := sampler.mutateString("prod-db", r)
+		if strings.Contains(res, "\u2060") {
+			seenWordJoiner = true
+		}
+		if strings.Contains(res, "\u00ad") {
+			seenSoftHyphen = true
+		}
+		if strings.Contains(res, "\ufeff") {
+			seenBOM = true
+		}
+		if strings.Contains(res, "\u0433") || strings.Contains(res, "\u0440") || strings.Contains(res, "\u043e") {
+			seenHomoglyph = true
+		}
+	}
+
+	if !seenWordJoiner {
+		t.Errorf("expected to see word-joiner \\u2060 in mutations")
+	}
+	if !seenSoftHyphen {
+		t.Errorf("expected to see soft-hyphen \\u00ad in mutations")
+	}
+	if !seenBOM {
+		t.Errorf("expected to see BOM \\ufeff in mutations")
+	}
+	if !seenHomoglyph {
+		t.Errorf("expected to see Cyrillic homoglyph in mutations")
+	}
+
+	// Verify all stages sample without panic
+	stages := []string{"tool", "llm", "http", "db", "k8s", "docker", "ssh"}
+	for _, st := range stages {
+		for i := uint64(0); i < 50; i++ {
+			req := sampler.SampleStageRequest(st, r, i)
+			if req["stage"] != st {
+				t.Fatalf("stage = %v, want %s", req["stage"], st)
+			}
+		}
 	}
 }

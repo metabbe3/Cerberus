@@ -230,9 +230,12 @@ http_shield_target if prod.touches_prod(resource)
 
 link_local_cidrs := [
 	"169.254.0.0/16",
+	"fe80::/10",
+]
+
+loopback_cidrs := [
 	"127.0.0.0/8",
 	"::1/128",
-	"fe80::/10",
 ]
 
 clean_host(h) := ch if {
@@ -260,6 +263,15 @@ http_link_local_forbidden if {
 }
 
 http_link_local_forbidden if {
+	not object.get(args, "allow_loopback", false) == true
+	ch := clean_host(req_host)
+	ch != ""
+	is_valid_ip(ch)
+	some cidr in loopback_cidrs
+	net.cidr_contains(cidr, ch)
+}
+
+http_link_local_forbidden if {
 	regex.match(`^[0-9]+$`, req_host)
 	n := to_number(req_host)
 	n >= 2851995648 # 169.254.0.0
@@ -267,6 +279,7 @@ http_link_local_forbidden if {
 }
 
 http_link_local_forbidden if {
+	not object.get(args, "allow_loopback", false) == true
 	regex.match(`^[0-9]+$`, req_host)
 	n := to_number(req_host)
 	n >= 2130706432 # 127.0.0.0

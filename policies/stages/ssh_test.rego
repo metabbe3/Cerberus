@@ -145,6 +145,49 @@ test_ssh_exec_safe_command_allowed if {
 	out.rule_id == "ssh.allow"
 }
 
+# 6b. Staged script from world-writable paths is forbidden
+test_ssh_exec_staged_script_tmp_denied if {
+	out := decide({
+		"stage": "ssh",
+		"key_id": "k-open",
+		"action": "exec",
+		"host": "dev.teknikal.id",
+		"user": "ubuntu",
+		"port": 22,
+		"command": "sh /tmp/p.sh",
+	})
+	out.decision == "deny"
+	out.rule_id == "ssh.staged_script_forbidden"
+}
+
+test_ssh_exec_staged_script_var_tmp_denied if {
+	out := decide({
+		"stage": "ssh",
+		"key_id": "k-open",
+		"action": "exec",
+		"host": "dev.teknikal.id",
+		"user": "ubuntu",
+		"port": 22,
+		"command": "bash /var/tmp/x.sh",
+	})
+	out.decision == "deny"
+	out.rule_id == "ssh.staged_script_forbidden"
+}
+
+test_ssh_exec_proper_path_allowed if {
+	out := decide({
+		"stage": "ssh",
+		"key_id": "k-open",
+		"action": "exec",
+		"host": "dev.teknikal.id",
+		"user": "ubuntu",
+		"port": 22,
+		"command": "/opt/deploy/run.sh",
+	})
+	out.decision == "allow"
+	out.rule_id == "ssh.allow"
+}
+
 # 7. Fail-closed on unknown host
 test_ssh_fail_closed_unknown_host if {
 	out := decide({

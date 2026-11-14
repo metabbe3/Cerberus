@@ -76,7 +76,7 @@ test_create_with_host_network_denies if {
 	out.rule_id == "docker.host_namespace_forbidden"
 }
 
-test_logs_on_protected_container_allowed if {
+test_logs_on_protected_container_denied if {
 	out := evald({
 		"stage": "docker",
 		"key_id": "k-agent",
@@ -84,5 +84,6 @@ test_logs_on_protected_container_allowed if {
 		"resource": "teknikalidnew-db-1",
 		"args": {},
 	})
-	out.decision == "allow"
+	out.decision == "deny"
+	out.rule_id == "shield.container.protected"
 }

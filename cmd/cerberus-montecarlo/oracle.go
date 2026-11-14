@@ -37,13 +37,14 @@ type DecisionResponse struct {
 
 // Oracle executes oracle chains and determines whether policy decisions match specifications.
 type Oracle struct {
-	client    *http.Client
-	decideURL string
-	token     string
-	chains    []OracleChain
-	mu        sync.Mutex
-	escapes   []EscapeRecord
-	escapeCnt int64
+	client         *http.Client
+	decideURL      string
+	token          string
+	chains         []OracleChain
+	mu             sync.Mutex
+	escapes        []EscapeRecord
+	escapeCnt      int64
+	chainBrokenCnt int64
 }
 
 // NewOracle constructs an Oracle with the given client, URL, token, and chains.
@@ -70,6 +71,19 @@ func (o *Oracle) EscapeCount() int64 {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.escapeCnt
+}
+
+// ChainBrokenCount returns the total number of broken chains where step 1 was denied.
+func (o *Oracle) ChainBrokenCount() int64 {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.chainBrokenCnt
+}
+
+func (o *Oracle) recordChainBroken() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.chainBrokenCnt++
 }
 
 // RunChain executes one oracle chain by index or ID and returns escapes, allowCount, and denyCount.
@@ -122,22 +136,29 @@ func (o *Oracle) RunChain(ctx context.Context, chain OracleChain, masterSeed uin
 			denies++
 		}
 
-		escaped2 := isEscape(*chain.Expected2, resp2)
-		if escaped2 {
-			rec := EscapeRecord{
-				Seed:               DeriveSeed(masterSeed, StageIDChains, idx+1000000),
-				SampleIdx:          idx,
-				Stage:              "chains",
-				ChainID:            chain.ID + "-step2",
-				InputJSON:          string(body2),
-				ExpectedDecision:   chain.Expected2.Decision,
-				ExpectedRuleFamily: chain.Expected2.RuleFamily,
-				ActualDecision:     resp2.Decision,
-				ActualRuleID:       resp2.RuleID,
-				ReproCurl:          FormatCurl(o.decideURL, o.token, body2),
+		// Escape step-2 HANYA dihitung bila step-1 == allow (rantai hidup).
+		// Kalau step-1 deny -> step-2 allow = RANTAI PUTUS = bukan escape (log sebagai chain_broken metric, bukan escapes[]).
+		if resp1.Decision == "allow" {
+			escaped2 := isEscape(*chain.Expected2, resp2)
+			if escaped2 {
+				rec := EscapeRecord{
+					Seed:               DeriveSeed(masterSeed, StageIDChains, idx+1000000),
+					SampleIdx:          idx,
+					Stage:              "chains",
+					ChainID:            chain.ID + "-step2",
+					InputJSON:          string(body2),
+					ExpectedDecision:   chain.Expected2.Decision,
+					ExpectedRuleFamily: chain.Expected2.RuleFamily,
+					ActualDecision:     resp2.Decision,
+					ActualRuleID:       resp2.RuleID,
+					ReproCurl:          FormatCurl(o.decideURL, o.token, body2),
+				}
+				o.recordEscape(rec)
+				results = append(results, rec)
 			}
-			o.recordEscape(rec)
-			results = append(results, rec)
+		} else {
+			// Step-1 was denied: attack chain broken at step 1.
+			o.recordChainBroken()
 		}
 	}
 

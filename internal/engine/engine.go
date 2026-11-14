@@ -149,7 +149,55 @@ func (d Decision) Allowed() bool {
 	return d.Decision == "allow"
 }
 
+func normalizeValue(v any) any {
+	switch val := v.(type) {
+	case string:
+		s := util.NormalizeString(val)
+		if strings.Contains(s, "://") {
+			s = util.NormalizeCommandURLs(s)
+		}
+		return s
+	case map[string]any:
+		return normalizeMap(val)
+	case []any:
+		res := make([]any, len(val))
+		for i, item := range val {
+			res[i] = normalizeValue(item)
+		}
+		return res
+	case []string:
+		res := make([]string, len(val))
+		for i, s := range val {
+			res[i] = util.NormalizeString(s)
+		}
+		return res
+	default:
+		return v
+	}
+}
+
+func normalizeMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	res := make(map[string]any, len(m))
+	for k, v := range m {
+		normKey := util.NormalizeString(k)
+		res[normKey] = normalizeValue(v)
+	}
+	return res
+}
+
 func normalizeInput(in Input) Input {
+	in.Prompt = util.NormalizeString(in.Prompt)
+	in.Command = util.NormalizeString(in.Command)
+	in.Host = util.NormalizeString(in.Host)
+	in.Resource = util.NormalizeString(in.Resource)
+	in.Action = util.NormalizeString(in.Action)
+	in.ToolCall = util.NormalizeString(in.ToolCall)
+	in.KeyID = util.NormalizeString(in.KeyID)
+	in.User = util.NormalizeString(in.User)
+
 	if in.Stage == "http" {
 		if in.Resource != "" {
 			in.Resource = util.NormalizeURLResource(in.Resource)
@@ -158,6 +206,19 @@ func normalizeInput(in Input) Input {
 			in.Host = util.NormalizeIPString(in.Host)
 		}
 	}
+
+	if in.Args != nil {
+		in.Args = normalizeMap(in.Args)
+	}
+
+	if in.Messages != nil {
+		normMsgs := make([]map[string]any, len(in.Messages))
+		for i, m := range in.Messages {
+			normMsgs[i] = normalizeMap(m)
+		}
+		in.Messages = normMsgs
+	}
+
 	return in
 }
 
@@ -604,12 +665,48 @@ func str(v any) string {
 // checkShellGuard validates tool commands using shellguard AST extraction.
 // If stage=="tool" and args contains "cmd", "command", or "script", it parses and extracts simple commands.
 // Any parse error, forbidden AST construct, or unknown command produces a fail-closed deny with "shellguard.unparseable".
+// Also denies any non-standard command keys (exec, argv, run, execute, command_line) or runner tools missing command keys.
 func (e *Engine) checkShellGuard(snap *policy.Snapshot, in Input) *Decision {
 	if in.Stage != "tool" || in.Args == nil {
 		return nil
 	}
+
+	// Fail-closed for non-standard command keys (e.g. exec, argv, run, execute, command_line)
+	for _, k := range []string{"exec", "argv", "run", "execute", "command_line"} {
+		if v, ok := in.Args[k]; ok && v != nil && v != "" {
+			return &Decision{
+				Decision: "deny",
+				RuleID:   "shellguard.unparseable",
+				Reason:   fmt.Sprintf("tool args contains non-standard command key %q (fail-closed, want cmd|command|script)", k),
+				Epoch:    snap.Epoch,
+			}
+		}
+	}
+
+	// Fail-closed for command runner tools missing required command keys
+	switch strings.ToLower(in.ToolCall) {
+	case "runner", "shell_run", "bash", "sh", "terminal", "exec":
+		hasStandard := false
+		for _, k := range []string{"cmd", "command", "script"} {
+			if v, ok := in.Args[k]; ok {
+				if s, ok := v.(string); ok && s != "" {
+					hasStandard = true
+					break
+				}
+			}
+		}
+		if !hasStandard {
+			return &Decision{
+				Decision: "deny",
+				RuleID:   "shellguard.unparseable",
+				Reason:   fmt.Sprintf("tool call %q missing required command argument cmd|command|script (fail-closed)", in.ToolCall),
+				Epoch:    snap.Epoch,
+			}
+		}
+	}
+
 	var cmdStr string
-	for _, k := range []string{"cmd", "command", "script", "exec", "argv"} {
+	for _, k := range []string{"cmd", "command", "script"} {
 		if v, ok := in.Args[k]; ok {
 			if s, ok := v.(string); ok && s != "" {
 				cmdStr = s

@@ -174,6 +174,9 @@ func DetectSensitiveSource(in Input) (string, bool) {
 		if sensitiveTableRegex.MatchString(sql) {
 			return "db:sensitive_table", true
 		}
+		if strings.Contains(strings.ToLower(sql), "copy") && strings.Contains(strings.ToLower(sql), "to") {
+			return "db:file_drop", true
+		}
 		if in.Args != nil {
 			if db, ok := in.Args["database"].(string); ok {
 				ldb := strings.ToLower(db)
@@ -224,8 +227,13 @@ func DetectSensitiveSource(in Input) (string, bool) {
 	case "tool":
 		if in.Args != nil {
 			for _, v := range in.Args {
-				if s, ok := v.(string); ok && credPatternRegex.MatchString(s) {
-					return "tool:credential_harvest", true
+				if s, ok := v.(string); ok {
+					if credPatternRegex.MatchString(s) {
+						return "tool:credential_harvest", true
+					}
+					if strings.Contains(s, ">") || strings.Contains(s, "/tmp/") || strings.Contains(s, "/var/tmp/") || strings.Contains(s, "/dev/shm/") {
+						return "tool:staged_script_write", true
+					}
 				}
 			}
 		}
@@ -266,7 +274,7 @@ func IsEgressAttempt(in Input) bool {
 		return true
 	case "db":
 		act := strings.ToLower(in.Action)
-		if act == "write" || act == "insert" || act == "update" || act == "delete" {
+		if act == "write" || act == "insert" || act == "update" || act == "delete" || act == "copy" {
 			return true
 		}
 		var sql string
@@ -280,7 +288,7 @@ func IsEgressAttempt(in Input) bool {
 		if sql == "" {
 			sql = in.Resource
 		}
-		if writeSQLRegex.MatchString(sql) {
+		if writeSQLRegex.MatchString(sql) || (strings.Contains(strings.ToLower(sql), "copy") && strings.Contains(strings.ToLower(sql), "to")) {
 			return true
 		}
 	case "k8s":

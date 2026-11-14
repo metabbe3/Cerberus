@@ -129,24 +129,25 @@ func (rn *Runner) Run(ctx context.Context) (*MonteCarloReport, error) {
 	}
 
 	rep := &MonteCarloReport{
-		Version:        "1.0.0",
-		GeneratedAt:    time.Now().UTC(),
-		MasterSeed:     rn.cfg.MasterSeed,
-		TotalSamples:   totalSamples,
-		TotalDuration:  totalDur.String(),
-		OverallTPS:     overallTPS,
-		OverallP50MS:   totalRep.P50MS,
-		OverallP99MS:   totalRep.P99MS,
-		TotalAllow:     totalAllow,
-		TotalDeny:      totalDeny,
-		TotalFlaky:     totalFlaky,
-		TotalEscapes:   totalEscapes,
-		OverallPUB99:   totalRep.PUB99,
-		Stages:         stagesMap,
-		CoverageMatrix: matrix,
-		DeadRules:      dead,
-		FlakyRecords:   rn.flaky.Records(),
-		Escapes:        rn.oracle.Escapes(),
+		Version:          "1.0.0",
+		GeneratedAt:      time.Now().UTC(),
+		MasterSeed:       rn.cfg.MasterSeed,
+		TotalSamples:     totalSamples,
+		TotalDuration:    totalDur.String(),
+		OverallTPS:       overallTPS,
+		OverallP50MS:     totalRep.P50MS,
+		OverallP99MS:     totalRep.P99MS,
+		TotalAllow:       totalAllow,
+		TotalDeny:        totalDeny,
+		TotalFlaky:       totalFlaky,
+		TotalEscapes:     totalEscapes,
+		TotalChainBroken: rn.oracle.ChainBrokenCount(),
+		OverallPUB99:     totalRep.PUB99,
+		Stages:           stagesMap,
+		CoverageMatrix:   matrix,
+		DeadRules:        dead,
+		FlakyRecords:     rn.flaky.Records(),
+		Escapes:          rn.oracle.Escapes(),
 	}
 
 	return rep, nil
@@ -304,6 +305,9 @@ func (rn *Runner) runStage(ctx context.Context, stage string) (StageReport, []fl
 		Flaky:     flakyCnt,
 		Escapes:   escapeCnt,
 		PUB99:     ComputePUB99(int64(len(lats)), escapeCnt),
+	}
+	if stage == "chains" {
+		report.ChainBroken = rn.oracle.ChainBrokenCount()
 	}
 
 	return report, lats, nil
