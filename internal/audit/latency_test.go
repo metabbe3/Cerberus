@@ -52,12 +52,19 @@ func TestLatencyStatsAndFailClosed(t *testing.T) {
 		LatencyUS: 5000,
 	})
 
-	// Wait for queue flush to SQLite
-	time.Sleep(300 * time.Millisecond)
-
-	stats, err := l.LatencyStats(ctx, now.Add(-1*time.Hour))
-	if err != nil {
-		t.Fatalf("LatencyStats failed: %v", err)
+	// Poll hingga queue flush ke SQLite (async; sleep tetap di CI lambat).
+	var stats *LatencyStats
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var err error
+		stats, err = l.LatencyStats(ctx, now.Add(-1*time.Hour))
+		if err != nil {
+			t.Fatalf("LatencyStats failed: %v", err)
+		}
+		if (stats != nil && stats.FailClosedCount >= 2 && stats.P50US > 0) || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	if stats.FailClosedCount != 2 {
