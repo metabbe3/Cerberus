@@ -92,24 +92,31 @@ func TestBreachesAndAgentsSummary(t *testing.T) {
 		h.auditLog.Emit(ev)
 	}
 
-	// Wait for audit logger to flush events
-	time.Sleep(50 * time.Millisecond)
-
-	// 1. Test GET /v1/audit/breaches
-	req, _ := http.NewRequest(http.MethodGet, h.ts.URL+"/v1/audit/breaches?since=24h", nil)
-	req.Header.Set("Authorization", "Bearer "+adminToken)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("GET /v1/audit/breaches: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
-	}
-
+	// 1. Test GET /v1/audit/breaches — poll hingga audit logger selesai flush
+	// (pipeline audit async; sleep tetap di CI lambat — poll dengan deadline).
 	var breachRes audit.BreachResult
-	if err := json.NewDecoder(resp.Body).Decode(&breachRes); err != nil {
-		t.Fatalf("decode breach result: %v", err)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		req, _ := http.NewRequest(http.MethodGet, h.ts.URL+"/v1/audit/breaches?since=24h", nil)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET /v1/audit/breaches: %v", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			_ = resp.Body.Close()
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+		breachRes = audit.BreachResult{}
+		if err := json.NewDecoder(resp.Body).Decode(&breachRes); err != nil {
+			_ = resp.Body.Close()
+			t.Fatalf("decode breach result: %v", err)
+		}
+		_ = resp.Body.Close()
+		if breachRes.Summary.Total >= 3 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	// Verify Summary:
