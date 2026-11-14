@@ -314,6 +314,12 @@ tool_decision := {
 	shield_container_protected
 } else := {
 	"decision": "deny",
+	"rule_id": "shield.protected_path",
+	"reason": sprintf("tool arg path touches protected path: %s", [protected_path_hit]),
+} if {
+	tool_protected_path_hit
+} else := {
+	"decision": "deny",
 	"rule_id": "shield.cmd.dangerous",
 	"reason": shield_cmd_reason,
 } if {
@@ -476,6 +482,18 @@ llm_target_prod if {
 	is_string(input.prompt)
 	prod.prod_ip(input.prompt)
 }
+
+# tool_protected_path_hit: any string arg value touches prod_shield.protected_paths
+protected_path_hit := hit if {
+	some v in prod.all_arg_strings(input.args)
+	prod.protected_path(v)
+	hit := v
+}
+
+tool_protected_path_hit if {
+	count([v | some v in prod.all_arg_strings(input.args); prod.protected_path(v)]) > 0
+}
+
 llm_target_prod if {
 	some m in input.messages
 	is_string(m.content)

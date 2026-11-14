@@ -75,6 +75,24 @@ touches_prod(text) if {
 	contains(norm_text, normalize(kw))
 }
 
+
+# protected_path(path): true if path matches a prod_shield.protected_paths entry.
+# Entries without "*" are treated as prefixes (~/.ssh covers ~/.ssh/id_rsa);
+# wildcard entries use free glob (* crosses "/" — delimiter null).
+protected_path(path) if {
+	is_string(path)
+	some p in object.get(data.prod_shield, "protected_paths", [])
+	not contains(p, "*")
+	startswith(normalize(path), normalize(p))
+}
+
+protected_path(path) if {
+	is_string(path)
+	some p in object.get(data.prod_shield, "protected_paths", [])
+	contains(p, "*")
+	glob.match(normalize(p), null, normalize(path))
+}
+
 # dangerous_cmd(cmd): set of pattern ids that match regex.match
 dangerous_cmd(cmd) := ids if {
 	is_string(cmd)

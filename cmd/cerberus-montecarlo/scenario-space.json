@@ -6,10 +6,10 @@
   },
   "stages_weights": {
     "riil": {
-      "tool": 0.30,
-      "llm": 0.20,
+      "tool": 0.3,
+      "llm": 0.2,
       "http": 0.15,
-      "db": 0.10,
+      "db": 0.1,
       "k8s": 0.05,
       "docker": 0.03,
       "ssh": 0.02
@@ -29,8 +29,8 @@
     ]
   },
   "tool_calls": {
-    "riil_weight": 0.70,
-    "adversarial_weight": 0.30,
+    "riil_weight": 0.7,
+    "adversarial_weight": 0.3,
     "riil": [
       "shell_run",
       "bash",
@@ -185,11 +185,26 @@
         "dev"
       ],
       "flags": [
-        ["-o", "jsonpath={.data}"],
-        ["-o", "yaml"],
-        ["-o", "json"],
-        ["--", "sh"],
-        ["--namespace", "kube-system"]
+        [
+          "-o",
+          "jsonpath={.data}"
+        ],
+        [
+          "-o",
+          "yaml"
+        ],
+        [
+          "-o",
+          "json"
+        ],
+        [
+          "--",
+          "sh"
+        ],
+        [
+          "--namespace",
+          "kube-system"
+        ]
       ]
     },
     "databases": [
@@ -669,13 +684,13 @@
     {
       "id": "OP02",
       "name": "glob_mismatch_logs",
-      "description": "Opus Glob tool negation mismatch: logs/* vs logs/**",
+      "description": "Sensitive/protected path read via tool args (shield.protected_path)",
       "step1": {
         "stage": "tool",
         "key_id": "k-open",
         "tool_call": "read_file",
         "args": {
-          "path": "logs/secret/keys.log"
+          "path": "~/.ssh/id_rsa"
         }
       },
       "expected1": {
@@ -703,7 +718,7 @@
     {
       "id": "OP04",
       "name": "capture_2mb_truncation_bypass",
-      "description": "Opus Capture 2MB±10byte truncation boundary JSON parsing",
+      "description": "Opus Capture 2MB\u00b110byte truncation boundary JSON parsing",
       "step1": {
         "stage": "llm",
         "key_id": "k-open",
