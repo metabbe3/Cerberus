@@ -1109,6 +1109,84 @@ func TestEvents_LastEventIDReconnect(t *testing.T) {
 	}
 }
 
+// --- MC-16: SSE subscribe before replay race test ---
+
+func TestEvents_SubscribeBeforeReplayRace(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+
+	// Step 1: Emit 2 initial events
+	h.do(t, http.MethodPost, "/v1/decide", "application/json", decideAllowBody, false)
+	h.do(t, http.MethodPost, "/v1/decide", "application/json", decideAllowBody, false)
+
+	var recent []audit.Event
+	found := false
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		recent = h.auditLog.Recent(2)
+		if len(recent) >= 2 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("recent len = %d after 5s, want >= 2", len(recent))
+	}
+	firstID := recent[1].ID
+
+	// Step 2: Connect with Last-Event-ID set to firstID
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.ts.URL+"/v1/events", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Last-Event-ID", strconv.FormatInt(firstID, 10))
+
+	resp, err := h.ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("get events: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	// Step 3: Concurrently emit 2 more events during the connection / stream start
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		h.do(t, http.MethodPost, "/v1/decide", "application/json", decideAllowBody, false)
+		h.do(t, http.MethodPost, "/v1/decide", "application/json", decideAllowBody, false)
+	}()
+
+	// Step 4: Collect streamed event IDs (expecting total 3 events: event 2, 3, 4)
+	sc := bufio.NewScanner(resp.Body)
+	seenIDs := make(map[int64]int)
+	for sc.Scan() {
+		line := sc.Text()
+		if strings.HasPrefix(line, "id: ") {
+			idStr := strings.TrimPrefix(line, "id: ")
+			id, err := strconv.ParseInt(idStr, 10, 64)
+			if err == nil {
+				seenIDs[id]++
+				if len(seenIDs) >= 3 {
+					break
+				}
+			}
+		}
+	}
+
+	for id, count := range seenIDs {
+		if id <= firstID {
+			t.Errorf("received event %d <= Last-Event-ID %d", id, firstID)
+		}
+		if count > 1 {
+			t.Errorf("duplicate event %d received %d times", id, count)
+		}
+	}
+	if len(seenIDs) < 3 {
+		t.Fatalf("expected at least 3 events (1 replay + 2 live), got %d: %+v", len(seenIDs), seenIDs)
+	}
+}
+
 func TestAdmin_UploadBundle(t *testing.T) {
 	t.Parallel()
 	h := newHarnessCopy(t)

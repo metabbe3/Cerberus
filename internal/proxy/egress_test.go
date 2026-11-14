@@ -1234,3 +1234,80 @@ func TestEgressProxy_RedirectProdIPBlocked(t *testing.T) {
 		t.Fatalf("expected rule_id shield.prod.ip_blocked, got %v", errBody["rule_id"])
 	}
 }
+
+// --- MC-13: Egress pre-check r.Host vs destURL mismatch ---
+
+func TestEgressProxy_ConnectHostMismatchRejected(t *testing.T) {
+	eng := setupTestEngine(t)
+	egress, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		DenyLocalIPs:  &[]bool{false}[0],
+		FallbackKeyID: "k-open",
+	})
+	if err != nil {
+		t.Fatalf("NewEgressProxy: %v", err)
+	}
+
+	// 1. CONNECT request where request line host differs from Host header
+	rec := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodConnect, "//webhook.site:443", nil)
+	req.Host = "allowed.com:443"
+	req.Header.Set("X-Cerberus-Key", "k-open")
+	egress.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request on CONNECT host mismatch, got: %d", rec.Code)
+	}
+
+	// 2. CONNECT request with userinfo matching Host header post-userinfo-strip
+	targetListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("target listen: %v", err)
+	}
+	defer func() { _ = targetListener.Close() }()
+
+	proxyServer := httptest.NewServer(egress)
+	defer func() {
+		proxyServer.CloseClientConnections()
+		proxyServer.Close()
+	}()
+
+	conn2, err := net.Dial("tcp", proxyServer.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer func() { _ = conn2.Close() }()
+
+	targetHost := targetListener.Addr().String()
+	rawReq2 := "CONNECT user:pass@" + targetHost + " HTTP/1.1\r\nHost: " + targetHost + "\r\nX-Cerberus-Key: k-open\r\n\r\n"
+	if _, err := conn2.Write([]byte(rawReq2)); err != nil {
+		t.Fatalf("write rawReq2: %v", err)
+	}
+
+	reader2 := bufio.NewReader(conn2)
+	statusLine2, err := reader2.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read status line 2: %v", err)
+	}
+	if !strings.Contains(statusLine2, "200") {
+		t.Fatalf("expected 200 Connection Established when userinfo stripped matches, got: %s", statusLine2)
+	}
+}
+
+func TestEgressProxy_HTTPHostMismatchRejected(t *testing.T) {
+	eng := setupTestEngine(t)
+	egress, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		DenyLocalIPs:  &[]bool{false}[0],
+		FallbackKeyID: "k-open",
+	})
+	if err != nil {
+		t.Fatalf("NewEgressProxy: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "http://api.openai.com/v1/models", nil)
+	req.Host = "api.anthropic.com"
+	req.Header.Set("X-Cerberus-Key", "k-open")
+	egress.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request on HTTP host mismatch, got: %d", rec.Code)
+	}
+}

@@ -306,6 +306,51 @@ test_http_link_local_ipv6_mapped_denied if {
 	out.rule_id == "http.link_local_forbidden"
 }
 
+# --- Regression: IPv6 Expansion SSRF Guard (MC-12) ---
+test_http_link_local_ipv6_hex_mapped_denied if {
+	out := decide({
+		"stage": "http",
+		"key_id": "k-http",
+		"action": "GET",
+		"resource": "http://[::ffff:a9fe:a9fe]/latest/meta-data/iam/",
+	})
+	out.decision == "deny"
+	out.rule_id == "http.link_local_forbidden"
+}
+
+test_http_link_local_ipv6_unbracketed_denied if {
+	out := decide({
+		"stage": "http",
+		"key_id": "k-http",
+		"action": "GET",
+		"resource": "::ffff:169.254.169.254",
+	})
+	out.decision == "deny"
+	out.rule_id == "http.link_local_forbidden"
+}
+
+test_http_link_local_ipv6_expanded_loopback_denied if {
+	out := decide({
+		"stage": "http",
+		"key_id": "k-http",
+		"action": "GET",
+		"resource": "http://[0:0:0:0:0:0:0:1]/admin",
+	})
+	out.decision == "deny"
+	out.rule_id == "http.link_local_forbidden"
+}
+
+test_http_link_local_ipv6_unbracketed_loopback_denied if {
+	out := decide({
+		"stage": "http",
+		"key_id": "k-http",
+		"action": "GET",
+		"resource": "::1",
+	})
+	out.decision == "deny"
+	out.rule_id == "http.link_local_forbidden"
+}
+
 test_http_link_local_loopback_denied if {
 	out := decide({
 		"stage": "http",

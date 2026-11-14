@@ -209,3 +209,19 @@ test_host_matches_wildcard_trailing_dot if {
 test_host_matches_no_at_still_blocked if {
 	not host_matches("webhook.site", "user@webhook.site")
 }
+
+# --- Regression: Homoglyph normalization in host_matches (MC-14) ---
+test_host_matches_homoglyph_cyrillic_e if {
+	# Cyrillic 'е' (\u0435) in input matches ASCII pattern
+	host_matches("webhook.site", "wеbhook.site")
+}
+
+test_host_matches_homoglyph_pattern if {
+	# Cyrillic 'е' in pattern matches ASCII input
+	host_matches("wеbhook.site", "webhook.site")
+}
+
+test_host_matches_homoglyph_wildcard if {
+	# Wildcard with Cyrillic 'е' in input
+	host_matches("*.webhook.site", "sub.wеbhook.site")
+}

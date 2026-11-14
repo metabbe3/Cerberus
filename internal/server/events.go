@@ -30,11 +30,17 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 
+	// Subscribe FIRST so no live event is missed during replay / connection setup (MC-16)
+	ch, cancel := s.deps.Audit.Subscribe()
+	defer cancel()
+
 	// Replay: if Last-Event-ID header is present, replay ring events since that ID.
 	// Otherwise, replay the last 50 ring events, oldest → newest.
 	var replay []audit.Event
+	var maxReplayedID int64
 	if lastIDStr := r.Header.Get("Last-Event-ID"); lastIDStr != "" {
 		if lastID, err := strconv.ParseInt(lastIDStr, 10, 64); err == nil && lastID > 0 {
+			maxReplayedID = lastID
 			replay = s.deps.Audit.Since(lastID)
 		}
 	}
@@ -46,6 +52,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, ev := range replay {
+		if ev.ID > maxReplayedID {
+			maxReplayedID = ev.ID
+		}
 		if !writeFrame(w, ev) {
 			return
 		}
@@ -53,9 +62,6 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	if err := flusher.Flush(); err != nil {
 		return
 	}
-
-	ch, cancel := s.deps.Audit.Subscribe()
-	defer cancel()
 
 	ping := time.NewTicker(pingEvery)
 	defer ping.Stop()
@@ -75,6 +81,13 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		case ev, ok := <-ch:
 			if !ok {
 				return
+			}
+			if ev.ID > 0 && ev.ID <= maxReplayedID {
+				// Drop event already replayed from store / ring buffer (MC-16)
+				continue
+			}
+			if ev.ID > maxReplayedID {
+				maxReplayedID = ev.ID
 			}
 			if !writeFrame(w, ev) {
 				return

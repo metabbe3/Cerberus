@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/base64"
+	"regexp"
 	"strings"
 	"unicode"
 )
@@ -71,6 +73,28 @@ var overrideImperatives = []string{
 	"lupakan semua instruksi",
 	"hiraukan instruksi sebelumnya",
 	"jangan ikuti instruksi",
+}
+
+// overrideRegexes menangani filler-word/kata sisipan pada imperatif umum (MC-15).
+var overrideRegexes = []*regexp.Regexp{
+	regexp.MustCompile(`\b(abaikan|lupakan|hiraukan|jangan ikuti|jangan patuhi)\b[^.\n]{0,30}\b(instruksi|perintah|arahan)\b`),
+	regexp.MustCompile(`\b(ignore|disregard|forget|override)\b[^.\n]{0,30}\b(instructions?|previous|directions?|prompts?)\b`),
+}
+
+// b64CandidateRe mendeteksi substring kandidat base64 dengan panjang minimal 20 karakter (MC-11).
+var b64CandidateRe = regexp.MustCompile(`[A-Za-z0-9+/]{20,}={0,2}`)
+
+// isPrintableASCII memastikan hasil decode base64 adalah teks ASCII murni (bukan gambar/binary).
+func isPrintableASCII(b []byte) bool {
+	if len(b) == 0 {
+		return false
+	}
+	for _, c := range b {
+		if (c < 0x20 || c > 0x7E) && c != '\n' && c != '\r' && c != '\t' {
+			return false
+		}
+	}
+	return true
 }
 
 var roleHijacks = []string{
@@ -189,9 +213,23 @@ func ScanInjection(turns []map[string]any) []scanHit {
 		// Pesan assistant jarang jadi vektor injeksi langsung, tapi
 		// tool-result yang dibaca LLM bisa menularkan payload
 		// (indirect injection) — tetap discan dengan ambang sama.
+		overrideMatched := false
 		for _, p := range overrideImperatives {
 			if strings.Contains(norm, p) && !inQuestionContext(content, p) {
 				hits = append(hits, scanHit{Rule: "injection.override", Evied: clipAround(content, p)})
+				overrideMatched = true
+			}
+		}
+		// MC-15: filler-words / kata sisipan pada imperatif
+		if !overrideMatched {
+			for _, re := range overrideRegexes {
+				if loc := re.FindStringIndex(norm); loc != nil {
+					matched := norm[loc[0]:loc[1]]
+					if !inQuestionContext(content, matched) {
+						hits = append(hits, scanHit{Rule: "injection.override", Evied: clipAround(content, matched)})
+						break
+					}
+				}
 			}
 		}
 		for _, p := range roleHijacks {
@@ -215,6 +253,61 @@ func ScanInjection(turns []map[string]any) []scanHit {
 				tail := strings.TrimSpace(norm[idx+len(marker):])
 				if containsImperative(tail) {
 					hits = append(hits, scanHit{Rule: "injection.system_impersonation", Evied: clipAround(content, marker)})
+				}
+			}
+		}
+
+		// MC-11: decode kandidat base64 (heuristik: len >= 20 [A-Za-z0-9+/=], printable ASCII)
+		for _, candidate := range b64CandidateRe.FindAllString(content, -1) {
+			dec, err := base64.StdEncoding.DecodeString(candidate)
+			if err != nil {
+				dec, err = base64.RawStdEncoding.DecodeString(candidate)
+			}
+			if err != nil || len(dec) == 0 || !isPrintableASCII(dec) {
+				continue
+			}
+			decStr := string(dec)
+			decNorm := normalizeInline(toASCII(decStr))
+
+			b64Override := false
+			for _, p := range overrideImperatives {
+				if strings.Contains(decNorm, p) && !inQuestionContext(decStr, p) {
+					hits = append(hits, scanHit{
+						Rule:  "injection.override",
+						Evied: clipAround(decStr, p) + " (base64-decoded)",
+					})
+					b64Override = true
+					break
+				}
+			}
+			if !b64Override {
+				for _, re := range overrideRegexes {
+					if loc := re.FindStringIndex(decNorm); loc != nil {
+						matched := decNorm[loc[0]:loc[1]]
+						if !inQuestionContext(decStr, matched) {
+							hits = append(hits, scanHit{
+								Rule:  "injection.override",
+								Evied: clipAround(decStr, matched) + " (base64-decoded)",
+							})
+							break
+						}
+					}
+				}
+			}
+			for _, p := range roleHijacks {
+				if strings.Contains(decNorm, p) && !inQuestionContext(decStr, p) {
+					hits = append(hits, scanHit{
+						Rule:  "injection.role_hijack",
+						Evied: clipAround(decStr, p) + " (base64-decoded)",
+					})
+				}
+			}
+			for _, p := range exfilRequests {
+				if strings.Contains(decNorm, p) && !inQuestionContext(decStr, p) {
+					hits = append(hits, scanHit{
+						Rule:  "injection.exfil_prompt",
+						Evied: clipAround(decStr, p) + " (base64-decoded)",
+					})
 				}
 			}
 		}

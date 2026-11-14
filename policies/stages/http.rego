@@ -40,6 +40,13 @@ extract_host(raw) := h if {
 	contains(raw2, "://")
 	after_proto := split(raw2, "://")[1]
 	host_port := split(after_proto, "/")[0]
+	count(split(host_port, ":")) > 2
+	h = host_port
+} else := h if {
+	raw2 := strip_userinfo(raw)
+	contains(raw2, "://")
+	after_proto := split(raw2, "://")[1]
+	host_port := split(after_proto, "/")[0]
 	h = split(host_port, ":")[0]
 } else := h if {
 	raw2 := strip_userinfo(raw)
@@ -47,6 +54,11 @@ extract_host(raw) := h if {
 	contains(raw2, "]")
 	host_port := split(raw2, "/")[0]
 	h = split(split(host_port, "]")[0], "[")[1]
+} else := h if {
+	raw2 := strip_userinfo(raw)
+	host_port := split(raw2, "/")[0]
+	count(split(host_port, ":")) > 2
+	h = host_port
 } else := h if {
 	raw2 := strip_userinfo(raw)
 	host_port := split(raw2, "/")[0]
@@ -60,12 +72,29 @@ extract_port(raw) := p if {
 	contains(raw, "://")
 	after_proto := split(raw, "://")[1]
 	host_port := split(after_proto, "/")[0]
-	contains(host_port, ":")
+	contains(host_port, "[")
+	contains(host_port, "]")
+	after_bracket := split(host_port, "]")[1]
+	contains(after_bracket, ":")
+	p = split(after_bracket, ":")[1]
+} else := p if {
+	not contains(raw, "://")
+	host_port := split(raw, "/")[0]
+	contains(host_port, "[")
+	contains(host_port, "]")
+	after_bracket := split(host_port, "]")[1]
+	contains(after_bracket, ":")
+	p = split(after_bracket, ":")[1]
+} else := p if {
+	contains(raw, "://")
+	after_proto := split(raw, "://")[1]
+	host_port := split(after_proto, "/")[0]
+	count(split(host_port, ":")) == 2
 	p = split(host_port, ":")[1]
 } else := p if {
 	not contains(raw, "://")
 	host_port := split(raw, "/")[0]
-	contains(host_port, ":")
+	count(split(host_port, ":")) == 2
 	p = split(host_port, ":")[1]
 } else := "443" if {
 	startswith(raw, "https://")
@@ -224,7 +253,17 @@ agent_has_prod_access if authz.agent_has_prod_access
 
 http_prod_ip_blocked if {
 	not agent_has_prod_access
+	prod.prod_ip(clean_host(req_host))
+}
+
+http_prod_ip_blocked if {
+	not agent_has_prod_access
 	prod.prod_ip(req_host)
+}
+
+http_prod_no_access if {
+	not agent_has_prod_access
+	prod.touches_prod(clean_host(req_host))
 }
 
 http_prod_no_access if {
@@ -237,7 +276,11 @@ http_prod_no_access if {
 	prod.touches_prod(resource)
 }
 
+http_shield_target if prod.prod_ip(clean_host(req_host))
+
 http_shield_target if prod.prod_ip(req_host)
+
+http_shield_target if prod.touches_prod(clean_host(req_host))
 
 http_shield_target if prod.touches_prod(req_host)
 
@@ -255,10 +298,49 @@ loopback_cidrs := [
 	"::1/128",
 ]
 
-clean_host(h) := ch if {
-	h1 := trim(h, "[]")
-	startswith(lower(h1), "::ffff:")
-	ch := substring(h1, 7, -1)
+hex_char_map := {
+	"0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9,
+	"a": 10, "b": 11, "c": 12, "d": 13, "e": 14, "f": 15,
+}
+
+pad_hex4(w) := substring(concat("", ["0000", w]), count(w), 4)
+
+hex_byte_val(s) := (hex_char_map[substring(s, 0, 1)] * 16) + hex_char_map[substring(s, 1, 1)]
+
+hex_to_ipv4(w1, w2) := sprintf("%d.%d.%d.%d", [b1, b2, b3, b4]) if {
+	p1 := pad_hex4(w1)
+	p2 := pad_hex4(w2)
+	b1 := hex_byte_val(substring(p1, 0, 2))
+	b2 := hex_byte_val(substring(p1, 2, 2))
+	b3 := hex_byte_val(substring(p2, 0, 2))
+	b4 := hex_byte_val(substring(p2, 2, 2))
+}
+
+clean_host(h) := "::1" if {
+	lh := lower(trim(h, "[]"))
+	regex.match(`^(::1|::0*1|(?:0+:){7}0*1)$`, lh)
+} else := tail if {
+	lh := lower(trim(h, "[]"))
+	startswith(lh, "::ffff:")
+	tail := substring(lh, 7, -1)
+	regex.match(`^([0-9]{1,3}\.){3}[0-9]{1,3}$`, tail)
+} else := hex_to_ipv4(parts[0], parts[1]) if {
+	lh := lower(trim(h, "[]"))
+	startswith(lh, "::ffff:")
+	tail := substring(lh, 7, -1)
+	regex.match(`^[0-9a-f]{1,4}:[0-9a-f]{1,4}$`, tail)
+	parts := split(tail, ":")
+} else := tail if {
+	lh := lower(trim(h, "[]"))
+	regex.match(`^(?:0+:){5}ffff:`, lh)
+	tail := split(lh, "ffff:")[1]
+	regex.match(`^([0-9]{1,3}\.){3}[0-9]{1,3}$`, tail)
+} else := hex_to_ipv4(parts[0], parts[1]) if {
+	lh := lower(trim(h, "[]"))
+	regex.match(`^(?:0+:){5}ffff:`, lh)
+	tail := split(lh, "ffff:")[1]
+	regex.match(`^[0-9a-f]{1,4}:[0-9a-f]{1,4}$`, tail)
+	parts := split(tail, ":")
 } else := trim(h, "[]")
 
 # Guard to avoid eval_builtin_error under rego.StrictBuiltinErrors.

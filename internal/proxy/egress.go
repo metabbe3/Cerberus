@@ -196,6 +196,15 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if (urlHost == "http:" || urlHost == "https:") && strings.HasPrefix(r.URL.Path, "//") {
 		urlHost = strings.TrimPrefix(r.URL.Path, "//")
 	}
+	if urlHost == "" {
+		if r.RequestURI != "" && !strings.HasPrefix(r.RequestURI, "/") {
+			urlHost = r.RequestURI
+		} else if r.URL.Opaque != "" {
+			urlHost = r.URL.Opaque
+		} else if r.URL.Path != "" && !strings.HasPrefix(r.URL.Path, "/") {
+			urlHost = r.URL.Path
+		}
+	}
 	targets := make([]string, 0, 2)
 	if urlHost != "" {
 		targets = append(targets, urlHost)
@@ -260,7 +269,17 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 3. Dial target host (prefer explicit URL.Host if set, otherwise r.Host)
+	// 3. Enforce dstHost == reqHost string-equal post-userinfo-strip before dial (MC-13)
+	if urlHost != "" && r.Host != "" {
+		dstHost, _, _ := util.ExtractHost(urlHost)
+		reqHost, _, _ := util.ExtractHost(r.Host)
+		if dstHost != "" && reqHost != "" && !strings.EqualFold(dstHost, reqHost) {
+			http.Error(w, "host mismatch between CONNECT request line and Host header", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// 4. Dial target host (prefer explicit URL.Host if set, otherwise r.Host)
 	dialTarget := urlHost
 	if dialTarget == "" {
 		dialTarget = r.Host
@@ -392,6 +411,14 @@ func (p *EgressProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	dec := p.engine.Decide(r.Context(), in)
 	if !dec.Allowed() {
 		p.writeForbidden(w, dec)
+		return
+	}
+
+	// Enforce dstHost == reqHost string-equal post-userinfo-strip before dial (MC-13)
+	destH, _, _ := util.ExtractHost(destURL)
+	reqH, _, _ := util.ExtractHost(r.Host)
+	if destH != "" && reqH != "" && !strings.EqualFold(destH, reqH) {
+		http.Error(w, "host mismatch between request URL and Host header", http.StatusBadRequest)
 		return
 	}
 
