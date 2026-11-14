@@ -70,3 +70,11 @@
 - U-GAP-4: kuota harian/budget tak terekspos → OPEN → U3
 - U-GAP-5: kill_switch tanpa metadata (waktu/alasan/event pemicu) → OPEN (fase L)
 - U-GAP-6: filter Stage Owl cuma llm/tool → OPEN → U6
+
+## F4 ACCEPTANCE RUN — 14 Nov 2026 (mandor: Hermes)
+- F4-LOAD: engine terisolasi :18089, loadgen 6 level — MAX SUSTAINED 105.800 TPS (p99 1,3ms, err 0%) — naik dari baseline 85k. Status: DONE.
+- F4-REDTEAM: 12 serangan vs gerbang live (8089/8088/2377) — 10 BLOCKED / 2 WARN / 0 EXPOSED, exit 0. Status: DONE.
+- F4-MC: Monte Carlo 27.000 sampel (7 stage × 3.000 + chains 6.000, seed 20261114) — 0 escape, 0 flaky, p_ub99 0,000171. Status: DONE.
+- F4-QUICKSTART: scripts/get.sh live GitHub syntax-verified (321 baris), QUICKSTART.md 270 baris konsisten. Status: DONE.
+- F4-PILOT: teknikal-agent via cerberus-tap :8090 key k-tekbot — full-loop terverifikasi (request+response turn terekam tap-DB, ai.llm.allow di audit engine, deny fail-closed terekam kind=blocked). TEMUAN: token admin gate STALE pasca-rotasi #395 → tap strict fail-closed senyap; FIX: compose gate disinkronkan + recreate, verify 200. Status: FIXED (pola: rotasi token WAJIB sentuh ~/cerberus-gate/docker-compose.yml).
+- F5: tag v0.1.0 setelah soak 48h + ROADMAP update. Status: OPEN.

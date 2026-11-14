@@ -15,9 +15,9 @@ MVP untuk 60 user eksternal + ratusan agent (target rilis: **v0.1.0**). Semua me
 | Hardening merge R+H+S+M | ✅ DONE | commit `5d626a8`→`fe1afc8`, CI hijau |
 | F3: exec wrapper + unifikasi engine + tenant quota + SSH pubkey + cluster + custom-stage | ✅ DONE | commit `d29384e`, OPA 257/257, CI hijau termasuk GHCR image pertama |
 | Monte Carlo: harness + 5 run iteratif → **0 escape / 45k sampel** | ✅ DONE | [MONTE-CARLO.md](qa/MONTE-CARLO.md) · ledger MC-R1 FIXED · 12.353→0 dalam 4 batch fix (`45ec079`→`977210a`) |
-| Batch U: Owl UX (breach center, detail per-agent, policy explorer) | ⏳ QUEUED | rencana di ledger & tracker |
-| F4: acceptance (quickstart fresh-VM, 10 serangan, load, soak 48h, pilot real-agent containerized) | ⏳ QUEUED | — |
-| F5: release v0.1.0 + ROADMAP + soak | ⏳ QUEUED | [ROADMAP.md](ROADMAP.md) |
+| Batch U+U2: Owl Production Dashboard (breach center, inspector, agents, user-DB auth Argon2id+RBAC, upstream LLM AES-GCM, users mgmt) | ✅ DONE | commits `9ce0996`..UI fase A-G; live cerberus.hivepos.id E2E |
+| F4: acceptance — load 105.8k TPS · red-team 12 serangan 10 BLOCKED/2 WARN/0 EXPOSED · MC 27k sampel 0 escape · quickstart get.sh verified · pilot teknikal-agent via tap k-tekbot full-loop (turn+audit terekam) | ✅ DONE (14 Nov) | mc-report /tmp/mc-report-f4.json · gate live |
+| F5: release v0.1.0 + ROADMAP + soak 48h | 🔄 IN-PROGRESS | tag v0.1.0 saat soak selesai |
 
 ## Apa yang Sudah Diuji (3 lapis QA)
 
