@@ -172,11 +172,13 @@ user_not_allowed if {
 	not user_allowed
 }
 
-# Command rule for exec action: checked against deny_commands regexes
+# Command rule for exec action: checked against deny_commands regexes.
+# lower(command): deny patterns are authored lowercase — "sudo SU -" must not
+# slip past "sudo\s+su\b.*" (case bypass, found 14 Nov MC sweep).
 command_denied if {
 	action == "exec"
 	some pat in deny_commands
-	regex.match(pat, command)
+	regex.match(pat, lower(command))
 }
 
 # Staged script execution guard: forbids executing scripts located in world-writable directories

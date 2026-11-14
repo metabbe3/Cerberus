@@ -41,21 +41,27 @@ call_matches_pattern(pattern, name) if {
 	lower(name) == lower(pattern)
 }
 # Host matching: exact match OR wildcard suffix (*.domain) without userinfo and host != suffix.
+# Normalization: lowercase + strip trailing dots on BOTH sides — "webhook.site." must
+# still match denied pattern "webhook.site" (FQDN absolute-form bypass, found 14 Nov MC sweep).
+host_norm(h) := trim_lower if {
+	trim_lower := trim_right(lower(h), ".")
+}
+
 host_matches("*", _) if true
 
 host_matches(pattern, h) if {
 	pattern != "*"
 	not startswith(pattern, "*.")
 	not contains(h, "@")
-	lower(h) == lower(pattern)
+	host_norm(h) == host_norm(pattern)
 }
 
 host_matches(pattern, h) if {
 	startswith(pattern, "*.")
 	not contains(h, "@")
 	suffix := substring(pattern, 1, -1)
-	lower(h) != lower(suffix)
-	endswith(lower(h), lower(suffix))
+	host_norm(h) != host_norm(suffix)
+	endswith(host_norm(h), host_norm(suffix))
 }
 
 # Common pattern matcher: glob with ":" separator, glob with empty delimiter, or case-insensitive exact.

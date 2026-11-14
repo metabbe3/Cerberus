@@ -329,3 +329,18 @@ test_ssh_fingerprint_mismatch_denied if {
 	out.decision == "deny"
 	out.rule_id == "ssh.auth_pubkey_mismatch"
 }
+
+# --- Regression: case bypass in deny_commands (14 Nov MC sweep) ---
+test_exec_dangerous_case_bypass_denied if {
+	out := decide({
+		"stage": "ssh",
+		"key_id": "k-open",
+		"action": "exec",
+		"resource": "bastion.teknikal.id",
+		"user": "deploy",
+		"port": 22,
+		"args": {"cmd": "RM -RF /"},
+	})
+	out.decision == "deny"
+	out.rule_id == "ssh.command_denied"
+}

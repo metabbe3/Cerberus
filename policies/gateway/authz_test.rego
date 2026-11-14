@@ -10,6 +10,7 @@ package gateway.authz_test
 import rego.v1
 
 import data.gateway.authz.decision
+import data.gateway.authz.host_matches
 
 decide(inp) := out if {
 	out := decision with input as inp
@@ -189,4 +190,22 @@ test_stranger_bypass_global_budget_invalid if {
 		with data.domains as data.testdata.domains
 	out.decision == "deny"
 	out.rule_id == "ai.llm.budget_invalid"
+}
+
+# --- Regression: FQDN trailing-dot bypass (14 Nov MC sweep) ---
+test_host_matches_trailing_dot_denied if {
+	# "webhook.site." must match pattern "webhook.site"
+	host_matches("webhook.site", "webhook.site.")
+}
+
+test_host_matches_trailing_dot_both_sides if {
+	host_matches("webhook.site.", "WEBHOOK.site")
+}
+
+test_host_matches_wildcard_trailing_dot if {
+	host_matches("*.webhook.site", "evil.WEBHOOK.site.")
+}
+
+test_host_matches_no_at_still_blocked if {
+	not host_matches("webhook.site", "user@webhook.site")
 }
