@@ -10,6 +10,10 @@
 
 ## Ledger
 
+### 2026-11-14 (U2 Production-Grade Dashboard — 7 fase, riset Argon+Opus+LiteLLM)
+- U2 [DONE] A 58e196f Command Center (safety banner, deny-rate+delta, fail-closed tile, nav 5 pilar) · B 4e854ef Inspector drawer+trace+fingerprint dedup+URL filter · C 98e3eb5 Agents server-side+quota burn+bundle trust trail · D 4b4b175 polish ID formal+empty-states · E 4fd5908 user DB auth (Argon2id, sessions, lockout, RBAC viewer 403, ADR-0005) · F 6026fb3 block-key 1-klik+CSV RFC4180 · G upstream LLM fleksibel (AES-256-GCM store, PUT/test endpoint, tap hot-reload atomic, Owl UpstreamCard) — budget USD dicetak tebal OUT per keputusan positioning #396. Gate: make test hijau (semua pkg), vitest 57/57, build 21+ pages. Item 24 (downstream capture toggle + halaman Turns) → U3. (AGY Flash A-F + Hermes G sendiri)
+
+
 ### 2026-11-14 (Batch U Owl UX — breach center + explorer)
 - U [DONE] GET /v1/audit/breaches server-side (3-tier severity, top offenders) + halaman /breaches Owl + severity map + detail per-agent; U7 Policy Explorer read-only: GET /v1/policy/modules + POST /v1/policy/test-run (282 test runnable dari dashboard); fix U1 audit-args-NULL. Gate: make test hijau penuh, opa 282/282, lint 0, vitest 55/55, build 21 pages. (AGY Flash build, Hermes verify mandiri)
 
