@@ -52,8 +52,8 @@ func TestLoad_BuildsQuery(t *testing.T) {
 	if !snap.RuleIDs["ai.tool.allow"] {
 		t.Fatal("RuleIDs does not contain ai.tool.allow")
 	}
-	if !snap.Stages["tool"] || !snap.Stages["ssh"] {
-		t.Fatal("Stages does not contain tool or ssh")
+	if !snap.Stages["tool"] || !snap.Stages["ssh"] || !snap.Stages["db"] || !snap.Stages["k8s"] {
+		t.Fatal("Stages does not contain tool, ssh, db, or k8s")
 	}
 
 	input := map[string]any{
