@@ -9,15 +9,15 @@ import {
   ChevronRight,
   Flame,
   Radio,
-  RefreshCw,
   Search,
-  ShieldAlert,
   Skull,
   X,
 } from "lucide-react";
 import { InspectorDrawer } from "@/components/decisions/inspector-drawer";
 import { PageHeader } from "@/components/page-header";
 import { ActivitySubNav } from "@/components/sub-nav";
+import { EmptyState } from "@/components/empty-state";
+import { RefreshIndicator } from "@/components/refresh-indicator";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -204,16 +204,11 @@ function BreachCenterContent() {
           <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
             Stream Otomatis <Switch checked={live} onCheckedChange={setLive} />
           </label>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-8 text-xs"
-            onClick={() => refetch()}
-            disabled={isPending}
-          >
-            <RefreshCw className={`size-3.5 mr-1.5 ${isPending ? "animate-spin" : ""}`} />
-            Perbarui
-          </Button>
+          <RefreshIndicator
+            autoIntervalSec={10}
+            onRefresh={() => refetch()}
+            isRefreshing={isPending}
+          />
         </div>
       </PageHeader>
 
@@ -483,9 +478,22 @@ function BreachCenterContent() {
             <TableBody>
               {filteredSignals.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="h-32 text-center text-xs text-muted-foreground">
-                    <ShieldAlert className="size-8 mx-auto text-emerald-500 mb-2" />
-                    Tidak ada security breach terdeteksi untuk filter saat ini.
+                  <TableCell colSpan={8} className="p-4">
+                    {hasActiveFilters ? (
+                      <EmptyState
+                        type="filtered-out"
+                        title="Tidak Ada Sinyal Pelanggaran yang Cocok"
+                        hint="Tidak ada event pelanggaran yang cocok dengan filter yang aktif saat ini."
+                        actionLabel="Reset Semua Filter"
+                        onAction={clearAllFilters}
+                      />
+                    ) : (
+                      <EmptyState
+                        type="clean-security"
+                        title="Sistem Aman — Nol Pelanggaran Terdeteksi"
+                        hint="Seluruh evaluasi kebijakan mematuhi aturan keamanan gateway tanpa pelanggaran keamanan dalam periode ini."
+                      />
+                    )}
                   </TableCell>
                 </TableRow>
               ) : (

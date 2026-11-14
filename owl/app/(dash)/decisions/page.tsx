@@ -2,12 +2,13 @@
 
 import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { AlertCircle, Radio, RefreshCw, X } from "lucide-react";
+import { AlertCircle, Radio, X } from "lucide-react";
 import { AuditTable } from "@/components/decisions/audit-table";
 import { InspectorDrawer } from "@/components/decisions/inspector-drawer";
 import { useDecisionStream } from "@/components/decisions/stream";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
+import { RefreshIndicator } from "@/components/refresh-indicator";
 import { ActivitySubNav } from "@/components/sub-nav";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -169,16 +170,11 @@ function DecisionsContent() {
         )}
 
         <div className="ml-auto flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 text-xs"
-            onClick={() => history.refetch()}
-            disabled={history.isFetching}
-          >
-            <RefreshCw className={`size-3.5 mr-1.5 ${history.isFetching ? "animate-spin" : ""}`} />
-            Perbarui
-          </Button>
+          <RefreshIndicator
+            autoIntervalSec={5}
+            onRefresh={() => history.refetch()}
+            isRefreshing={history.isFetching}
+          />
         </div>
       </div>
 
@@ -205,13 +201,17 @@ function DecisionsContent() {
       {events.length === 0 && !history.isPending ? (
         hasActiveFilters ? (
           <EmptyState
-            title="Tidak ada keputusan yang cocok"
-            hint="Tidak ada event keputusan yang sesuai dengan filter yang aktif. Coba ubah atau reset filter."
+            type="filtered-out"
+            title="Tidak Ada Keputusan yang Cocok"
+            hint="Tidak ada event keputusan yang sesuai dengan parameter filter yang sedang aktif."
+            actionLabel="Reset Semua Filter"
+            onAction={clearAllFilters}
           />
         ) : (
           <EmptyState
-            title="Belum ada catatan keputusan"
-            hint="Kirim request ke gateway melalui curl atau SDK untuk mulai merekam keputusan kebijakan."
+            type="zero-data"
+            title="Belum Ada Catatan Keputusan"
+            hint="Kirim request ke gateway melalui curl atau SDK untuk mulai merekam evaluasi kebijakan."
           />
         )
       ) : (

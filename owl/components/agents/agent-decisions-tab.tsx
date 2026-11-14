@@ -124,7 +124,8 @@ export function AgentDecisionsTab({ keyId }: { keyId: string }) {
 
       {events.length === 0 && !history.isPending ? (
         <EmptyState
-          title="Belum ada aktivitas keputusan"
+          type="zero-data"
+          title="Belum Ada Aktivitas Keputusan"
           hint={`Kirim permintaan POST /v1/decide/* dengan key "${keyId}" untuk melihat riwayat evaluasi gateway.`}
         />
       ) : (

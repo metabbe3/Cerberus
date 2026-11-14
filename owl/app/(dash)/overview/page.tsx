@@ -12,12 +12,12 @@ import {
   CheckCircle2,
   Clock,
   Layers,
-  RefreshCw,
   ShieldAlert,
   ShieldCheck,
   Zap,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
+import { RefreshIndicator } from "@/components/refresh-indicator";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -81,6 +81,7 @@ function Sparkline({ data, stroke }: { data: number[]; stroke: string }) {
 export default function OverviewPage() {
   const [win, setWin] = useState<WindowId>("24h");
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date>(() => new Date());
 
   const selectedWin = WINDOWS.find((w) => w.id === win)!;
 
@@ -116,6 +117,7 @@ export default function OverviewPage() {
   });
 
   const handleRefreshAll = () => {
+    setLastUpdated(new Date());
     refetchStatus();
     refetchComps();
     tsCur.refetch();
@@ -203,16 +205,11 @@ export default function OverviewPage() {
               </Button>
             ))}
           </div>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-9 px-2 text-xs"
-            onClick={handleRefreshAll}
-            title="Muat ulang data"
-          >
-            <RefreshCw className="size-3.5 mr-1.5" />
-            Perbarui
-          </Button>
+          <RefreshIndicator
+            lastUpdated={lastUpdated}
+            autoIntervalSec={30}
+            onRefresh={handleRefreshAll}
+          />
         </div>
       </PageHeader>
 
