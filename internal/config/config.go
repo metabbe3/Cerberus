@@ -13,6 +13,10 @@ import (
 
 // Default limits, ceilings, and timeouts across Cerberus.
 const (
+	DefaultAddr           = ":8089"
+	DefaultPolicyDir      = "policies"
+	DefaultDataFile       = "data/prod.json"
+	DefaultAuditDB        = "cerberus.db"
 	DefaultCacheSize      = 10000
 	DefaultEvalTimeout    = 3 * time.Second // was 10ms: OPA cold compile on slow runners spiked internal.timeout denials
 	DefaultRetentionDays  = 30
@@ -53,10 +57,10 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	c := Config{
-		Addr:               firstNonEmpty(getenv("CERBERUS_ADDR"), ":8089"),
-		PolicyDir:          firstNonEmpty(getenv("CERBERUS_POLICY_DIR"), "policies"),
-		DataFile:           firstNonEmpty(getenv("CERBERUS_DATA_FILE"), "data/prod.json"),
-		AuditDB:            firstNonEmpty(getenv("CERBERUS_AUDIT_DB"), "cerberus.db"),
+		Addr:               firstNonEmpty(getenv("CERBERUS_ADDR"), DefaultAddr),
+		PolicyDir:          firstNonEmpty(getenv("CERBERUS_POLICY_DIR"), DefaultPolicyDir),
+		DataFile:           firstNonEmpty(getenv("CERBERUS_DATA_FILE"), DefaultDataFile),
+		AuditDB:            firstNonEmpty(getenv("CERBERUS_AUDIT_DB"), DefaultAuditDB),
 		PGDSN:              getenv("CERBERUS_PG_DSN"),
 		AuditRetentionDays: retentionDays,
 		ShipURL:            firstNonEmpty(getenv("CERBERUS_DECISION_LOG_SHIP_URL"), getenv("CERBERUS_SHIP_URL")),

@@ -249,6 +249,41 @@ func TestStore_OnSwap_MultipleCallbacks(t *testing.T) {
 	}
 }
 
+func TestStore_OnSwap_Unsubscribe(t *testing.T) {
+	s, _ := newTestStore(t)
+
+	var calls atomic.Int32
+	cancel := s.OnSwap(func(_ *Snapshot) {
+		calls.Add(1)
+	})
+
+	if s.SwapCallbacksLen() != 1 {
+		t.Fatalf("expected 1 callback, got %d", s.SwapCallbacksLen())
+	}
+
+	_, err := s.Reload(context.Background())
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("expected 1 call, got %d", calls.Load())
+	}
+
+	// Cancel / unsubscribe
+	cancel()
+	if s.SwapCallbacksLen() != 0 {
+		t.Fatalf("expected 0 callbacks after cancel, got %d", s.SwapCallbacksLen())
+	}
+
+	_, err = s.Reload(context.Background())
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("expected no new calls after unsubscribe, got %d", calls.Load())
+	}
+}
+
 func TestStore_Reload_RejectsCorruptDataWithoutAgents(t *testing.T) {
 	s, dataPath := newTestStore(t)
 	oldSnap := s.Current()

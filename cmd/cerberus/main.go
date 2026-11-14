@@ -103,7 +103,8 @@ func run() error {
 				if snap, serr := store.ReplaceData(ctx, dataJSON); serr != nil {
 					slog.Warn("cerberus: pg data rejected, keeping file", "err", serr)
 				} else {
-					slog.Info("cerberus: booted from postgres", "epoch", snap.Epoch, "agents", len(data["agents"].(map[string]any)))
+					agents, _ := data["agents"].(map[string]any)
+					slog.Info("cerberus: booted from postgres", "epoch", snap.Epoch, "agents", len(agents))
 				}
 			} else {
 				slog.Warn("cerberus: pg load failed, using flat file", "err", lerr)
@@ -130,6 +131,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("cerberus: engine: %w", err)
 	}
+	defer eng.Close()
 
 	stopHUP := watchHUP(ctx, store, log)
 	defer stopHUP()

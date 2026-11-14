@@ -86,6 +86,15 @@ func apply(rules []Rule, scope string, v any) (any, bool) {
 			changed = changed || c
 		}
 		return out, changed
+	case []map[string]any:
+		out := make([]any, len(t))
+		changed := false
+		for i, val := range t {
+			nv, c := apply(rules, scope, val)
+			out[i] = nv
+			changed = changed || c
+		}
+		return out, changed
 	case string:
 		return transform(rules, scope, t)
 	default:

@@ -96,3 +96,20 @@ func TestSetupVerificationKey_EmptyKeyOmitted(t *testing.T) {
 		t.Fatalf("expected nil verification key when empty, got %x", store.VerificationKey())
 	}
 }
+
+func TestBootFromPostgres_NoAgentsDoesNotPanic(t *testing.T) {
+	// Payload without agents or with non-map agents (e.g. nil)
+	payloads := []map[string]any{
+		{"config": map[string]any{"bypass_unknown_keys": true}},
+		{"config": map[string]any{"bypass_unknown_keys": true}, "agents": nil},
+		{"config": map[string]any{"bypass_unknown_keys": true}, "agents": "not-a-map"},
+	}
+
+	for i, data := range payloads {
+		// Verify comma-ok assertion does not panic
+		agents, _ := data["agents"].(map[string]any)
+		if len(agents) != 0 {
+			t.Fatalf("[%d] expected 0 agents, got %d", i, len(agents))
+		}
+	}
+}

@@ -10,6 +10,11 @@ import (
 	"sync/atomic"
 )
 
+type swapSub struct {
+	id uint64
+	fn func(*Snapshot)
+}
+
 // Store holds the current Snapshot behind an atomic pointer. Current is
 // lock-free on the hot path; mu only serializes Reload/ReplaceData against
 // each other so epochs increase monotonically.
@@ -21,7 +26,8 @@ type Store struct {
 	mu              sync.Mutex
 	// onSwaps holds callbacks invoked after each successful swap.
 	// Protected by mu.
-	onSwaps         []func(*Snapshot)
+	onSwaps         []swapSub
+	nextSwapID      uint64
 	prevSnapshot    *Snapshot
 	prevBundle      []byte
 	prevAddedFiles  []string
@@ -60,20 +66,41 @@ func (s *Store) SetCurrentBundle(b []byte) {
 
 // OnSwap registers f to run after each successful snapshot swap (Reload,
 // ReplaceData, LoadBundle, Rollback). Callbacks are executed under mu in registration order.
-func (s *Store) OnSwap(f func(*Snapshot)) {
+// It returns a cancel function that unsubscribes the callback.
+func (s *Store) OnSwap(f func(*Snapshot)) func() {
+	if f == nil {
+		return func() {}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if f != nil {
-		s.onSwaps = append(s.onSwaps, f)
+	s.nextSwapID++
+	id := s.nextSwapID
+	s.onSwaps = append(s.onSwaps, swapSub{id: id, fn: f})
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for i, sub := range s.onSwaps {
+			if sub.id == id {
+				s.onSwaps = append(s.onSwaps[:i], s.onSwaps[i+1:]...)
+				break
+			}
+		}
 	}
 }
 
 func (s *Store) notifySwaps(snap *Snapshot) {
-	for _, fn := range s.onSwaps {
-		if fn != nil {
-			fn(snap)
+	for _, sub := range s.onSwaps {
+		if sub.fn != nil {
+			sub.fn(snap)
 		}
 	}
+}
+
+// SwapCallbacksLen returns the number of active OnSwap callbacks (used for testing).
+func (s *Store) SwapCallbacksLen() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.onSwaps)
 }
 
 // NewStore builds the first Snapshot (epoch 1) from policyDir and dataPath.
@@ -101,11 +128,11 @@ func (s *Store) Current() *Snapshot { return s.ptr.Load() }
 func (s *Store) PolicyDir() string { return s.policyDir }
 
 // Coverage computes the current test coverage across policies.
-func (s *Store) Coverage(_ context.Context) (*CoverageReport, error) {
+func (s *Store) Coverage(ctx context.Context) (*CoverageReport, error) {
 	if s.policyDir == "" {
 		return &CoverageReport{}, nil
 	}
-	rep, err := ComputeCoverage(s.policyDir)
+	rep, err := ComputeCoverage(ctx, s.policyDir)
 	if err != nil {
 		return nil, err
 	}

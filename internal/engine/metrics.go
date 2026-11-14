@@ -68,6 +68,12 @@ func SetBundleRevision(rev string) {
 	bundleRevisionGauge.WithLabelValues(rev).Set(1)
 }
 
+// ResetEpochMetrics clears the per-epoch cache counters so old epoch series do not accumulate.
+func ResetEpochMetrics() {
+	cacheHitsEpoch.Reset()
+	cacheMissesEpoch.Reset()
+}
+
 // Stats returns the current cache hits and misses totals from metrics.
 func (e *Engine) Stats() (hits uint64, misses uint64) {
 	var m1 dto.Metric

@@ -27,6 +27,16 @@ type AuditCounter interface {
 }
 
 // Config defines rate limiting parameters for an agent key.
+const dayLayout = "20060102"
+
+var (
+	rpmAliases        = []string{"requests_per_minute", "requests_per_min", "rpm"}
+	burstAliases      = []string{"bursts", "burst"}
+	toolHourlyAliases = []string{"tool_calls_per_hour", "tool_calls_hourly", "tph"}
+	dailyQuotaAliases = []string{"daily_tool_calls", "tool_calls_per_day", "daily_quota"}
+)
+
+// Config defines rate limiting parameters for an agent key.
 type Config struct {
 	RequestsPerMinute int `json:"requests_per_minute"`
 	Bursts            int `json:"bursts"`
@@ -36,11 +46,10 @@ type Config struct {
 
 // Verdict represents the outcome of rate limit evaluation.
 type Verdict struct {
-	Allowed      bool
-	RetryAfter   int
-	RuleID       string
-	Reason       string
-	IsQuotaAlert bool
+	Allowed    bool
+	RetryAfter int
+	RuleID     string
+	Reason     string
 }
 
 type tokenBucket struct {
@@ -83,7 +92,6 @@ func (tb *tokenBucket) allow(now time.Time) (bool, int) {
 
 type keyLimiter struct {
 	mu            sync.Mutex
-	cfg           Config
 	reqBucket     *tokenBucket
 	toolBucket    *tokenBucket
 	dailyCount    int64
@@ -94,11 +102,19 @@ type keyLimiter struct {
 
 // Limiter coordinates token-bucket rate limiting and daily tool call quotas across keys.
 type Limiter struct {
-	store    *policy.Store
-	audit    AuditCounter
-	mu       sync.RWMutex
-	keys     map[string]*keyLimiter
-	curEpoch uint64
+	store      *policy.Store
+	audit      AuditCounter
+	mu         sync.RWMutex
+	keys       map[string]*keyLimiter
+	cancelSwap func()
+}
+
+// Close unsubscribes the limiter from store swap events.
+func (l *Limiter) Close() {
+	if l.cancelSwap != nil {
+		l.cancelSwap()
+		l.cancelSwap = nil
+	}
 }
 
 // NewLimiter creates a new Limiter backed by a policy store and optional audit counter.
@@ -109,22 +125,18 @@ func NewLimiter(store *policy.Store, audit AuditCounter) *Limiter {
 		keys:  make(map[string]*keyLimiter),
 	}
 	if store != nil {
-		store.OnSwap(func(snap *policy.Snapshot) {
+		l.cancelSwap = store.OnSwap(func(snap *policy.Snapshot) {
 			l.Reset(snap.Epoch)
 		})
-		if cur := store.Current(); cur != nil {
-			l.curEpoch = cur.Epoch
-		}
 	}
 	return l
 }
 
 // Reset clears in-memory rate limiter states when policy snapshot epoch changes.
-func (l *Limiter) Reset(epoch uint64) {
+func (l *Limiter) Reset(_ uint64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.keys = make(map[string]*keyLimiter)
-	l.curEpoch = epoch
 }
 
 // Allow evaluates whether an incoming request from keyID at stage is within rate limits.
@@ -153,7 +165,7 @@ func (l *Limiter) Allow(ctx context.Context, keyID string, stage string) Verdict
 	var didFetch bool
 	var fetchErr error
 	if stage == "tool" && cfg.DailyToolCalls > 0 && l.audit != nil {
-		todayStr := time.Now().UTC().Format("20060102")
+		todayStr := time.Now().UTC().Format(dayLayout)
 		kl.mu.Lock()
 		needsFetch := kl.dayStamp != todayStr || !kl.dailyChecked
 		kl.mu.Unlock()
@@ -199,7 +211,7 @@ func (l *Limiter) Allow(ctx context.Context, keyID string, stage string) Verdict
 
 		// Daily tool calls quota
 		if cfg.DailyToolCalls > 0 {
-			todayStr := now.UTC().Format("20060102")
+			todayStr := now.UTC().Format(dayLayout)
 			if kl.dayStamp != todayStr {
 				kl.dayStamp = todayStr
 				kl.dailyCount = 0
@@ -219,20 +231,6 @@ func (l *Limiter) Allow(ctx context.Context, keyID string, stage string) Verdict
 				}
 			}
 
-			if !kl.dailyChecked && !didFetch && l.audit != nil {
-				cnt, err := l.audit.DailyToolCallsCount(ctx, keyID, now.UTC())
-				if err != nil {
-					if now.Sub(kl.lastAuditWarn) >= time.Minute {
-						kl.lastAuditWarn = now
-						slog.Warn("ratelimit: failed to fetch daily tool calls count; retrying on next call",
-							"key_id", keyID, "err", err)
-					}
-				} else {
-					kl.dailyCount = cnt
-					kl.dailyChecked = true
-				}
-			}
-
 			if kl.dailyCount >= int64(cfg.DailyToolCalls) {
 				// Retry-After until next UTC midnight
 				nextDay := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day()+1, 0, 0, 0, 0, time.UTC)
@@ -241,11 +239,10 @@ func (l *Limiter) Allow(ctx context.Context, keyID string, stage string) Verdict
 					waitSec = 1
 				}
 				return Verdict{
-					Allowed:      false,
-					RetryAfter:   waitSec,
-					RuleID:       "ops.rate_limited",
-					Reason:       fmt.Sprintf("daily tool calls quota exceeded (%d/%d)", kl.dailyCount, cfg.DailyToolCalls),
-					IsQuotaAlert: true,
+					Allowed:    false,
+					RetryAfter: waitSec,
+					RuleID:     "ops.rate_limited",
+					Reason:     fmt.Sprintf("daily tool calls quota exceeded (%d/%d)", kl.dailyCount, cfg.DailyToolCalls),
 				}
 			}
 
@@ -272,8 +269,7 @@ func (l *Limiter) getOrInitKeyLimiter(keyID string, cfg Config) *keyLimiter {
 	}
 
 	kl = &keyLimiter{
-		cfg:      cfg,
-		dayStamp: time.Now().UTC().Format("20060102"),
+		dayStamp: time.Now().UTC().Format(dayLayout),
 	}
 
 	if cfg.RequestsPerMinute > 0 {
@@ -319,7 +315,7 @@ func extractRateLimitConfig(data map[string]any, keyID string) (Config, bool) {
 		return Config{}, false
 	}
 
-	getInt := func(keys ...string) int {
+	getInt := func(keys []string) int {
 		for _, k := range keys {
 			if v, exists := rlMap[k]; exists {
 				switch n := v.(type) {
@@ -336,10 +332,10 @@ func extractRateLimitConfig(data map[string]any, keyID string) (Config, bool) {
 	}
 
 	cfg := Config{
-		RequestsPerMinute: getInt("requests_per_minute", "requests_per_min", "rpm"),
-		Bursts:            getInt("bursts", "burst"),
-		ToolCallsPerHour:  getInt("tool_calls_per_hour", "tool_calls_hourly", "tph"),
-		DailyToolCalls:    getInt("daily_tool_calls", "tool_calls_per_day", "daily_quota"),
+		RequestsPerMinute: getInt(rpmAliases),
+		Bursts:            getInt(burstAliases),
+		ToolCallsPerHour:  getInt(toolHourlyAliases),
+		DailyToolCalls:    getInt(dailyQuotaAliases),
 	}
 
 	if cfg.RequestsPerMinute <= 0 && cfg.ToolCallsPerHour <= 0 && cfg.DailyToolCalls <= 0 {

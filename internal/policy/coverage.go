@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/open-policy-agent/opa/v1/cover"
 	"github.com/open-policy-agent/opa/v1/tester"
@@ -28,8 +29,10 @@ type CoverageReport struct {
 }
 
 // ComputeCoverage executes Rego tests under policyDir and returns an OPA-style coverage report.
-func ComputeCoverage(policyDir string) (*CoverageReport, error) {
-	ctx := context.Background()
+func ComputeCoverage(ctx context.Context, policyDir string) (*CoverageReport, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	modules, store, err := tester.Load([]string{policyDir}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("load policies for coverage: %w", err)
@@ -45,12 +48,30 @@ func ComputeCoverage(policyDir string) (*CoverageReport, error) {
 					SetCoverageTracer( //nolint:staticcheck // SA1019: SetCoverageQueryTracer migration deferred
 			cov)
 
+	timeout := 60 * time.Second
+	if deadline, ok := ctx.Deadline(); ok {
+		if rem := time.Until(deadline); rem > 0 && rem < timeout {
+			timeout = rem
+		}
+	}
+	runner.SetTimeout(timeout)
+
 	ch, err := runner.RunTests(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("run tests for coverage: %w", err)
 	}
-	for range ch {
-		// drain results
+	var testErr error
+	for tr := range ch {
+		if testErr == nil {
+			if tr.Error != nil {
+				testErr = fmt.Errorf("test %s: %w", tr.Name, tr.Error)
+			} else if tr.Fail {
+				testErr = fmt.Errorf("test %s failed", tr.Name)
+			}
+		}
+	}
+	if testErr != nil {
+		return nil, testErr
 	}
 
 	rep := cov.Report(modules)

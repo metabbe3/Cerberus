@@ -40,6 +40,21 @@ func TestLoad_BuildsQuery(t *testing.T) {
 	if snap.Data == nil {
 		t.Fatal("Data nil")
 	}
+	if len(snap.Modules) == 0 {
+		t.Fatal("Modules map is empty, want parsed modules")
+	}
+	if len(snap.Stages) == 0 {
+		t.Fatal("Stages map is empty, want parsed stages")
+	}
+	if len(snap.RuleIDs) == 0 {
+		t.Fatal("RuleIDs map is empty, want parsed rule IDs")
+	}
+	if !snap.RuleIDs["ai.tool.allow"] {
+		t.Fatal("RuleIDs does not contain ai.tool.allow")
+	}
+	if !snap.Stages["tool"] || !snap.Stages["ssh"] {
+		t.Fatal("Stages does not contain tool or ssh")
+	}
 
 	input := map[string]any{
 		"stage":     "tool",
@@ -136,5 +151,19 @@ func TestLoad_AppleDoubleAndHiddenRegoSkipped(t *testing.T) {
 	}
 	if snap == nil {
 		t.Fatal("expected non-nil snapshot")
+	}
+}
+
+func BenchmarkDecodeData(b *testing.B) {
+	data, err := os.ReadFile(testData)
+	if err != nil {
+		b.Fatalf("read fixture: %v", err)
+	}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if _, err := decodeData(data); err != nil {
+			b.Fatalf("decodeData: %v", err)
+		}
 	}
 }

@@ -119,8 +119,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("cerberus-proxy: engine: %w", err)
 	}
+	defer eng.Close()
 
 	lim := ratelimit.NewLimiter(store, auditLog)
+	defer lim.Close()
 
 	parsedDockerHost, err := url.Parse(dockerHost)
 	if err != nil {

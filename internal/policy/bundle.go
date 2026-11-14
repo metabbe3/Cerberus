@@ -40,6 +40,7 @@ type Bundle struct {
 	DataJSON       []byte
 	SignaturesJSON []byte
 	RegoFiles      map[string][]byte
+	TestFiles      map[string][]byte
 	DataFiles      map[string][]byte
 	RawFiles       map[string][]byte
 }
@@ -81,6 +82,7 @@ func ReadBundle(r io.Reader) (*Bundle, error) {
 	tr := tar.NewReader(gz)
 	b := &Bundle{
 		RegoFiles: make(map[string][]byte),
+		TestFiles: make(map[string][]byte),
 		DataFiles: make(map[string][]byte),
 		RawFiles:  make(map[string][]byte),
 	}
@@ -139,7 +141,14 @@ func ReadBundle(r io.Reader) (*Bundle, error) {
 			b.DataJSON = content
 		case strings.HasSuffix(name, ".json") && (strings.HasPrefix(name, "data/") || strings.Contains(name, "/data/")):
 			b.DataFiles[name] = content
-		case strings.HasSuffix(name, ".rego") && !strings.HasSuffix(name, "_test.rego"):
+		case strings.HasSuffix(name, "_test.rego"):
+			base := filepath.Base(name)
+			if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "._") ||
+				strings.HasPrefix(base, ".") || strings.HasPrefix(base, "._") {
+				continue
+			}
+			b.TestFiles[name] = content
+		case strings.HasSuffix(name, ".rego"):
 			base := filepath.Base(name)
 			if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "._") ||
 				strings.HasPrefix(base, ".") || strings.HasPrefix(base, "._") {
@@ -350,9 +359,6 @@ func strVal(v any) string {
 // On success, it writes the unpacked policies and data to disk, atomically
 // swaps the live Snapshot to epoch+1, and runs registered swap callbacks.
 func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	b, err := ReadBundle(bytes.NewReader(bundleGz))
 	if err != nil {
 		return nil, err
@@ -366,8 +372,9 @@ func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, err
 
 	// Signature verification: if a verification key is configured on the store,
 	// the bundle MUST have a valid Ed25519 signature over all files.
-	if s.verificationKey != nil {
-		if err := VerifyBundle(b.RawFiles, b.SignaturesJSON, s.verificationKey); err != nil {
+	vk := s.VerificationKey()
+	if vk != nil {
+		if err := VerifyBundle(b.RawFiles, b.SignaturesJSON, vk); err != nil {
 			slog.Warn("bundle signature verification failed", "err", err)
 			return nil, fmt.Errorf("bundle: %w: %w", ErrInvalidSignature, err)
 		}
@@ -402,8 +409,23 @@ func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, err
 		}
 	}
 
-	old := s.ptr.Load()
-	snap, err := Load(ctx, tmpDir, b.DataJSON, old.Epoch+1)
+	// Unpack bundle's test files into tmpDir for coverage and validation
+	for name, content := range b.TestFiles {
+		rel, err := safeRel(name)
+		if err != nil {
+			return nil, err
+		}
+		dest := filepath.Join(tmpDir, rel)
+		if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
+			return nil, fmt.Errorf("bundle: mkdir: %w", err)
+		}
+		if err := os.WriteFile(dest, content, 0o600); err != nil {
+			return nil, fmt.Errorf("bundle: write test rego: %w", err)
+		}
+	}
+
+	// Pre-staging compile: test that bundle compiles cleanly
+	snap, err := Load(ctx, tmpDir, b.DataJSON, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -415,26 +437,48 @@ func (s *Store) LoadBundle(ctx context.Context, bundleGz []byte) (*Snapshot, err
 		return nil, fmt.Errorf("bundle: smoke test failed: %w", err)
 	}
 
-	// Coverage gate: bundle activation rejects if coverage drops >5 points vs active revision
-	oldCov := old.Coverage
+	// Coverage gate: compute coverage on staged tmpDir before acquiring s.mu.
+	// If the test suite fails (red), ComputeCoverage returns an error, failing LoadBundle.
+	newCov, err := ComputeCoverage(ctx, tmpDir)
+	if err != nil {
+		slog.Warn("bundle rejected: test suite failed during coverage calculation", "err", err)
+		return nil, fmt.Errorf("bundle: test suite failed: %w", err)
+	}
+
+	old := s.ptr.Load()
+	oldCov := 0.0
+	if old != nil {
+		oldCov = old.Coverage
+	}
 	if oldCov <= 0 && s.policyDir != "" {
-		if curCov, _ := ComputeCoverage(s.policyDir); curCov != nil && curCov.TotalLines > 0 {
+		if curCov, _ := ComputeCoverage(ctx, s.policyDir); curCov != nil && curCov.TotalLines > 0 {
 			oldCov = curCov.Coverage
-			next := *old
-			next.Coverage = oldCov
-			s.ptr.Store(&next)
-			old = &next
 		}
 	}
-	if oldCov > 0 {
-		if newCov, _ := ComputeCoverage(tmpDir); newCov != nil && newCov.TotalLines > 0 {
-			if (oldCov - newCov.Coverage) > 5.0 {
-				slog.Warn("bundle rejected: coverage drop exceeds threshold", "old_coverage", oldCov, "new_coverage", newCov.Coverage)
-				return nil, fmt.Errorf("bundle activation rejected: coverage dropped by %.2f points (active: %.2f%%, bundle: %.2f%%, max allowed drop: 5.0%%)",
-					oldCov-newCov.Coverage, oldCov, newCov.Coverage)
-			}
-			snap.Coverage = newCov.Coverage
+
+	if oldCov > 0 && newCov != nil && newCov.TotalLines > 0 {
+		if (oldCov - newCov.Coverage) > 5.0 {
+			slog.Warn("bundle rejected: coverage drop exceeds threshold", "old_coverage", oldCov, "new_coverage", newCov.Coverage)
+			return nil, fmt.Errorf("bundle activation rejected: coverage dropped by %.2f points (active: %.2f%%, bundle: %.2f%%, max allowed drop: 5.0%%)",
+				oldCov-newCov.Coverage, oldCov, newCov.Coverage)
 		}
+	}
+	if newCov != nil && newCov.TotalLines > 0 {
+		snap.Coverage = newCov.Coverage
+	}
+
+	// Acquire lock to serialize disk writes, epoch assignment, and snapshot swap.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	old = s.ptr.Load()
+	snap.Epoch = old.Epoch + 1
+	snap.EpochStr = strconv.FormatUint(snap.Epoch, 10)
+	if old.Coverage <= 0 && oldCov > 0 {
+		next := *old
+		next.Coverage = oldCov
+		s.ptr.Store(&next)
+		old = &next
 	}
 
 	// If store has paths configured on disk, persist the bundle contents so

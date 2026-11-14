@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/metabbe3/cerberus/internal/masking"
+	"github.com/open-policy-agent/opa/v1/ast"
 	"github.com/open-policy-agent/opa/v1/rego"
 )
 
@@ -21,5 +22,8 @@ type Snapshot struct {
 	Query    rego.PreparedEvalQuery // query: data.gateway.authz.decision
 	Data     map[string]any         // parsed data JSON (read-only after build)
 	Maskers  map[string][]masking.Rule
+	Modules  map[string]*ast.Module // parsed rego modules (reused from loader compile)
+	Stages   map[string]bool        // registered stages derived from modules & data
+	RuleIDs  map[string]bool        // registered rule IDs for bounded metric labels
 	Loaded   time.Time
 }

@@ -2,12 +2,15 @@ package policy
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
 func TestComputeCoverage_RealPolicies(t *testing.T) {
+	ctx := context.Background()
 	// Policies directory in repo root: "../../policies"
-	rep, err := ComputeCoverage("../../policies")
+	rep, err := ComputeCoverage(ctx, "../../policies")
 	if err != nil {
 		t.Fatalf("ComputeCoverage: %v", err)
 	}
@@ -44,5 +47,20 @@ func TestStore_CoverageMethod(t *testing.T) {
 	}
 	if store.Current().Coverage != rep.Coverage {
 		t.Fatalf("snapshot coverage = %.2f, want %.2f", store.Current().Coverage, rep.Coverage)
+	}
+}
+
+func TestComputeCoverage_FailingTest(t *testing.T) {
+	dir := t.TempDir()
+	policy := "package example\nimport rego.v1\ndefault allow := false\n"
+	test := "package example\nimport rego.v1\ntest_fail if {\n\t1 == 2\n}\n"
+	_ = os.WriteFile(filepath.Join(dir, "policy.rego"), []byte(policy), 0o600)
+	_ = os.WriteFile(filepath.Join(dir, "policy_test.rego"), []byte(test), 0o600)
+	rep, err := ComputeCoverage(context.Background(), dir)
+	if err == nil {
+		t.Fatal("expected err != nil for failing test, got nil")
+	}
+	if rep != nil {
+		t.Fatalf("expected nil report on failure, got %+v", rep)
 	}
 }

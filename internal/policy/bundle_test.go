@@ -1066,3 +1066,102 @@ func TestStore_LoadBundle_CleansUpOnPartialFailure(t *testing.T) {
 		t.Fatalf("expected file 1 (%s) to be cleaned up after partial failure, but it exists", dest1)
 	}
 }
+
+// TestStore_LoadBundle_RedSuiteRejected verifies E2.2:
+// when the OPA test-suite inside a bundle fails (red), LoadBundle rejects the bundle.
+func TestStore_LoadBundle_RedSuiteRejected(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tmpDir := t.TempDir()
+	policyDir := filepath.Join(tmpDir, "policies")
+	if err := os.MkdirAll(policyDir, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	dataPath := filepath.Join(tmpDir, "data.json")
+
+	if err := os.CopyFS(policyDir, os.DirFS("../../policies")); err != nil {
+		t.Fatalf("copy: %v", err)
+	}
+	if err := os.WriteFile(dataPath, loadTestData(t), 0o600); err != nil {
+		t.Fatalf("write data: %v", err)
+	}
+
+	store, err := NewStore(ctx, policyDir, dataPath)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	aiRego, _ := os.ReadFile(filepath.Join(policyDir, "stages/ai.rego")) //nolint:gosec // G304 test fixture
+
+	// Create a bundle that contains valid policy plus a failing test
+	b := createCustomBundle(t, []string{"stages"}, "rev-red", loadTestData(t), map[string]string{
+		"policies/stages/ai.rego": string(aiRego),
+		"policies/stages/failing_test.rego": `package stages.ai_test
+import rego.v1
+
+test_will_fail if {
+	1 == 2
+}
+`,
+	}, nil)
+
+	_, err = store.LoadBundle(ctx, b)
+	if err == nil {
+		t.Fatal("expected LoadBundle to fail when bundle has red test suite, but got nil")
+	}
+	if !strings.Contains(err.Error(), "test suite failed") {
+		t.Fatalf("expected error mentioning test suite failure, got: %v", err)
+	}
+}
+
+// TestStore_LoadBundle_PrestagingDoesNotBlockConcurrentReload verifies E2.2:
+// Coverage calculation runs before s.mu is acquired, so concurrent Reload or ReplaceData
+// is not blocked during bundle test/coverage staging.
+func TestStore_LoadBundle_PrestagingDoesNotBlockConcurrentReload(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tmpDir := t.TempDir()
+	policyDir := filepath.Join(tmpDir, "policies")
+	if err := os.MkdirAll(policyDir, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	dataPath := filepath.Join(tmpDir, "data.json")
+
+	if err := os.CopyFS(policyDir, os.DirFS("../../policies")); err != nil {
+		t.Fatalf("copy: %v", err)
+	}
+	if err := os.WriteFile(dataPath, loadTestData(t), 0o600); err != nil {
+		t.Fatalf("write data: %v", err)
+	}
+
+	store, err := NewStore(ctx, policyDir, dataPath)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	b := createCustomBundle(t, []string{"stages"}, "rev-valid", loadTestData(t), map[string]string{
+		"policies/stages/valid_feature.rego": "package stages.tool\n\nvalid_feat := true\n",
+	}, nil)
+
+	loadStarted := make(chan struct{})
+	loadDone := make(chan error, 1)
+
+	go func() {
+		close(loadStarted)
+		_, lerr := store.LoadBundle(ctx, b)
+		loadDone <- lerr
+	}()
+
+	<-loadStarted
+	// Concurrent ReplaceData or Reload should execute smoothly
+	_, rerr := store.ReplaceData(ctx, loadTestData(t))
+	if rerr != nil {
+		t.Fatalf("ReplaceData failed concurrently: %v", rerr)
+	}
+
+	if err := <-loadDone; err != nil {
+		t.Fatalf("LoadBundle failed: %v", err)
+	}
+}

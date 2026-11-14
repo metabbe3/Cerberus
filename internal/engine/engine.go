@@ -57,14 +57,23 @@ const (
 // prepared-query eval → masking. It holds no mutex of its own; the LRU and
 // singleflight group are concurrency-safe.
 type Engine struct {
-	store *policy.Store
-	sink  Sink
-	opts  Options
-	cache *lru.Cache[string, Decision]
-	sf    singleflight.Group
+	store      *policy.Store
+	sink       Sink
+	opts       Options
+	cache      *lru.Cache[string, Decision]
+	sf         singleflight.Group
+	cancelSwap func()
 	// evalHook, when non-nil, runs at the top of every eval. Test seam for
 	// pinning leader/waiter interleavings; nil in production.
 	evalHook func()
+}
+
+// Close unsubscribes the Engine from store swap events.
+func (e *Engine) Close() {
+	if e.cancelSwap != nil {
+		e.cancelSwap()
+		e.cancelSwap = nil
+	}
 }
 
 // New builds an Engine over store. sink may be nil (events are discarded).
@@ -90,14 +99,15 @@ func New(store *policy.Store, sink Sink, opts Options) (*Engine, error) {
 	}
 	// The gauge lives at the swap, not in Decide: a reload with no traffic
 	// must still move it, and an old in-flight request must never drag it
-	// backwards.
-	store.OnSwap(func(snap *policy.Snapshot) {
+	// backwards. Old epoch series are reset on swap to bound Prometheus metric cardinality.
+	cancelSwap := store.OnSwap(func(snap *policy.Snapshot) {
 		policyEpoch.Set(float64(snap.Epoch))
 		SetBundleRevision(snap.Revision)
+		ResetEpochMetrics()
 	})
 	policyEpoch.Set(float64(store.Current().Epoch))
 	SetBundleRevision(store.Current().Revision)
-	return &Engine{store: store, sink: sink, opts: opts, cache: cache}, nil
+	return &Engine{store: store, sink: sink, opts: opts, cache: cache, cancelSwap: cancelSwap}, nil
 }
 
 // TraceEntry captures one rule or expression evaluation in an explain trace.
@@ -184,7 +194,7 @@ func (e *Engine) Decide(ctx context.Context, in Input) Decision {
 	}
 
 	d.LatencyUS = time.Since(start).Microseconds()
-	decisionsTotal.WithLabelValues(metricStage(in.Stage), d.Decision, d.RuleID).Inc()
+	decisionsTotal.WithLabelValues(metricStage(snap, in.Stage), d.Decision, metricRuleID(snap, d.RuleID)).Inc()
 	e.sink.Emit(audit.Event{
 		Time:      time.Now(),
 		Stage:     in.Stage,
@@ -312,15 +322,7 @@ func applyPromptMasking(snap *policy.Snapshot, keyID string, in Input) any {
 	changed := false
 	doc := map[string]any{}
 	if len(in.Messages) > 0 {
-		msgs := make([]any, 0, len(in.Messages))
-		for _, m := range in.Messages {
-			cp := map[string]any{}
-			for k, v := range m {
-				cp[k] = v
-			}
-			msgs = append(msgs, cp)
-		}
-		if masked, mchg := masking.Apply(rules, "response", msgs); mchg {
+		if masked, mchg := masking.Apply(rules, "response", in.Messages); mchg {
 			doc["messages"] = masked
 			changed = true
 		}
@@ -359,7 +361,7 @@ func (e *Engine) eval(ctx context.Context, snap *policy.Snapshot, in Input) Deci
 	rs, err := snap.Query.Eval(evalCtx, rego.EvalInput(regoInput(in)))
 	dur := time.Since(t0).Seconds()
 	evalDuration.Observe(dur)
-	evalDurationStage.WithLabelValues(metricStage(in.Stage)).Observe(dur)
+	evalDurationStage.WithLabelValues(metricStage(snap, in.Stage)).Observe(dur)
 
 	if err != nil || evalCtx.Err() != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(evalCtx.Err(), context.DeadlineExceeded) {
@@ -416,12 +418,25 @@ func denyInternal(snap *policy.Snapshot, ruleID, reason string) Decision {
 	return Decision{Decision: "deny", RuleID: ruleID, Reason: reason, Epoch: snap.Epoch}
 }
 
-// metricStage collapses the client-supplied stage onto a bounded label set so
-// an unauthenticated caller can never mint a new cerberus_decisions_total
-// time series (label cardinality = memory on an unauthenticated endpoint).
-func metricStage(stage string) string {
+// metricRuleID maps unknown or dynamic rule IDs to "other" to bound
+// cerberus_decisions_total label cardinality. Whitelisted rule IDs from the
+// snapshot pass through.
+func metricRuleID(snap *policy.Snapshot, ruleID string) string {
+	if snap != nil && snap.RuleIDs != nil && snap.RuleIDs[ruleID] {
+		return ruleID
+	}
+	return "other"
+}
+
+// metricStage collapses client-supplied stage onto a bounded label set derived
+// from snapshot registered stages (with standard stage fallbacks) so an
+// unauthenticated caller can never mint an unbounded number of time series.
+func metricStage(snap *policy.Snapshot, stage string) string {
+	if snap != nil && snap.Stages != nil && snap.Stages[stage] {
+		return stage
+	}
 	switch stage {
-	case "llm", "tool", "http", "docker":
+	case "llm", "tool", "http", "docker", "ssh", "db":
 		return stage
 	default:
 		return "other"

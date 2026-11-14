@@ -5,6 +5,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -200,7 +201,7 @@ func runCoverage(args []string) error {
 		dir = fs.Arg(0)
 	}
 
-	rep, err := policy.ComputeCoverage(dir)
+	rep, err := policy.ComputeCoverage(context.Background(), dir)
 	if err != nil {
 		return err
 	}

@@ -692,3 +692,145 @@ func TestCacheKey_AllocsReduction(t *testing.T) {
 		t.Fatal("cacheKey must differ when epoch changes")
 	}
 }
+
+func TestEngine_New_OnSwapLifecycle(t *testing.T) {
+	store, err := policy.NewStore(context.Background(), policyDir, testData)
+	if err != nil {
+		t.Fatalf("policy.NewStore: %v", err)
+	}
+	initial := store.SwapCallbacksLen()
+	for i := 0; i < 100; i++ {
+		eng, err := New(store, nil, Options{})
+		if err != nil {
+			t.Fatalf("engine.New: %v", err)
+		}
+		eng.Close()
+	}
+	if store.SwapCallbacksLen() != initial {
+		t.Fatalf("expected callbacks len %d, got %d", initial, store.SwapCallbacksLen())
+	}
+}
+
+func TestEngine_ResetEpochMetrics_OnSwap(t *testing.T) {
+	e := newTestEngine(t, &recSink{}, Options{})
+	ctx := context.Background()
+
+	// Cause traffic on epoch 1
+	in := toolInput("k-glob", "kubernetes_get_pods", nil)
+	e.Decide(ctx, in) // Miss
+	e.Decide(ctx, in) // Hit on epoch 1
+
+	hitsCount := testutil.CollectAndCount(cacheHitsEpoch)
+	if hitsCount != 1 {
+		t.Fatalf("expected 1 series for epoch 1, got %d", hitsCount)
+	}
+
+	// Reload to epoch 2
+	_, err := e.store.Reload(ctx)
+	if err != nil {
+		t.Fatalf("Reload 1: %v", err)
+	}
+
+	// Old epoch series should be cleared by OnSwap ResetEpochMetrics
+	hitsCountAfterReload := testutil.CollectAndCount(cacheHitsEpoch)
+	if hitsCountAfterReload != 0 {
+		t.Fatalf("expected 0 series after reload before new traffic, got %d", hitsCountAfterReload)
+	}
+
+	// Cause traffic on epoch 2
+	e.Decide(ctx, in) // Miss
+	e.Decide(ctx, in) // Hit on epoch 2
+	hitsCountEpoch2 := testutil.CollectAndCount(cacheHitsEpoch)
+	if hitsCountEpoch2 != 1 {
+		t.Fatalf("expected 1 series for epoch 2, got %d", hitsCountEpoch2)
+	}
+
+	// Reload to epoch 3
+	_, err = e.store.Reload(ctx)
+	if err != nil {
+		t.Fatalf("Reload 2: %v", err)
+	}
+	e.Decide(ctx, in) // Miss
+	e.Decide(ctx, in) // Hit on epoch 3
+	hitsCountEpoch3 := testutil.CollectAndCount(cacheHitsEpoch)
+	if hitsCountEpoch3 != 1 {
+		t.Fatalf("expected series count to stay bounded at 1, got %d", hitsCountEpoch3)
+	}
+}
+
+func TestEngine_RuleID_CardinalityBound(t *testing.T) {
+	e := newTestEngine(t, &recSink{}, Options{})
+	snap := e.store.Current()
+
+	// Whitelisted rule ID passes through
+	if got := metricRuleID(snap, "ai.tool.allow"); got != "ai.tool.allow" {
+		t.Fatalf("expected ai.tool.allow, got %s", got)
+	}
+
+	// Unknown or arbitrary rule ID mapped to "other"
+	if got := metricRuleID(snap, "attacker.injected.rule.9999"); got != "other" {
+		t.Fatalf("expected 'other', got %s", got)
+	}
+}
+
+func TestEngine_MetricStage_Dynamic(t *testing.T) {
+	e := newTestEngine(t, &recSink{}, Options{})
+	snap := e.store.Current()
+
+	if got := metricStage(snap, "ssh"); got != "ssh" {
+		t.Fatalf("expected 'ssh', got %s", got)
+	}
+	if got := metricStage(snap, "db"); got != "db" {
+		t.Fatalf("expected 'db', got %s", got)
+	}
+	if got := metricStage(snap, "unknown-random-stage"); got != "other" {
+		t.Fatalf("expected 'other', got %s", got)
+	}
+}
+
+func TestEngine_MaskPrompt_AllocsReduction(t *testing.T) {
+	data := map[string]any{
+		"config": map[string]any{"bypass_unknown_keys": true},
+		"agents": map[string]any{
+			"k-mask-test": map[string]any{
+				"allowed_models": []any{"glm-*"},
+				"masking": []any{
+					map[string]any{"pattern": "sk-[A-Za-z0-9]{8,}", "transform": "redact", "scope": ""},
+				},
+			},
+		},
+	}
+	dj, _ := json.Marshal(data)
+	snap, err := policy.Load(context.Background(), policyDir, dj, 1)
+	if err != nil {
+		t.Fatalf("policy load: %v", err)
+	}
+
+	messages := []map[string]any{
+		{"role": "user", "content": "My secret token is sk-abc123456789"},
+		{"role": "assistant", "content": "Acknowledged token sk-abc123456789"},
+	}
+	in := Input{
+		Stage:    "llm",
+		KeyID:    "k-mask-test",
+		Messages: messages,
+	}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		_ = applyPromptMasking(snap, in.KeyID, in)
+	})
+	t.Logf("applyPromptMasking allocs/run: %.1f", allocs)
+
+	doc := applyPromptMasking(snap, in.KeyID, in)
+	if doc == nil {
+		t.Fatal("expected masked doc, got nil")
+	}
+	docMap, ok := doc.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any doc, got %T", doc)
+	}
+	msgs, ok := docMap["messages"].([]any)
+	if !ok || len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %v", msgs)
+	}
+}

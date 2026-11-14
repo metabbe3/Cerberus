@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/metabbe3/cerberus/internal/masking"
+	"github.com/open-policy-agent/opa/v1/ast"
 	"github.com/open-policy-agent/opa/v1/loader"
 	"github.com/open-policy-agent/opa/v1/rego"
 	"github.com/open-policy-agent/opa/v1/storage/inmem"
@@ -67,12 +68,19 @@ func Load(ctx context.Context, policyDir string, dataJSON []byte, epoch uint64) 
 		return nil, fmt.Errorf("policy: %w: %w", ErrCompile, err)
 	}
 
+	parsedMods := result.ParsedModules()
+	ruleIDs := extractRuleIDs(parsedMods)
+	stages := extractStages(parsedMods, data)
+
 	return &Snapshot{
 		Epoch:    epoch,
 		EpochStr: strconv.FormatUint(epoch, 10),
 		Query:    query,
 		Data:     data,
 		Maskers:  maskers,
+		Modules:  parsedMods,
+		Stages:   stages,
+		RuleIDs:  ruleIDs,
 		Loaded:   time.Now(),
 	}, nil
 }
@@ -105,28 +113,84 @@ func bundleFilter(_ string, info os.FileInfo, _ int) bool {
 // part of the policy, and documents missing config or agents — an empty or
 // partial document would wipe the policy and disable every registered agent.
 func decodeData(dataJSON []byte) (map[string]any, error) {
-	var keys map[string]json.RawMessage
-	if err := json.Unmarshal(dataJSON, &keys); err != nil {
+	var data map[string]any
+	if err := json.Unmarshal(dataJSON, &data); err != nil {
 		return nil, fmt.Errorf("policy: %w: %w", ErrData, err)
 	}
-	if keys == nil { // JSON null (or an otherwise non-object document)
+	if data == nil { // JSON null (or an otherwise non-object document)
 		return nil, fmt.Errorf("policy: %w: document is not a JSON object", ErrData)
 	}
-	for k := range keys {
+	for k := range data {
 		if !allowedTopKeys[k] {
 			return nil, fmt.Errorf("policy: %w: unknown top-level key %q", ErrData, k)
 		}
 	}
 	for _, k := range []string{"config", "agents"} {
-		if _, ok := keys[k]; !ok {
+		if _, ok := data[k]; !ok {
 			return nil, fmt.Errorf("policy: %w: missing required top-level key %q", ErrData, k)
 		}
 	}
-	var data map[string]any
-	if err := json.Unmarshal(dataJSON, &data); err != nil {
-		return nil, fmt.Errorf("policy: %w: %w", ErrData, err)
-	}
 	return data, nil
+}
+
+// extractRuleIDs extracts all registered rule_id strings from parsed rego AST modules,
+// plus internal rule IDs produced by the evaluation engine.
+func extractRuleIDs(modules map[string]*ast.Module) map[string]bool {
+	ruleIDs := map[string]bool{
+		"internal.default":       true,
+		"internal.unknown_stage": true,
+		"internal.eval_error":    true,
+		"internal.timeout":       true,
+	}
+	vis := ast.NewGenericVisitor(func(x any) bool {
+		obj, ok := x.(ast.Object)
+		if !ok {
+			return false
+		}
+		obj.Foreach(func(k, v *ast.Term) {
+			if s, ok := k.Value.(ast.String); ok && string(s) == "rule_id" {
+				if vs, ok := v.Value.(ast.String); ok {
+					ruleIDs[string(vs)] = true
+				}
+			}
+		})
+		return false
+	})
+	for _, m := range modules {
+		vis.Walk(m)
+	}
+	return ruleIDs
+}
+
+// extractStages extracts registered stages from module package names (stages.<stage>)
+// and data document stages.
+func extractStages(modules map[string]*ast.Module, data map[string]any) map[string]bool {
+	stages := map[string]bool{
+		"llm":    true,
+		"tool":   true,
+		"http":   true,
+		"docker": true,
+		"ssh":    true,
+		"db":     true,
+	}
+	for _, m := range modules {
+		if m.Package != nil && len(m.Package.Path) >= 3 {
+			if m.Package.Path[0].Value.String() == "data" && m.Package.Path[1].Value.String() == "stages" {
+				stg := strings.Trim(m.Package.Path[2].Value.String(), `"`)
+				if stg != "ai" && stg != "" {
+					stages[stg] = true
+				}
+			}
+		}
+	}
+	if rawStages, ok := data["stages"].(map[string]any); ok {
+		for s := range rawStages {
+			if s != "ai" && s != "" {
+				stages[s] = true
+			}
+		}
+	}
+	return stages
 }
 
 // compileMaskers builds per-key masking rules from agents[*].masking.

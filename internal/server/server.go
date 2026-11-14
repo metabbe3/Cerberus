@@ -168,6 +168,9 @@ func (s *Server) ShutdownStreams() {
 	if s.cluster != nil {
 		s.cluster.Close()
 	}
+	if s.limiter != nil {
+		s.limiter.Close()
+	}
 	s.streamsCancel()
 }
 

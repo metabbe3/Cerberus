@@ -145,13 +145,10 @@ func TestLimiter_DailyToolQuotaAndAlert(t *testing.T) {
 		t.Fatalf("3rd tool call should be allowed (limit is 3): %v", v1.Reason)
 	}
 
-	// Call 2 today (total 4 > 3) -> hard stop + quota alert
+	// Call 2 today (total 4 > 3) -> hard stop
 	v2 := lim.Allow(ctx, "k-quota", "tool")
 	if v2.Allowed {
 		t.Fatalf("4th tool call should be hard stopped")
-	}
-	if !v2.IsQuotaAlert {
-		t.Errorf("expected IsQuotaAlert=true")
 	}
 	if v2.RuleID != "ops.rate_limited" {
 		t.Errorf("expected ops.rate_limited, got %s", v2.RuleID)
@@ -261,9 +258,6 @@ func TestLimiter_DailyToolQuota_RetryOnError(t *testing.T) {
 	if v2.Allowed {
 		t.Fatalf("second call should be denied (quota exhausted after retry retrieved count)")
 	}
-	if !v2.IsQuotaAlert {
-		t.Errorf("expected IsQuotaAlert=true")
-	}
 
 	// 3rd call: dailyChecked is now true, so DailyToolCallsCount should NOT be called again
 	v3 := lim.Allow(ctx, "k-retry", "tool")
@@ -354,5 +348,20 @@ func TestLimiter_ConcurrentAllow_NoDeadlockWithSlowAudit(t *testing.T) {
 	close(errCh)
 	for err := range errCh {
 		t.Errorf("error in concurrent Allow: %v", err)
+	}
+}
+
+func TestLimiter_New_OnSwapLifecycle(t *testing.T) {
+	snap := &policy.Snapshot{Epoch: 1}
+	store := policy.NewStoreWithSnapshot(snap)
+	initial := store.SwapCallbacksLen()
+
+	for i := 0; i < 100; i++ {
+		lim := NewLimiter(store, nil)
+		lim.Close()
+	}
+
+	if store.SwapCallbacksLen() != initial {
+		t.Fatalf("expected callbacks len %d, got %d", initial, store.SwapCallbacksLen())
 	}
 }
