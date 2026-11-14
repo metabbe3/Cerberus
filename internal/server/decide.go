@@ -44,7 +44,29 @@ func (s *Server) decide(stage string) http.HandlerFunc {
 		// or spoof a key differing from authentication header.
 		callerKey := util.ResolveKey(r)
 		isPrivAdmin := s.isPrivilegedAdmin(r)
+		// MC-07 (14 Nov MC sweep): a privileged admin caller presenting an
+		// explicit key header (X-Cerberus-Key / X-Policy-Key) must not pair it
+		// with a DIFFERENT body key_id — that silently re-attributes the
+		// decision (audit spoofing) and can borrow an exempt key's privileges.
+		// Note: callerKey also resolves bearer tokens, so we compare only
+		// against actual key headers, not the admin bearer itself.
+		explicitKeyHdr := r.Header.Get("X-Cerberus-Key")
+		if explicitKeyHdr == "" {
+			explicitKeyHdr = r.Header.Get("X-Policy-Key")
+		}
+		if isPrivAdmin && explicitKeyHdr != "" && in.KeyID != "" && explicitKeyHdr != in.KeyID {
+			writeErr(w, http.StatusUnauthorized, "unauthorized: key_id mismatch with credential")
+			return
+		}
 		if !isPrivAdmin {
+			// MC-08 (14 Nov MC sweep): a caller with NO credential at all
+			// must not decide as an ELEVATED key (prod_access, exempt, or
+			// api_key-configured) — unauthenticated "k-prod" claiming is the
+			// spoofing vector. Plain legacy keys keep historical passthrough.
+			if callerKey == "" && r.Header.Get("X-Agent-Key") == "" && s.isElevatedKey(in.KeyID) {
+				writeErrCode(w, http.StatusUnauthorized, "agent_key_required", "agent_key_required")
+				return
+			}
 			if s.isExemptKey(in.KeyID) {
 				writeErr(w, http.StatusUnauthorized, "unauthorized: privileged key requires admin token")
 				return
@@ -316,6 +338,35 @@ func (s *Server) isExemptKey(keyID string) bool {
 						}
 					}
 				}
+			}
+		}
+	}
+	return false
+}
+
+// isElevatedKey reports whether key requires an explicit credential:
+// exempt keys, agents with api_key_sha256, or agents with prod_access.
+func (s *Server) isElevatedKey(keyID string) bool {
+	if keyID == "" {
+		return false
+	}
+	if s.isExemptKey(keyID) {
+		return true
+	}
+	if s.deps.Store == nil {
+		return false
+	}
+	snap := s.deps.Store.Current()
+	if snap == nil || snap.Data == nil {
+		return false
+	}
+	if agents, ok := snap.Data["agents"].(map[string]any); ok {
+		if ag, ok := agents[keyID].(map[string]any); ok {
+			if h, _ := ag["api_key_sha256"].(string); h != "" {
+				return true
+			}
+			if pa, _ := ag["prod_access"].(bool); pa {
+				return true
 			}
 		}
 	}

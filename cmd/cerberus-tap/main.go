@@ -401,6 +401,38 @@ func contentText(raw json.RawMessage) string {
 	if json.Unmarshal(raw, &s) == nil {
 		return s
 	}
+	// Content blocks: text + tool_result (nested text inside content array OR
+	// plain string content) — tool output is an indirect-injection vector
+	// (MC-09, 14 Nov MC sweep) and must reach the scanner.
+	var blocks []struct {
+		Type    string          `json:"type"`
+		Text    string          `json:"text"`
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(raw, &blocks) == nil {
+		var out []string
+		for _, b := range blocks {
+			switch b.Type {
+			case "text":
+				out = append(out, b.Text)
+			case "tool_result":
+				if len(b.Content) > 0 {
+					out = append(out, toolResultText(b.Content))
+				}
+			}
+		}
+		return strings.Join(out, "\n")
+	}
+	return ""
+}
+
+// toolResultText extracts text from a tool_result content field: either a
+// plain string or an array of content blocks (each {"type":"text","text":…}).
+func toolResultText(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
 	var blocks []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`

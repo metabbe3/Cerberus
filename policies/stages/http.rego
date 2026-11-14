@@ -14,25 +14,42 @@ resource := object.get(input, "resource", "")
 args := object.get(input, "args", {})
 
 # Extract host from URL or host string.
+# Userinfo ("user:pass@host" / "user@host") is stripped BEFORE host extraction —
+# http://admin:pass@webhook.site/ must evaluate "webhook.site" against
+# denied_hosts, not "user" (MC-01, 14 Nov MC sweep).
+strip_userinfo(raw) := s if {
+	parts := split(raw, "@")
+	count(parts) == 1
+	s := raw
+} else := s if {
+	parts := split(raw, "@")
+	count(parts) > 1
+	s := parts[count(parts) - 1]
+}
+
 extract_host(raw) := h if {
-	contains(raw, "://")
-	after_proto := split(raw, "://")[1]
+	raw2 := strip_userinfo(raw)
+	contains(raw2, "://")
+	after_proto := split(raw2, "://")[1]
 	host_port := split(after_proto, "/")[0]
 	contains(host_port, "[")
 	contains(host_port, "]")
 	h = split(split(host_port, "]")[0], "[")[1]
 } else := h if {
-	contains(raw, "://")
-	after_proto := split(raw, "://")[1]
+	raw2 := strip_userinfo(raw)
+	contains(raw2, "://")
+	after_proto := split(raw2, "://")[1]
 	host_port := split(after_proto, "/")[0]
 	h = split(host_port, ":")[0]
 } else := h if {
-	contains(raw, "[")
-	contains(raw, "]")
-	host_port := split(raw, "/")[0]
+	raw2 := strip_userinfo(raw)
+	contains(raw2, "[")
+	contains(raw2, "]")
+	host_port := split(raw2, "/")[0]
 	h = split(split(host_port, "]")[0], "[")[1]
 } else := h if {
-	host_port := split(raw, "/")[0]
+	raw2 := strip_userinfo(raw)
+	host_port := split(raw2, "/")[0]
 	h = split(host_port, ":")[0]
 }
 

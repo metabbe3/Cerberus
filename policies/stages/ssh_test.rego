@@ -344,3 +344,44 @@ test_exec_dangerous_case_bypass_denied if {
 	out.decision == "deny"
 	out.rule_id == "ssh.command_denied"
 }
+
+# --- Regression MC-02: bastion action "ssh_exec" must be valid (alias of exec) ---
+test_ssh_exec_action_valid_now if {
+	out := decide({
+		"stage": "ssh",
+		"key_id": "k-open",
+		"action": "ssh_exec",
+		"host": "dev.teknikal.id",
+		"user": "ubuntu",
+		"port": 22,
+		"args": {"cmd": "uptime"},
+	})
+	out.decision == "allow"
+}
+
+# --- Regression MC-05: host with embedded :port must still match allowlist ---
+test_ssh_host_with_port_allowed if {
+	out := decide({
+		"stage": "ssh",
+		"key_id": "k-open",
+		"action": "connect",
+		"host": "bastion.teknikal.id:22",
+		"user": "deploy",
+		"port": 22,
+	})
+	out.decision == "allow"
+}
+
+# --- Regression MC-06: port smuggled in args must be enforced ---
+test_ssh_args_port_denied if {
+	out := decide({
+		"stage": "ssh",
+		"key_id": "k-open",
+		"action": "connect",
+		"host": "dev.teknikal.id",
+		"user": "ubuntu",
+		"args": {"port": 2222},
+	})
+	out.decision == "deny"
+	out.rule_id == "ssh.port_not_allowed"
+}

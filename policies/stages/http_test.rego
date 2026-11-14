@@ -227,11 +227,36 @@ test_http_userinfo_bypass_denied if {
 	out := decide({
 		"stage": "http",
 		"key_id": "k-http",
-		"resource": "https://api.github.com@evil.com/leak",
+		"resource": "https://user@evil.com/leak",
 		"args": {"method": "GET"},
 	})
 	out.decision == "deny"
-	out.rule_id == "http.host_not_allowed"
+	# Post-fix (MC-01): userinfo stripped first, host resolves to evil.com which
+	# is on denied_hosts — deny rule is host_denied, not host_not_allowed.
+	out.rule_id == "http.host_denied"
+}
+
+# MC-01 regression: userinfo w/ password must NOT bypass denied_hosts.
+test_http_userinfo_password_bypass_denied if {
+	out := decide({
+		"stage": "http",
+		"key_id": "k-http",
+		"resource": "http://admin:pass@evil.com/x",
+		"args": {"method": "GET"},
+	})
+	out.decision == "deny"
+	out.rule_id == "http.host_denied"
+}
+
+# MC-01 regression: legit allowed host with userinfo must still pass (no false deny).
+test_http_userinfo_allowed_host_ok if {
+	out := decide({
+		"stage": "http",
+		"key_id": "k-http",
+		"resource": "https://bot@api.github.com/repos",
+		"args": {"method": "GET"},
+	})
+	out.decision == "allow"
 }
 
 # Layer 3: Bypass

@@ -74,6 +74,7 @@ var overrideImperatives = []string{
 }
 
 var roleHijacks = []string{
+	"you are dan",
 	"you are now dan",
 	"you are now an unrestricted",
 	"you are now a dan",
@@ -169,8 +170,21 @@ func ScanInjection(turns []map[string]any) []scanHit {
 		}
 		norm := normalizeInline(toASCII(content))
 		// Pesan system sah: pertahanan agent boleh memuat contoh serangan.
+		// Tapi role "system" BISA dipakai client jahat (MC-10, 14 Nov MC
+		// sweep): kita tetap memeriksa tanda serangan berat (role hijack +
+		// override bertingkat) — system prompt pertahanan sah tidak
+		// memuat frasa penyeru "you are now DAN"-style + override bersamaan.
+		heavilySuspicious := false
 		if role == "system" {
-			continue
+			for _, p := range roleHijacks {
+				if strings.Contains(norm, p) && containsImperative(norm) {
+					heavilySuspicious = true
+					break
+				}
+			}
+			if !heavilySuspicious {
+				continue
+			}
 		}
 		// Pesan assistant jarang jadi vektor injeksi langsung, tapi
 		// tool-result yang dibaca LLM bisa menularkan payload

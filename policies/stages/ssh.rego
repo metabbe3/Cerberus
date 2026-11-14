@@ -15,11 +15,22 @@ agent := object.get(data.agents, input.key_id, {})
 
 action := lower(object.get(input, "action", ""))
 
-host := object.get(input, "host", object.get(input, "resource", ""))
+# Host field: strip an embedded ":port" suffix before pattern matching —
+# "bastion.teknikal.id:22" must match allow_hosts wildcard (MC-05, 14 Nov MC
+# sweep; raw host:port broke both allowlist and denylist matching).
+host_raw := object.get(input, "host", object.get(input, "resource", ""))
+
+host := h if {
+	contains(host_raw, ":")
+	not contains(split(host_raw, ":")[0], "[")
+	h := split(host_raw, ":")[0]
+} else := host_raw
 
 user := object.get(input, "user", "")
 
-port := object.get(input, "port", 22)
+# Port: top-level first, then args.port — a port smuggled inside args must
+# not silently default to 22 (MC-06, 14 Nov MC sweep).
+port := object.get(input, "port", object.get(args, "port", 22))
 
 req_port := sprintf("%v", [port])
 
@@ -122,9 +133,13 @@ ssh_decision := {
 }
 
 # Action validation
+# "ssh_exec" is the bastion binary's action constant (cmd/cerberus-ssh main.go);
+# treat it as an alias of "exec" (MC-02, 14 Nov MC sweep — mismatch caused
+# 100% of bastion command executions to be rejected).
 action_invalid if {
 	action != "connect"
 	action != "exec"
+	action != "ssh_exec"
 }
 
 # Host pattern matching: delegates to secure host_matches in authz
@@ -175,15 +190,18 @@ user_not_allowed if {
 # Command rule for exec action: checked against deny_commands regexes.
 # lower(command): deny patterns are authored lowercase — "sudo SU -" must not
 # slip past "sudo\s+su\b.*" (case bypass, found 14 Nov MC sweep).
+is_exec_action if action == "exec"
+is_exec_action if action == "ssh_exec"
+
 command_denied if {
-	action == "exec"
+	is_exec_action
 	some pat in deny_commands
 	regex.match(pat, lower(command))
 }
 
 # Staged script execution guard: forbids executing scripts located in world-writable directories
 staged_script_forbidden if {
-	action == "exec"
+	is_exec_action
 	command != ""
 	regex.match("(?i)(?:^|[\\s;|&`$()<>]|source|\\.)(?:\\s*(?:\\b(?:ba|z|da)?sh\\b|\\bpython[0-9.]*\\b|\\bperl\\b|\\bruby\\b))?\\s*/(?:tmp|var/tmp|dev/shm)/", command)
 }
