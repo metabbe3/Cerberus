@@ -81,7 +81,7 @@ Setiap klaim di repo ini punya baris ledger + commit + bukti run — lihat [docs
 - **Rego Policy Suite:** 282/282 test PASS (`opa test policies/`) — regression suite per stage + fixture attack.
 - **Monte Carlo Fuzzing:** 45.000 sampel / 5 stage-parallel, seed 20261114 → **0 escape** (p_ub99 = 0.000102), p99 latency 83ms total. Rantai fix: 12.353 → 3.534 → 589 → 588 → 0 escape dalam 5 run. Detail skenario: [docs/qa/MONTE-CARLO.md](docs/qa/MONTE-CARLO.md).
 - **Red-Team Suite:** 10 serangan live (host-spoof, raw-IP, key-spoof, burst, kill-switch takeover, dll.) = 9 BLOCKED + 1 WARN + 0 EXPOSED.
-- **Load:** ~85k TPS decide p95 < 3ms (loadgen-stress), soak & matrix: [docs/qa/BENCH.md](docs/qa/BENCH.md).
+- **Load:** engine **35.822 TPS @ 2048 conn** (image Docker resmi, err 0%, p99 274 ms) / **105.800 TPS** native; tap jalur LLM penuh ~2.500 TPS @ 200 conn — headroom ~350× vs kebutuhan MVP-60. Red-team manual 11 probe = 0 escape. Detail: [docs/qa/BENCH.md](docs/qa/BENCH.md).
 - **CI:** lint + `make test` (22 paket, race) + build + GHCR image di setiap push — badge di atas.
 
 ## Konsep Inti Arsitektur

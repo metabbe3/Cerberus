@@ -50,3 +50,21 @@ Method: `cmd/loadgen-stress` — random stage/host/action/resource/command per r
 | 4096 | 763 (collapse) | 669 | 7358 | 8405 | 70.5 |
 
 **MAX SUSTAINED: ~85,000 TPS** (err<1%, p99 ~100ms) at concurrency 2048. Collapse at 4096 = transport/GC saturation (latency 7s+), NOT policy eval. Fail-closed held: 0 wrong-allow, 0 5xx — all "errors" at 4096 were client-side timeouts. Live engine (8089) untouched throughout.
+
+
+## STRESS SWEEP 14 Nov (owner request "lihat batasan, berapa TPS/concurrent")
+
+Lingkungan: Mac Mini M4 10-core/16GB. Engine = image Docker resmi `ghcr.io/metabbe3/cerberus:latest` (terisolasi, data testdata), loadgen 12 level conc 1→2048, 10 s/level, key `k-open` tanpa rate-limit. Tap bench = jalur penuh (decide → capture → turn-write → forward) 200 conc vs upstream loopback.
+
+| Komponen | Max sustained | p50 | p99 | err | Catatan |
+|---|---|---|---|---|---|
+| Engine (Docker) | **35.822 TPS** @ 2048 conc | 30,2 ms | 274 ms | 0% | knee ~512 conc (21k TPS); Docker bridge ≈ ⅓ native |
+| Engine (native binary, 12 Nov) | 105.800 TPS @ 2048 conc | — | 1,3 ms | 0% | loadgen random 5-stage mix |
+| cerberus-tap (jalur LLM penuh) | ~2.467 TPS @ 200 conc | 16,6 ms | 268 ms | 0%* | *upstream dummy 404 — tap-side sehat |
+| Tap path blokir (decide deny cepat) | ~1.138 TPS @ 200 conc | 27,8 ms | 246 ms | — | fail-closed murah |
+
+Konteks kapasitas: target MVP 60 user + ratusan agent ≈ <100 TPS → headroom **~350× (engine)** / **~25× (tap)**.
+
+Kurva per level (engine Docker): 1c=841 → 32c=7.488 → 128c=11.800 → 512c=20.979 → 1024c=29.602 → 2048c=35.822 TPS (p50 1,4→30,2 ms; err 0% sepanjang sweep).
+
+Red-team manual 11 probe (stage-spoof, kill-switch, case-trick, homoglyph, SQLi, header spoof, body 11/20MB, CL+TE smuggling, no-auth, burst): **0 policy escape** — 2 catatan sadar-desain dicatat di CHANGELOG-AUDIT.md (bypass_unknown_keys=true hanya testdata; docker-exec di-gate di stage docker, bukan args stage tool).
