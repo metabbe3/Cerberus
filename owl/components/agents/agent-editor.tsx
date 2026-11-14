@@ -40,6 +40,20 @@ import { AgentDecisionsTab } from "@/components/agents/agent-decisions-tab";
 import { useBreakGlass, useData, useDeleteAgent, useSaveAgent, useToggleKillSwitch } from "@/lib/queries";
 import type { Agent, MaskingRule } from "@/lib/schema";
 
+// Klik-untuk-tambah: nilai umum yang muncul sebagai chip saran di editor
+// (tetap bisa ketik manual untuk nilai custom).
+const KNOWN_TOOLS = [
+  "read", "write", "edit", "bash", "exec", "grep", "glob",
+  "web_search", "web_fetch", "http_request",
+  "db_query", "docker_exec", "docker rm", "ssh_run", "k8s_apply",
+  "execute_shell", "send_message", "schedule_task", "analyze_logs",
+];
+const KNOWN_MODELS = [
+  "glm-*", "glm-5.2", "glm-5.2-flash",
+  "gemini-*", "gpt-4", "m1", "claude-*", "gpt-*",
+];
+
+
 const TRANSFORMS = ["redact", "mask", "hash"] as const;
 const SCOPES = ["both", "args", "response"] as const;
 
@@ -379,6 +393,7 @@ export function AgentEditor({
             hint="exact match, case-sensitive"
             values={list("allowed_tools")}
             onChange={(v) => set({ allowed_tools: v })}
+            suggestions={KNOWN_TOOLS}
           />
           <StringListEditor
             label="restricted_tools"
@@ -420,6 +435,7 @@ export function AgentEditor({
             hint="gates the llm stage alongside the team's list"
             values={list("allowed_models")}
             onChange={(v) => set({ allowed_models: v })}
+            suggestions={KNOWN_MODELS}
           />
           <div className="grid gap-4 sm:grid-cols-3">
             <label className="space-y-1.5">
