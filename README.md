@@ -68,11 +68,21 @@ Cerberus menegakkan tata kelola zero-trust di seluruh siklus hidup interaksi age
 | **`http` (Egress)** | Koneksi outbound agent | Memutus akses ke subnet internal (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) & AWS metadata (`169.254.169.254`) | ✅ **Live** |
 | **`docker`** | Socket API Docker | Melarang container privileged, mount direktori host sensitif (`/etc`, `/var/run`, `~/.ssh`, `.env*`), dan penghapusan container terlindungi | ✅ **Live** |
 | **`ssh`** | Sesi bastion SSH | Memeriksa setiap `exec` command sebelum di-relay ke server upstream | ✅ **Live** |
-| **`llm`** | Prompt & Turn LLM | Memverifikasi allowlist model (misal `claude-*`), kuota budget USD kumulatif, dan deteksi prompt injection | ✅ **Live** |
-| **`db`** | Query database & SQL parser | Mencegah `DROP TABLE`, `TRUNCATE`, query destruktif, atau akses ke database production tanpa otorisasi | ⏳ *Coming Soon* |
-| **`k8s`** | Kubernetes API admission | Mencegah penghapusan pod critical, modifikasi ConfigMap/Secrets sensitive, dan namespace bypass | ⏳ *Coming Soon* |
+| **`llm`** | Prompt & Turn LLM | Memverifikasi allowlist model (misal `claude-*`), kuota panggilan kumulatif per-agen (satuan COUNT, bukan USD — biaya metered adalah ranah LLM router seperti LiteLLM), dan deteksi prompt injection | ✅ **Live** |
+| **`db`** | Query database & SQL parser | Mencegah `DROP TABLE`, `TRUNCATE`, akses tabel sensitif (mis. tabel kredensial via CTE), dan query destruktif | ✅ **Live** |
+| **`k8s`** | Kubernetes API admission | Mencegah penghapusan pod critical, modifikasi ConfigMap/Secrets sensitive, dan namespace bypass | ✅ **Live** |
 
 ---
+
+## Bukti Pengujian (Evidence-First) 🧪
+
+Setiap klaim di repo ini punya baris ledger + commit + bukti run — lihat [docs/CHANGELOG-AUDIT.md](docs/CHANGELOG-AUDIT.md).
+
+- **Rego Policy Suite:** 282/282 test PASS (`opa test policies/`) — regression suite per stage + fixture attack.
+- **Monte Carlo Fuzzing:** 45.000 sampel / 5 stage-parallel, seed 20261114 → **0 escape** (p_ub99 = 0.000102), p99 latency 83ms total. Rantai fix: 12.353 → 3.534 → 589 → 588 → 0 escape dalam 5 run. Detail skenario: [docs/qa/MONTE-CARLO.md](docs/qa/MONTE-CARLO.md).
+- **Red-Team Suite:** 10 serangan live (host-spoof, raw-IP, key-spoof, burst, kill-switch takeover, dll.) = 9 BLOCKED + 1 WARN + 0 EXPOSED.
+- **Load:** ~85k TPS decide p95 < 3ms (loadgen-stress), soak & matrix: [docs/qa/BENCH.md](docs/qa/BENCH.md).
+- **CI:** lint + `make test` (22 paket, race) + build + GHCR image di setiap push — badge di atas.
 
 ## Konsep Inti Arsitektur
 
@@ -82,6 +92,7 @@ Cerberus menegakkan tata kelola zero-trust di seluruh siklus hidup interaksi age
 4. **Actual Invocation Verification:** Validasi tool calls dan argumen aktual yang dipanggil agent, bukan sekadar prompt teks.
 5. **Dynamic Data Masking:** Redaksi otomatis pola sensitif (`sk-*`, token API, email, postgres DSN) pada argument tool dan log audit.
 6. **Emergency Kill-Switch:** Tombol darurat pemutus akses global atau per-agen, dengan dukungan break-glass 15 menit melalui dashboard Owl.
+7. **User Auth DB-First (SSO-ready):** Login Owl via user database engine (hash Argon2id, role admin/viewer, lockout 5×/15m) — `OWL_PASSWORD` kini hanya bootstrap. Lihat ADR-0005.
 7. **PostgreSQL System of Record:** Opsi persistensi ganda dengan database relasional dan fallback otomatis ke file lokal (`prod.json`).
 
 ---
@@ -92,6 +103,9 @@ Cerberus menegakkan tata kelola zero-trust di seluruh siklus hidup interaksi age
 - **`GET /v1/audit/timeseries`:** Agregasi time-series keputusan evaluasi per interval waktu untuk visualisasi Owl / Grafana.
 - **Owl Dashboard (Next.js 15):** Dashboard visual di `http://127.0.0.1:3000` dengan live streaming event SSE.
 - **Daily Rotating Audit Logs:** Database SQLite harian berformat WAL dengan retensi otomatis dan fire-and-forget log shipping.
+- **Breach Center:** Page `/breaches` mengklasifikasi deny jadi temuan keamanan (CRITICAL/HIGH/MEDIUM) dengan severity map, fingerprint dedup ×500, dan first-seen badge — terpisah dari deny rate-limit/policy biasa.
+- **Policy Explorer:** Menjalankan 282 test Rego langsung dari dashboard (pass/fail per modul) tanpa CLI.
+- **Upstream LLM Fleksibel:** Set endpoint & API key upstream (LiteLLM/z.ai/custom) dari Settings — key disimpan terenkripsi AES-256-GCM di DB engine, tak pernah dikembalikan oleh GET (hanya `key_hint` 4 char); `cerberus-tap` hot-reload atomic 30s.
 
 ---
 
@@ -106,3 +120,8 @@ Cerberus menegakkan tata kelola zero-trust di seluruh siklus hidup interaksi age
 | `/v1/audit/timeseries` | `GET` | Data deret waktu keputusan evaluasi |
 | `/v1/status`, `/v1/events` | `GET` | Endpoint status dan streaming event SSE real-time |
 | `/v1/decide/tool`, `/v1/decide/llm`, `/v1/decide` | `POST` | Endpoint evaluasi keputusan kebijakan |
+| `/v1/auth/login`, `/v1/auth/logout`, `/v1/auth/me` | `POST`/`GET` | Autentikasi user DB (Argon2id, session cookie, lockout 5×/15m) |
+| `/v1/admin/users`, `/v1/admin/users/{id}/disable` | `GET`, `POST`, `PUT`, `DELETE` | Manajemen user & role (admin/viewer) — RBAC server-side |
+| `/v1/audit/breaches` | `GET` | Breach Center: temuan keamanan 3-tier severity + fingerprint dedup |
+| `/v1/policy/modules`, `/v1/policy/test-run` | `GET`, `POST` | Policy Explorer: 282 test suite + jalankan test dari dashboard |
+| `/v1/admin/upstream`, `/v1/admin/upstream/test` | `GET`, `PUT`, `POST` | Konfigurasi LLM upstream (endpoint + key AES-256-GCM, test koneksi) |
