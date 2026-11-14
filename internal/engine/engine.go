@@ -58,15 +58,14 @@ const (
 // prepared-query eval → masking. It holds no mutex of its own; the LRU and
 // singleflight group are concurrency-safe.
 type Engine struct {
-	store      *policy.Store
-	sink       Sink
-	opts       Options
-	cache      *lru.Cache[string, Decision]
-	sf         singleflight.Group
-	cancelSwap func()
-	// evalHook, when non-nil, runs at the top of every eval. Test seam for
-	// pinning leader/waiter interleavings; nil in production.
-	evalHook func()
+	store        *policy.Store
+	sink         Sink
+	opts         Options
+	cache        *lru.Cache[string, Decision]
+	sf           singleflight.Group
+	cancelSwap   func()
+	evalHook     func()
+	taintTracker *TaintTracker
 }
 
 // Close unsubscribes the Engine from store swap events.
@@ -108,7 +107,16 @@ func New(store *policy.Store, sink Sink, opts Options) (*Engine, error) {
 	})
 	policyEpoch.Set(float64(store.Current().Epoch))
 	SetBundleRevision(store.Current().Revision)
-	return &Engine{store: store, sink: sink, opts: opts, cache: cache, cancelSwap: cancelSwap}, nil
+	tt, err := NewTaintTracker(10000, 60*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("engine: taint tracker: %w", err)
+	}
+	return &Engine{store: store, sink: sink, opts: opts, cache: cache, cancelSwap: cancelSwap, taintTracker: tt}, nil
+}
+
+// TaintTracker returns the engine's taint tracking instance.
+func (e *Engine) TaintTracker() *TaintTracker {
+	return e.taintTracker
 }
 
 // TraceEntry captures one rule or expression evaluation in an explain trace.
@@ -141,12 +149,58 @@ func (d Decision) Allowed() bool {
 	return d.Decision == "allow"
 }
 
+func normalizeInput(in Input) Input {
+	if in.Stage == "http" {
+		if in.Resource != "" {
+			in.Resource = util.NormalizeURLResource(in.Resource)
+		}
+		if in.Host != "" {
+			in.Host = util.NormalizeIPString(in.Host)
+		}
+	}
+	return in
+}
+
 // Decide answers one request. It never returns an error and never blocks on a
 // mutex: cache hit ~100ns, miss goes through singleflight so N identical
 // concurrent requests share one eval.
 func (e *Engine) Decide(ctx context.Context, in Input) Decision {
+	in = normalizeInput(in)
 	start := time.Now()
 	snap := e.store.Current()
+
+	sessionKey := SessionKey(in)
+	if e.taintTracker != nil && IsEgressAttempt(in) {
+		if mark, tainted := e.taintTracker.GetActiveTaint(sessionKey); tainted {
+			age := time.Since(mark.CreatedAt).Round(time.Millisecond)
+			if age < time.Millisecond {
+				age = time.Millisecond
+			}
+			d := Decision{
+				Decision: "deny",
+				RuleID:   "chain.tainted_exfil",
+				Reason:   fmt.Sprintf("tainted exfiltration blocked: source=%s, age=%s (TTL 60s)", mark.Source, age),
+				Epoch:    snap.Epoch,
+			}
+			d.LatencyUS = time.Since(start).Microseconds()
+			decisionsTotal.WithLabelValues(metricStage(snap, in.Stage), d.Decision, metricRuleID(snap, d.RuleID)).Inc()
+			e.sink.Emit(audit.Event{
+				Time:      time.Now(),
+				Stage:     in.Stage,
+				KeyID:     in.KeyID,
+				Subject:   subject(in),
+				Decision:  d.Decision,
+				RuleID:    d.RuleID,
+				Reason:    d.Reason,
+				Epoch:     d.Epoch,
+				Cached:    false,
+				LatencyUS: d.LatencyUS,
+				Args:      auditArgsFor(in.Stage, d),
+			})
+			return d
+		}
+	}
+
 	key, ok := cacheKey(snap.Epoch, in)
 	epochStr := snap.EpochStr
 	if epochStr == "" {
@@ -194,6 +248,12 @@ func (e *Engine) Decide(ctx context.Context, in Input) Decision {
 		}
 	}
 
+	if d.Allowed() && e.taintTracker != nil {
+		if src, sensitive := DetectSensitiveSource(in); sensitive {
+			e.taintTracker.RecordTaint(sessionKey, src)
+		}
+	}
+
 	d.LatencyUS = time.Since(start).Microseconds()
 	decisionsTotal.WithLabelValues(metricStage(snap, in.Stage), d.Decision, metricRuleID(snap, d.RuleID)).Inc()
 	e.sink.Emit(audit.Event{
@@ -217,10 +277,32 @@ func (e *Engine) Decide(ctx context.Context, in Input) Decision {
 // Note: Explain does not emit audit events directly; audit emission is handled
 // at the HTTP handler layer to avoid double emission and preserve caller context.
 func (e *Engine) Explain(ctx context.Context, in Input) Decision {
+	in = normalizeInput(in)
 	start := time.Now()
 	snap := e.store.Current()
 
+	sessionKey := SessionKey(in)
+	if e.taintTracker != nil && IsEgressAttempt(in) {
+		if mark, tainted := e.taintTracker.GetActiveTaint(sessionKey); tainted {
+			age := time.Since(mark.CreatedAt).Round(time.Millisecond)
+			if age < time.Millisecond {
+				age = time.Millisecond
+			}
+			return Decision{
+				Decision:  "deny",
+				RuleID:    "chain.tainted_exfil",
+				Reason:    fmt.Sprintf("tainted exfiltration blocked: source=%s, age=%s (TTL 60s)", mark.Source, age),
+				Epoch:     snap.Epoch,
+				LatencyUS: time.Since(start).Microseconds(),
+			}
+		}
+	}
+
 	if d := e.checkShellGuard(snap, in); d != nil {
+		d.LatencyUS = time.Since(start).Microseconds()
+		return *d
+	}
+	if d := e.checkLLMGuard(snap, in); d != nil {
 		d.LatencyUS = time.Since(start).Microseconds()
 		return *d
 	}
@@ -311,6 +393,11 @@ func (e *Engine) Explain(ctx context.Context, in Input) Decision {
 	d.Trace = entries
 	d.MaskedArgs = applyMasking(snap, in.KeyID, in.Args)
 	d.MaskedPrompt = applyPromptMasking(snap, in.KeyID, in)
+	if d.Allowed() && e.taintTracker != nil {
+		if src, sensitive := DetectSensitiveSource(in); sensitive {
+			e.taintTracker.RecordTaint(sessionKey, src)
+		}
+	}
 	d.LatencyUS = time.Since(start).Microseconds()
 	return d
 }
@@ -348,6 +435,7 @@ func applyPromptMasking(snap *policy.Snapshot, keyID string, in Input) any {
 // EvalSnapshot evaluates an input against the given policy Snapshot directly
 // without emitting an audit event or mutating the cache.
 func (e *Engine) EvalSnapshot(ctx context.Context, snap *policy.Snapshot, in Input) Decision {
+	in = normalizeInput(in)
 	if snap == nil {
 		snap = e.store.Current()
 	}
@@ -358,6 +446,9 @@ func (e *Engine) EvalSnapshot(ctx context.Context, snap *policy.Snapshot, in Inp
 // object to a Decision, and applies the key's masking rules to args.
 func (e *Engine) eval(ctx context.Context, snap *policy.Snapshot, in Input) Decision {
 	if d := e.checkShellGuard(snap, in); d != nil {
+		return *d
+	}
+	if d := e.checkLLMGuard(snap, in); d != nil {
 		return *d
 	}
 
@@ -518,7 +609,7 @@ func (e *Engine) checkShellGuard(snap *policy.Snapshot, in Input) *Decision {
 		return nil
 	}
 	var cmdStr string
-	for _, k := range []string{"cmd", "command", "script"} {
+	for _, k := range []string{"cmd", "command", "script", "exec", "argv"} {
 		if v, ok := in.Args[k]; ok {
 			if s, ok := v.(string); ok && s != "" {
 				cmdStr = s
@@ -609,5 +700,59 @@ func toStringSlice(raw any) []string {
 		}
 		return out
 	}
+	return nil
+}
+
+// checkLLMGuard enforces:
+// 1. Total prompt bytes > 64KB -> DENY ai.llm.oversized_uninspected
+// 2. Total prompt bytes > 4KB without scan injection in context -> DENY ai.llm.unscanned
+func (e *Engine) checkLLMGuard(snap *policy.Snapshot, in Input) *Decision {
+	if in.Stage != "llm" {
+		return nil
+	}
+	total := len(in.Prompt)
+	for _, m := range in.Messages {
+		if s, ok := m["content"].(string); ok {
+			total += len(s)
+		} else if m["content"] != nil {
+			b, _ := json.Marshal(m["content"])
+			total += len(b)
+		}
+	}
+	if in.Args != nil {
+		if s, ok := in.Args["system"].(string); ok {
+			total += len(s)
+		}
+	}
+
+	if total > 65536 {
+		return &Decision{
+			Decision: "deny",
+			RuleID:   "ai.llm.oversized_uninspected",
+			Reason:   fmt.Sprintf("prompt size %d bytes exceeds 64KB uninspected limit", total),
+			Epoch:    snap.Epoch,
+		}
+	}
+
+	if total > 4096 {
+		hasScanner := false
+		if in.Context != nil {
+			for _, k := range []string{"scanner", "scan", "scan_result", "scanner_result", "injection_scan", "injection_scanned", "scanned"} {
+				if v, ok := in.Context[k]; ok && v != nil && v != false && v != "" {
+					hasScanner = true
+					break
+				}
+			}
+		}
+		if !hasScanner {
+			return &Decision{
+				Decision: "deny",
+				RuleID:   "ai.llm.unscanned",
+				Reason:   fmt.Sprintf("prompt size %d bytes exceeds 4KB without injection scan in context", total),
+				Epoch:    snap.Epoch,
+			}
+		}
+	}
+
 	return nil
 }

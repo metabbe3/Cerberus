@@ -95,7 +95,7 @@ test_missing_key_bypass_true_allows if {
 test_missing_key_bypass_false_denies if {
 	out := decide_closed({"stage": "tool"})
 	out.decision == "deny"
-	out.rule_id == "config.unknown_key_closed"
+	out.rule_id == "authz.unknown_key"
 }
 
 # Registered key whose team_id is not in teams: governed by key only, never
@@ -127,19 +127,19 @@ decide_flag(inp, flag) := out if {
 test_bypass_flag_string_true_fails_closed if {
 	out := decide_flag({"stage": "tool", "key_id": "new-agent"}, "true")
 	out.decision == "deny"
-	out.rule_id == "config.unknown_key_closed"
+	out.rule_id == "authz.unknown_key"
 }
 
 test_bypass_flag_number_fails_closed if {
 	out := decide_flag({"stage": "tool", "key_id": "new-agent"}, 1)
-	out.rule_id == "config.unknown_key_closed"
+	out.rule_id == "authz.unknown_key"
 }
 
 test_bypass_flag_missing_fails_closed if {
 	out := decision with input as {"stage": "tool", "key_id": "new-agent"}
 		with data.config as {}
 		with data.agents as data.testdata.agents
-	out.rule_id == "config.unknown_key_closed"
+	out.rule_id == "authz.unknown_key"
 }
 
 # internal.default: a known stage whose stage package yields nothing (here: the

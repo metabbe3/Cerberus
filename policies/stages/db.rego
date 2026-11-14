@@ -129,7 +129,7 @@ select_requires_limit if {
 }
 
 is_select_statement(s) if {
-	regex.match(`(?i)^\s*select\b`, s)
+	regex.match(`(?i)^\s*(select|with)\b`, s)
 }
 
 has_limit_clause(s) if {

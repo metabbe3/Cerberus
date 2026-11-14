@@ -25,6 +25,18 @@ tool_call := object.get(input, "tool_call", "")
 
 llm_decision := {
 	"decision": "deny",
+	"rule_id": "ai.llm.oversized_uninspected",
+	"reason": sprintf("prompt size %d bytes exceeds 64KB uninspected limit", [total_prompt_bytes]),
+} if {
+	llm_oversized
+} else := {
+	"decision": "deny",
+	"rule_id": "ai.llm.unscanned",
+	"reason": sprintf("prompt size %d bytes exceeds 4KB without injection scan in context", [total_prompt_bytes]),
+} if {
+	llm_unscanned
+} else := {
+	"decision": "deny",
 	"rule_id": "ai.llm.budget_invalid",
 	"reason": budget_invalid_reason,
 } if {
@@ -71,6 +83,53 @@ llm_decision := {
 	"decision": "allow",
 	"rule_id": "ai.llm.allow",
 	"reason": sprintf("model %q allowed", [model]),
+}
+
+# ---------- prompt size & scanner inspection checks (MC-P0 Akar 4) ----------
+
+prompt_len := count(input.prompt) if {
+	is_string(input.prompt)
+} else := 0
+
+system_string_len := count(input.system) if {
+	is_string(input.system)
+} else := 0
+
+system_walk_lens := [count(v) |
+	input.system
+	not is_string(input.system)
+	[_, v] := walk(input.system)
+	is_string(v)
+]
+
+msg_string_lens := [count(m.content) |
+	some m in input.messages
+	is_string(m.content)
+]
+
+msg_walk_lens := [count(v) |
+	some m in input.messages
+	not is_string(m.content)
+	[_, v] := walk(m.content)
+	is_string(v)
+]
+
+total_prompt_bytes := (((prompt_len + system_string_len) + sum(system_walk_lens)) + sum(msg_string_lens)) + sum(msg_walk_lens)
+
+llm_oversized if total_prompt_bytes > 65536
+
+injection_scanned if {
+	is_object(input.context)
+	some k in ["scanner", "scan", "scan_result", "scanner_result", "injection_scan", "injection_scanned", "scanned"]
+	v := object.get(input.context, k, null)
+	v != null
+	v != false
+	v != ""
+}
+
+llm_unscanned if {
+	total_prompt_bytes > 4096
+	not injection_scanned
 }
 
 # Budget limits: agent, registered team, and optional global budget limit.

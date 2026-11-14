@@ -447,3 +447,20 @@ test_k8s_happy_path_get_deployments if {
 	out.decision == "allow"
 	out.rule_id == "k8s.allow"
 }
+
+# 25. Secret output blocked: -o jsonpath={.data}
+test_k8s_secret_output_blocked_jsonpath if {
+	out := decide({
+		"stage": "k8s",
+		"key_id": "k-k8s-secrets",
+		"tool_call": "kubectl",
+		"args": {
+			"verb": "get",
+			"resource": "secret",
+			"namespace": "dev",
+			"flags": ["-o", "jsonpath={.data}"],
+		},
+	})
+	out.decision == "deny"
+	out.rule_id == "k8s.secret_read"
+}

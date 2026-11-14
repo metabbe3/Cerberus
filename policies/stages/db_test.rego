@@ -610,3 +610,19 @@ test_db_happy_path_aggregate if {
 	out.decision == "allow"
 	out.rule_id == "db.allow"
 }
+
+# 36. CTE WITH query accessing sensitive table (credentials) denied
+test_db_cte_sensitive_table_violation if {
+	out := decide({
+		"stage": "db",
+		"key_id": "k-db-readonly",
+		"tool_call": "sql_exec",
+		"args": {
+			"dialect": "postgres",
+			"sql": "WITH d AS (SELECT * FROM credentials) SELECT * FROM d",
+			"database": "customers-prod",
+		},
+	})
+	out.decision == "deny"
+	out.rule_id == "db.sensitive_table"
+}

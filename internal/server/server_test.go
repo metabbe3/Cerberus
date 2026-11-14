@@ -434,10 +434,28 @@ func TestAdmin_PutData_IOFailure500NoPath(t *testing.T) {
 func TestDecide_BodyTooLarge413(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	big := `{"prompt":"` + strings.Repeat("x", 2<<20) + `"}`
+
+	// 2 MiB prompt: within the 10 MiB decide cap so the policy engine can
+	// inspect and deny it auditable (ai.llm.oversized_uninspected) — not a
+	// transport-level rejection.
+	big := `{"stage":"llm","key_id":"k-open","model":"m1","prompt":"` + strings.Repeat("x", 2<<20) + `"}`
 	resp := h.do(t, http.MethodPost, "/v1/decide", "application/json", big, false)
-	if resp.StatusCode != http.StatusRequestEntityTooLarge {
-		t.Fatalf("status = %d, want 413", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (policy deny expected for oversized)", resp.StatusCode)
+	}
+	verdict := decodeJSON[struct {
+		Decision string `json:"decision"`
+		RuleID   string `json:"rule_id"`
+	}](t, resp.Body)
+	if verdict.Decision != "deny" || verdict.RuleID != "ai.llm.oversized_uninspected" {
+		t.Fatalf("2MiB prompt verdict = %+v, want deny/ai.llm.oversized_uninspected", verdict)
+	}
+
+	// Beyond the 10 MiB cap: hard 413 as before.
+	huge := `{"prompt":"` + strings.Repeat("x", 11<<20) + `"}`
+	resp2 := h.do(t, http.MethodPost, "/v1/decide", "application/json", huge, false)
+	if resp2.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", resp2.StatusCode)
 	}
 }
 

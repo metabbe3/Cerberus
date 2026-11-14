@@ -184,5 +184,5 @@ test_docker_stranger_bypass_closed if {
 		"resource": "any-image:latest",
 	})
 	out.decision == "deny"
-	out.rule_id == "config.unknown_key_closed"
+	out.rule_id == "authz.unknown_key"
 }

@@ -204,6 +204,6 @@ allow_bypass_keys := {
 
 deny_unknown_key := {
 	"decision": "deny",
-	"rule_id": "config.unknown_key_closed",
+	"rule_id": "authz.unknown_key",
 	"reason": "key not registered and bypass_unknown_keys=false (fail-closed)",
 }

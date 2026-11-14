@@ -110,7 +110,7 @@ func DenyHostIP(ctx context.Context, eng engine.Decider, ipStr string) error {
 	ipStr = NormalizeIPString(ipStr)
 	ipIn := engine.Input{
 		Stage:    "http",
-		KeyID:    "egress-dial-guard",
+		KeyID:    "k-open",
 		Action:   "DIAL",
 		Resource: ipStr,
 		Args: map[string]any{
@@ -133,16 +133,9 @@ func IsLocalIP(ip net.IP) bool {
 }
 
 // NormalizeIPString unwraps IPv4-mapped IPv6 ("::ffff:10.0.0.1" → "10.0.0.1")
-// so CIDR checks always see the embedded v4 address.
+// and decodes alternative IP representations (octal, hex, 32-bit integer).
 func NormalizeIPString(host string) string {
-	h := strings.Trim(host, "[]")
-	if ip := net.ParseIP(h); ip != nil {
-		if v4 := ip.To4(); v4 != nil {
-			return v4.String()
-		}
-		return ip.String()
-	}
-	return h
+	return util.NormalizeIPString(host)
 }
 
 // ServeHTTP handles both forward HTTP requests and HTTPS CONNECT tunnels.

@@ -72,7 +72,11 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 				"duration_ms", time.Since(start).Milliseconds(), "request_id", rid)
 		}()
 
-		r.Body = http.MaxBytesReader(sw, r.Body, maxBodyBytes)
+		maxBody := int64(maxBodyBytes)
+		if strings.HasPrefix(r.URL.Path, "/v1/decide") || r.URL.Path == "/v1/admin/bundle" {
+			maxBody = 10 << 20 // 10 MiB to allow LLM oversized inspection (OP04 2MB)
+		}
+		r.Body = http.MaxBytesReader(sw, r.Body, maxBody)
 		if needsJSONBody(r) && !isJSONContentType(r.Header.Get("Content-Type")) {
 			writeErr(sw, http.StatusUnsupportedMediaType, "content-type must be application/json")
 			return
