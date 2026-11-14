@@ -474,6 +474,11 @@ func TestLogger_DailyPartitionAndPruning(t *testing.T) {
 		t.Fatalf("expected old file %s to exist: %v", oldFileName, err)
 	}
 
+	// Set old file mtime back to oldTime so it reflects a genuinely old file on disk (E1.7)
+	_ = os.Chtimes(filepath.Join(tmpDir, oldFileName), oldTime, oldTime)
+	_ = os.Chtimes(filepath.Join(tmpDir, oldFileName+"-wal"), oldTime, oldTime)
+	_ = os.Chtimes(filepath.Join(tmpDir, oldFileName+"-shm"), oldTime, oldTime)
+
 	// Trigger prune
 	l2, err := Open(ctx, dbPath, Options{RetentionDays: 7})
 	if err != nil {

@@ -185,7 +185,10 @@ func (p *PG) saveData(ctx context.Context, data map[string]any) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	cfg, _ := json.Marshal(data["config"])
+	cfg, err := json.Marshal(data["config"])
+	if err != nil {
+		p.log.Warn("store: marshal config failed", "error", err)
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO gateway_config (id, config, updated_at) VALUES (1, $1, now())
 		ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = now()`, string(cfg)); err != nil {
@@ -211,7 +214,10 @@ func (p *PG) saveData(ctx context.Context, data map[string]any) error {
 				pol[k] = v
 			}
 		}
-		polJSON, _ := json.Marshal(pol)
+		polJSON, err := json.Marshal(pol)
+		if err != nil {
+			p.log.Warn("store: marshal agent policy failed", "key", key, "error", err)
+		}
 		team, _ := doc["team_id"].(string)
 		if team == "" {
 			team, _ = doc["team"].(string)
@@ -231,7 +237,10 @@ func (p *PG) saveData(ctx context.Context, data map[string]any) error {
 	teams, _ := data["teams"].(map[string]any)
 	for id, raw := range teams {
 		doc, _ := raw.(map[string]any)
-		polJSON, _ := json.Marshal(doc)
+		polJSON, err := json.Marshal(doc)
+		if err != nil {
+			p.log.Warn("store: marshal team policy failed", "id", id, "error", err)
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO teams (team_id, name, policy) VALUES ($1, $1, $2)
 			ON CONFLICT (team_id) DO UPDATE SET policy = EXCLUDED.policy, updated_at = now()`, id, string(polJSON)); err != nil {
@@ -259,7 +268,10 @@ func (p *PG) saveData(ctx context.Context, data map[string]any) error {
 	}
 	if doms, ok := data["domains"].(map[string]any); ok {
 		for id, raw := range doms {
-			polJSON, _ := json.Marshal(raw)
+			polJSON, err := json.Marshal(raw)
+			if err != nil {
+				p.log.Warn("store: marshal domain policy failed", "domain", id, "error", err)
+			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO domains (domain, policy) VALUES ($1, $2) ON CONFLICT (domain) DO UPDATE SET policy = EXCLUDED.policy`, id, string(polJSON)); err != nil {
 				return fmt.Errorf("store: save domain %s: %w", id, err)
 			}
@@ -267,7 +279,10 @@ func (p *PG) saveData(ctx context.Context, data map[string]any) error {
 	}
 
 	if shield, ok := data["prod_shield"].(map[string]any); ok {
-		polJSON, _ := json.Marshal(shield)
+		polJSON, err := json.Marshal(shield)
+		if err != nil {
+			p.log.Warn("store: marshal prod_shield failed", "error", err)
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO prod_shield (id, policy, updated_at) VALUES (1, $1, now())
 			ON CONFLICT (id) DO UPDATE SET policy = EXCLUDED.policy, updated_at = now()`, string(polJSON)); err != nil {
@@ -275,7 +290,10 @@ func (p *PG) saveData(ctx context.Context, data map[string]any) error {
 		}
 	}
 	if ssh, ok := data["ssh"].(map[string]any); ok {
-		polJSON, _ := json.Marshal(ssh)
+		polJSON, err := json.Marshal(ssh)
+		if err != nil {
+			p.log.Warn("store: marshal ssh policy failed", "error", err)
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO ssh_policy (id, policy, updated_at) VALUES (1, $1, now())
 			ON CONFLICT (id) DO UPDATE SET policy = EXCLUDED.policy, updated_at = now()`, string(polJSON)); err != nil {
@@ -301,7 +319,9 @@ func (p *PG) ListTemplates(ctx context.Context) ([]map[string]any, error) {
 			return nil, err
 		}
 		var polDoc map[string]any
-		_ = json.Unmarshal([]byte(pol), &polDoc)
+		if err := json.Unmarshal([]byte(pol), &polDoc); err != nil {
+			return nil, fmt.Errorf("store: unmarshal template %s policy: %w", id, err)
+		}
 		out = append(out, map[string]any{
 			"id": id, "name": name, "description": desc, "stage": stage,
 			"policy": polDoc, "builtin": builtin,

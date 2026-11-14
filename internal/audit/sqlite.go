@@ -11,12 +11,16 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/metabbe3/cerberus/internal/masking"
 	// pure-Go SQLite driver; registers as "sqlite"
 	_ "modernc.org/sqlite"
 )
+
+// DefaultRetentionDays is the default retention period in days for SQLite audit daily logs.
+const DefaultRetentionDays = 30
 
 var defaultMaskRules, _ = masking.Compile([]masking.Spec{
 	{Pattern: `sk-[A-Za-z0-9_\-]+`, Transform: "redact", Scope: ""},
@@ -53,23 +57,33 @@ CREATE INDEX IF NOT EXISTS idx_revisions_time ON revisions (time);
 
 const eventCols = "id, time, stage, key_id, subject, decision, rule_id, reason, epoch, cached, latency_us, args"
 
+const insertStmtSQL = `INSERT INTO events
+	(id, time, stage, key_id, subject, decision, rule_id, reason, epoch, cached, latency_us, args)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
 type dbManager struct {
-	mu            sync.Mutex
-	baseDir       string
-	origPath      string
-	isMemory      bool
-	retentionDays int
-	dbs           map[string]*sql.DB // dayKey "YYYYMMDD" -> *sql.DB
+	mu                sync.Mutex
+	baseDir           string
+	origPath          string
+	isMemory          bool
+	retentionDays     int
+	dbs               map[string]*sql.DB   // dayKey "YYYYMMDD" (or "memory") -> *sql.DB (writers)
+	readDBs           map[string]*sql.DB   // fileName -> *sql.DB (readers, SetMaxOpenConns=2)
+	insertStmts       map[string]*sql.Stmt // dayKey -> *sql.Stmt (cached prepared insert)
+	testOpenReadCount atomic.Int64
+	testPruneCalls    atomic.Int64
 }
 
 func newDBManager(dbPath string, retentionDays int) (*dbManager, error) {
 	if retentionDays <= 0 {
-		retentionDays = 30
+		retentionDays = DefaultRetentionDays
 	}
 	m := &dbManager{
 		origPath:      dbPath,
 		retentionDays: retentionDays,
 		dbs:           make(map[string]*sql.DB),
+		readDBs:       make(map[string]*sql.DB),
+		insertStmts:   make(map[string]*sql.Stmt),
 	}
 
 	if dbPath == ":memory:" {
@@ -94,6 +108,44 @@ func newDBManager(dbPath string, retentionDays int) (*dbManager, error) {
 	return m, nil
 }
 
+// Test methods for lifecycle verification (scoped per dbManager / Logger instance)
+
+func (m *dbManager) TestResetOpenReadCount() int64 {
+	return m.testOpenReadCount.Swap(0)
+}
+
+func (m *dbManager) TestGetOpenReadCount() int64 {
+	return m.testOpenReadCount.Load()
+}
+
+func (m *dbManager) TestGetPruneCalls() int64 {
+	return m.testPruneCalls.Load()
+}
+
+// TestResetOpenReadCount resets and returns the count of opened read handles for this Logger.
+func (l *Logger) TestResetOpenReadCount() int64 {
+	if l == nil || l.mgr == nil {
+		return 0
+	}
+	return l.mgr.TestResetOpenReadCount()
+}
+
+// TestGetOpenReadCount returns the current count of opened read handles for this Logger.
+func (l *Logger) TestGetOpenReadCount() int64 {
+	if l == nil || l.mgr == nil {
+		return 0
+	}
+	return l.mgr.TestGetOpenReadCount()
+}
+
+// TestGetPruneCalls returns the number of prune calls executed for this Logger.
+func (l *Logger) TestGetPruneCalls() int64 {
+	if l == nil || l.mgr == nil {
+		return 0
+	}
+	return l.mgr.TestGetPruneCalls()
+}
+
 // sqliteDSN appends a busy_timeout pragma to the DSN so readers block up to 2s
 // instead of failing instantly with SQLITE_BUSY while a batch writer holds the
 // write lock (observed as intermittent empty audit query results).
@@ -102,6 +154,14 @@ func sqliteDSN(path string) string {
 		return path
 	}
 	return "file:" + path + "?_pragma=busy_timeout(2000)"
+}
+
+// sqliteDSNWriter appends busy_timeout and journal_size_limit (64MB) to writer DSN (E1.5).
+func sqliteDSNWriter(path string) string {
+	if path == ":memory:" {
+		return path
+	}
+	return "file:" + path + "?_pragma=busy_timeout(2000)&_pragma=journal_size_limit(67108864)"
 }
 
 // openSQLiteRead opens an existing daily DB for querying WITHOUT running the
@@ -116,7 +176,7 @@ func openSQLiteRead(path string) (*sql.DB, error) {
 }
 
 func openSQLite(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", sqliteDSN(path))
+	db, err := sql.Open("sqlite", sqliteDSNWriter(path))
 	if err != nil {
 		return nil, fmt.Errorf("audit: open %s: %w", path, err)
 	}
@@ -139,27 +199,104 @@ func openSQLite(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-func (m *dbManager) getDBForTime(t time.Time) (*sql.DB, error) {
+// getDBForFileRead returns an open *sql.DB for the given file name in m.baseDir.
+// It checks m.dbs first (for active day writer handles), then m.readDBs cache.
+// On cache miss, it opens via openSQLiteRead, sets max open conns to 2, and caches it.
+// Callers MUST NOT close the returned *sql.DB.
+func (m *dbManager) getDBForFileRead(fn string) (*sql.DB, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Active writer reuse (Guardrail 3)
+	if strings.HasPrefix(fn, "audit-") && strings.HasSuffix(fn, ".db") {
+		dayKey := strings.TrimSuffix(strings.TrimPrefix(fn, "audit-"), ".db")
+		if db, ok := m.dbs[dayKey]; ok {
+			return db, nil
+		}
+	}
+
+	// Historical file read-cache (Guardrail 4)
+	if db, ok := m.readDBs[fn]; ok {
+		return db, nil
+	}
+
+	fullPath := filepath.Join(m.baseDir, fn)
+	db, err := openSQLiteRead(fullPath)
+	if err != nil {
+		return nil, err
+	}
+	m.testOpenReadCount.Add(1)
+	db.SetMaxOpenConns(2)
+	m.readDBs[fn] = db
+	return db, nil
+}
+
+func (m *dbManager) passiveCheckpointOlderDaysLocked(newDayKey string) {
+	for k, db := range m.dbs {
+		if k != "memory" && k < newDayKey {
+			_, _ = db.Exec("PRAGMA wal_checkpoint(PASSIVE)")
+		}
+	}
+}
+
+func (m *dbManager) getDBAndStmtForTime(t time.Time) (*sql.DB, *sql.Stmt, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.isMemory {
-		return m.dbs["memory"], nil
+		db := m.dbs["memory"]
+		stmt, ok := m.insertStmts["memory"]
+		if !ok || stmt == nil {
+			var err error
+			stmt, err = db.Prepare(insertStmtSQL)
+			if err != nil {
+				return nil, nil, fmt.Errorf("audit: prepare insert: %w", err)
+			}
+			m.insertStmts["memory"] = stmt
+		}
+		return db, stmt, nil
 	}
 
 	dayKey := t.UTC().Format("20060102")
-	if db, ok := m.dbs[dayKey]; ok {
-		return db, nil
+	db, ok := m.dbs[dayKey]
+	if !ok {
+		m.passiveCheckpointOlderDaysLocked(dayKey)
+
+		fileName := fmt.Sprintf("audit-%s.db", dayKey)
+		dbPath := filepath.Join(m.baseDir, fileName)
+		var err error
+		db, err = openSQLite(dbPath)
+		if err != nil {
+			return nil, nil, err
+		}
+		m.dbs[dayKey] = db
 	}
 
-	fileName := fmt.Sprintf("audit-%s.db", dayKey)
-	dbPath := filepath.Join(m.baseDir, fileName)
-	db, err := openSQLite(dbPath)
-	if err != nil {
-		return nil, err
+	stmt, ok := m.insertStmts[dayKey]
+	if !ok || stmt == nil {
+		var err error
+		stmt, err = db.Prepare(insertStmtSQL)
+		if err != nil {
+			return nil, nil, fmt.Errorf("audit: prepare insert: %w", err)
+		}
+		m.insertStmts[dayKey] = stmt
 	}
-	m.dbs[dayKey] = db
-	return db, nil
+
+	return db, stmt, nil
+}
+
+func (m *dbManager) getDBForTime(t time.Time) (*sql.DB, error) {
+	db, _, err := m.getDBAndStmtForTime(t)
+	return db, err
+}
+
+func (m *dbManager) invalidateStmt(dayKey string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if stmt, ok := m.insertStmts[dayKey]; ok {
+		_ = stmt.Close()
+		delete(m.insertStmts, dayKey)
+	}
 }
 
 func (m *dbManager) maxID(ctx context.Context) (int64, error) {
@@ -180,7 +317,7 @@ func (m *dbManager) maxID(ctx context.Context) (int64, error) {
 		name := e.Name()
 		if (strings.HasPrefix(name, "audit-") && strings.HasSuffix(name, ".db")) || name == filepath.Base(m.origPath) {
 			p := filepath.Join(m.baseDir, name)
-			db, err := openSQLite(p)
+			db, err := openSQLiteRead(p)
 			if err != nil {
 				continue
 			}
@@ -194,13 +331,12 @@ func (m *dbManager) maxID(ctx context.Context) (int64, error) {
 	return maxVal, nil
 }
 
-func (m *dbManager) insertBatch(ctx context.Context, batch []Event, maskFn func(string) []masking.Rule, extraRules []masking.Rule) error {
+func (m *dbManager) insertBatch(ctx context.Context, batch []Event, maskFn func(string) []masking.Rule) error {
 	// Masking at-rest: secrets are masked before ever reaching disk
 	for i := range batch {
 		ev := &batch[i]
 		var rules []masking.Rule
 		rules = append(rules, defaultMaskRules...)
-		rules = append(rules, extraRules...)
 		if maskFn != nil {
 			rules = append(rules, maskFn(ev.KeyID)...)
 		}
@@ -216,35 +352,33 @@ func (m *dbManager) insertBatch(ctx context.Context, batch []Event, maskFn func(
 	// Group events by day
 	groups := make(map[string][]Event)
 	for _, ev := range batch {
-		dayKey := ev.Time.UTC().Format("20060102")
+		dayKey := "memory"
+		if !m.isMemory {
+			dayKey = ev.Time.UTC().Format("20060102")
+		}
 		groups[dayKey] = append(groups[dayKey], ev)
 	}
 
-	for _, group := range groups {
-		db, err := m.getDBForTime(group[0].Time)
+	for dayKey, group := range groups {
+		db, stmt, err := m.getDBAndStmtForTime(group[0].Time)
 		if err != nil {
 			return err
 		}
-		if err := insertBatch(ctx, db, group); err != nil {
+		if err := insertBatchWithStmt(ctx, db, stmt, group); err != nil {
+			m.invalidateStmt(dayKey)
 			return err
 		}
 	}
 	return nil
 }
 
-func insertBatch(ctx context.Context, db *sql.DB, batch []Event) error {
+func insertBatchWithStmt(ctx context.Context, db *sql.DB, stmt *sql.Stmt, batch []Event) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("audit: begin: %w", err)
 	}
-	stmt, err := tx.PrepareContext(ctx, `INSERT INTO events
-		(id, time, stage, key_id, subject, decision, rule_id, reason, epoch, cached, latency_us, args)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-	if err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("audit: prepare: %w", err)
-	}
-	defer func() { _ = stmt.Close() }()
+	txStmt := tx.StmtContext(ctx, stmt)
+	defer func() { _ = txStmt.Close() }()
 
 	for _, ev := range batch {
 		args, err := json.Marshal(ev.Args)
@@ -252,7 +386,7 @@ func insertBatch(ctx context.Context, db *sql.DB, batch []Event) error {
 			args = nil
 		}
 		//nolint:gosec // G115 nanosecond epoch
-		if _, err := stmt.ExecContext(ctx, ev.ID, ev.Time.UnixNano(), ev.Stage, ev.KeyID, ev.Subject,
+		if _, err := txStmt.ExecContext(ctx, ev.ID, ev.Time.UnixNano(), ev.Stage, ev.KeyID, ev.Subject,
 			ev.Decision, ev.RuleID, ev.Reason, int64(ev.Epoch),
 			boolInt(ev.Cached), ev.LatencyUS,
 			nullableJSON(args)); err != nil {
@@ -318,14 +452,13 @@ func (m *dbManager) query(ctx context.Context, f Filter) ([]Event, error) {
 			}
 		}
 
-		db, err := openSQLiteRead(filepath.Join(m.baseDir, fn))
+		db, err := m.getDBForFileRead(fn)
 		if err != nil {
 			continue
 		}
 		subFilter := f
 		subFilter.Limit = limit - len(allEvents)
 		evs, err := queryEvents(ctx, db, subFilter)
-		_ = db.Close()
 		if err != nil {
 			continue
 		}
@@ -380,6 +513,13 @@ func (m *dbManager) prune(now time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.testPruneCalls.Add(1)
+
+	// Guardrail 1 & E1.5: Passive checkpoint on active writer databases
+	for _, db := range m.dbs {
+		_, _ = db.Exec("PRAGMA wal_checkpoint(PASSIVE)")
+	}
+
 	for _, e := range entries {
 		name := e.Name()
 		if !strings.HasPrefix(name, "audit-") || !strings.HasSuffix(name, ".db") {
@@ -393,11 +533,25 @@ func (m *dbManager) prune(now time.Time) error {
 		}
 
 		if fileDate.Before(cutoff) {
-			if db, ok := m.dbs[dateStr]; ok {
-				_ = db.Close()
-				delete(m.dbs, dateStr)
+			// E1.7 Guard: skip file if dayKey is active in m.dbs OR file mtime < 24h
+			if _, active := m.dbs[dateStr]; active {
+				continue
 			}
 			fullPath := filepath.Join(m.baseDir, name)
+			if info, err := os.Stat(fullPath); err == nil {
+				if time.Since(info.ModTime()) < 24*time.Hour {
+					continue
+				}
+			}
+
+			if stmt, ok := m.insertStmts[dateStr]; ok {
+				_ = stmt.Close()
+				delete(m.insertStmts, dateStr)
+			}
+			if db, ok := m.readDBs[name]; ok {
+				_ = db.Close()
+				delete(m.readDBs, name)
+			}
 			_ = os.Remove(fullPath)
 			_ = os.Remove(fullPath + "-wal")
 			_ = os.Remove(fullPath + "-shm")
@@ -412,11 +566,23 @@ func (m *dbManager) close() error {
 	defer m.mu.Unlock()
 
 	var firstErr error
+	for k, stmt := range m.insertStmts {
+		if err := stmt.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		delete(m.insertStmts, k)
+	}
 	for k, db := range m.dbs {
 		if err := db.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 		delete(m.dbs, k)
+	}
+	for k, db := range m.readDBs {
+		if err := db.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		delete(m.readDBs, k)
 	}
 	return firstErr
 }
@@ -511,7 +677,7 @@ func (m *dbManager) denyCountsSince(ctx context.Context, since time.Time) (int64
 			}
 		}
 
-		db, err := openSQLiteRead(filepath.Join(m.baseDir, fn))
+		db, err := m.getDBForFileRead(fn)
 		if err != nil {
 			continue
 		}
@@ -520,7 +686,6 @@ func (m *dbManager) denyCountsSince(ctx context.Context, since time.Time) (int64
 			globalMaxID = mID
 		}
 		_ = queryDenyCounts(ctx, db, since, counts)
-		_ = db.Close()
 	}
 	return globalMaxID, counts, nil
 }
@@ -827,18 +992,26 @@ func (m *dbManager) queryAggregate(ctx context.Context, since, until time.Time, 
 			files = append(files, legacyName)
 		}
 		for _, fn := range files {
-			db, err := openSQLiteRead(filepath.Join(m.baseDir, fn))
+			if strings.HasPrefix(fn, "audit-") && !since.IsZero() {
+				dayStr := strings.TrimPrefix(fn, "audit-")
+				dayStr = strings.TrimSuffix(dayStr, ".db")
+				if t, err := time.Parse("20060102", dayStr); err == nil {
+					if t.Add(24 * time.Hour).Before(since) {
+						break
+					}
+				}
+			}
+
+			db, err := m.getDBForFileRead(fn)
 			if err != nil {
 				continue // unreadable day file: skip, don't kill the aggregate
 			}
 			if err := runOne(db); err != nil {
-				_ = db.Close()
 				// A day-file that exists on disk but whose schema/tables have not
 				// been created yet (writer hasn't flushed its first batch) must
 				// not abort the aggregate — it is semantically empty.
 				continue //nolint:revive // keep scanning remaining day files
 			}
-			_ = db.Close()
 		}
 	}
 	// merge buckets across daily files (same bucket id can appear in 2 files)

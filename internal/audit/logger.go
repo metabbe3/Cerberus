@@ -29,12 +29,6 @@ var ShipDropCount = promauto.NewCounter(prometheus.CounterOpts{
 	Help: "Audit events dropped by the shipper because the ship queue was full.",
 })
 
-// AuditShipDroppedTotal is an alias counter matching Prometheus naming convention.
-var AuditShipDroppedTotal = promauto.NewCounter(prometheus.CounterOpts{
-	Name: "cerberus_audit_ship_dropped_total",
-	Help: "Audit events dropped by the shipper because the ship queue was full.",
-})
-
 var (
 	activeLogger atomic.Pointer[Logger]
 
@@ -57,7 +51,6 @@ type Options struct {
 	RingSize      int
 	RetentionDays int                               // SQLite daily log retention in days (default 30)
 	ShipURL       string                            // Remote JSON-lines endpoint for decision logs (optional)
-	MaskRules     []masking.Rule                    // Extra masking rules applied before persist
 	MaskRulesFunc func(keyID string) []masking.Rule // Dynamic per-key masking rules lookup
 }
 
@@ -102,7 +95,7 @@ func Open(ctx context.Context, dbPath string, opts Options) (*Logger, error) {
 		opts.RingSize = 1000
 	}
 	if opts.RetentionDays <= 0 {
-		opts.RetentionDays = 30
+		opts.RetentionDays = DefaultRetentionDays
 	}
 
 	mgr, err := newDBManager(dbPath, opts.RetentionDays)
@@ -139,17 +132,21 @@ func Open(ctx context.Context, dbPath string, opts Options) (*Logger, error) {
 
 	go l.run(ctx)
 	activeLogger.Store(l)
+
+	// Initial prune on startup (E1.9: idempotent and low-cost partition maintenance)
+	if err := l.Prune(time.Now().UTC()); err != nil {
+		slog.Debug("audit: startup prune failed", "error", err)
+	} else {
+		slog.Debug("audit: startup prune completed")
+	}
+
 	return l, nil
 }
 
-// SetMaskRulesFunc updates the dynamic per-key masking rules function.
-func (l *Logger) SetMaskRulesFunc(fn func(keyID string) []masking.Rule) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.maskFn = fn
-}
-
 // Prune triggers pruning of daily partitions older than RetentionDays.
+// It is called once at startup (in Open) and periodically (hourly) in the
+// background. This method remains exported for operational use (e.g. manual CLI
+// invocation or maintenance tasks) and testing.
 func (l *Logger) Prune(now time.Time) error {
 	return l.mgr.prune(now)
 }
@@ -175,7 +172,6 @@ func (l *Logger) Emit(ev Event) {
 		case l.shipCh <- ev:
 		default:
 			ShipDropCount.Inc()
-			AuditShipDroppedTotal.Inc()
 		}
 	}
 }
@@ -349,7 +345,7 @@ func (l *Logger) run(context.Context) {
 		maskFn := l.maskFn
 		l.mu.Unlock()
 
-		if err := l.mgr.insertBatch(context.Background(), batch, maskFn, l.opts.MaskRules); err != nil {
+		if err := l.mgr.insertBatch(context.Background(), batch, maskFn); err != nil {
 			slog.Error("audit: batch insert", "error", err)
 		}
 		batch = batch[:0]

@@ -2,9 +2,13 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"log/slog"
 	"os"
 	"strings"
 	"testing"
+
+	_ "modernc.org/sqlite"
 )
 
 // Integration test against a live PostgreSQL. Skipped when
@@ -107,5 +111,42 @@ func TestRoundTripSaveLoad(t *testing.T) {
 	// builtin protected
 	if err := p.DeleteTemplate(ctx, "research-readonly"); err == nil {
 		t.Fatalf("builtin template must not be deletable")
+	}
+}
+
+func TestListTemplates_CorruptedJSON(t *testing.T) {
+	t.Parallel()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	schema := `CREATE TABLE templates (
+		template_id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		description TEXT NOT NULL,
+		stage TEXT NOT NULL,
+		policy TEXT NOT NULL,
+		builtin INTEGER NOT NULL DEFAULT 0,
+		created_at INTEGER NOT NULL DEFAULT 0
+	);`
+	if _, err := db.Exec(schema); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+
+	_, err = db.Exec(`INSERT INTO templates (template_id, name, description, stage, policy, builtin, created_at)
+		VALUES ('corrupt-tpl', 'Corrupt', 'desc', 'ai', '{invalid-json', 0, 100)`)
+	if err != nil {
+		t.Fatalf("insert corrupt template: %v", err)
+	}
+
+	p := &PG{db: db, log: slog.Default()}
+	_, err = p.ListTemplates(context.Background())
+	if err == nil {
+		t.Fatalf("expected error on corrupted policy JSON, got nil")
+	}
+	if !strings.Contains(err.Error(), "unmarshal template corrupt-tpl policy") {
+		t.Fatalf("expected unmarshal error message, got: %v", err)
 	}
 }
