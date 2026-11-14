@@ -153,6 +153,26 @@ var (
 )
 
 // DetectSensitiveSource inspects an allowed request to determine if it accessed sensitive resources.
+// secretMarkers: penanda kredensial nyata yang tidak wajar muncul di prompt agent.
+var secretMarkers = []string{
+	"BEGIN RSA PRIVATE KEY",
+	"BEGIN OPENSSH PRIVATE KEY",
+	"BEGIN EC PRIVATE KEY",
+	"BEGIN PRIVATE KEY",
+	"-----BEGIN PGP PRIVATE KEY",
+}
+
+// llmPromptContainsSecret melaporkan apakah teks prompt memuat material kredensial
+// nyata (private key block dsb.) — bukan sekadar panjang.
+func llmPromptContainsSecret(s string) bool {
+	for _, m := range secretMarkers {
+		if strings.Contains(s, m) {
+			return true
+		}
+	}
+	return false
+}
+
 func DetectSensitiveSource(in Input) (string, bool) {
 	switch in.Stage {
 	case "http":
@@ -216,12 +236,15 @@ func DetectSensitiveSource(in Input) (string, bool) {
 			}
 		}
 	case "llm":
-		if len(in.Prompt) > 4096 {
-			return "llm:oversized", true
+		// Prompt besar TIDAK otomatis sensitif: agent mengirim system prompt puluhan KB
+		// secara rutin; ukuran sendiri bukan indikasi exfiltration. Sesi hanya ditandai
+		// bila konten memuat penanda rahasia nyata (kredensial/kunci privat).
+		if llmPromptContainsSecret(in.Prompt) {
+			return "llm:secret_in_prompt", true
 		}
 		for _, m := range in.Messages {
-			if content, ok := m["content"].(string); ok && len(content) > 4096 {
-				return "llm:oversized", true
+			if content, ok := m["content"].(string); ok && llmPromptContainsSecret(content) {
+				return "llm:secret_in_prompt", true
 			}
 		}
 	case "tool":

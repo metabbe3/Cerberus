@@ -155,12 +155,21 @@ func TestDetectSensitiveSource(t *testing.T) {
 			wantOk:     true,
 		},
 		{
-			name: "llm oversized",
+			name: "llm oversized bukan sensitif (system prompt agent besar)",
 			in: Input{
 				Stage:  "llm",
 				Prompt: strings.Repeat("A", 5000),
 			},
-			wantSource: "llm:oversized",
+			wantSource: "",
+			wantOk:     false,
+		},
+		{
+			name: "llm private key dalam prompt",
+			in: Input{
+				Stage:  "llm",
+				Prompt: "data: -----BEGIN RSA PRIVATE KEY----- MIIE...",
+			},
+			wantSource: "llm:secret_in_prompt",
 			wantOk:     true,
 		},
 	}

@@ -580,6 +580,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	keyID := r.Header.Get("X-Tap-Key")
 	if keyID == "" {
+		log.Printf("[tap] request WITHOUT X-Tap-Key from %s %s", r.RemoteAddr, r.UserAgent())
 		keyID = "unknown"
 	}
 
