@@ -1,11 +1,17 @@
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: build build-all test lint opa-test opa-check bench smoke
+.PHONY: build build-all test test-full lint opa-test opa-check bench smoke
 
 build:
 	@mkdir -p bin
 	CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION)" -o bin/cerberus ./cmd/cerberus
 	CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION)" -o bin/cerberus-proxy ./cmd/cerberus-proxy
+	CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION)" -o bin/cerberus-egress ./cmd/cerberus-egress
+	CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION)" -o bin/cerberus-exec ./cmd/cerberus-exec
+	CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION)" -o bin/cerberus-tap ./cmd/cerberus-tap
+	CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION)" -o bin/cerberus-ssh ./cmd/cerberus-ssh
+	CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION)" -o bin/cerberus-bundle ./cmd/cerberus-bundle
+	CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION)" -o bin/cerberus-redteam ./cmd/cerberus-redteam
 
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
@@ -25,6 +31,12 @@ build-all:
 	@ls -lh dist/
 
 test:
+# CERBERUS_SKIP_POLICY_SUITE=1: unit tests skip the in-process rego suite
+# (247 tests; minutes under -race on 2-core CI). Suite enforcement stays in
+# `make opa-test` + the race step below exercises it via t.Setenv force-ON tests.
+	CERBERUS_SKIP_POLICY_SUITE=1 go test -race -count=1 -timeout=25m ./...
+
+test-full:
 	go test -race -count=1 -timeout=25m ./...
 
 lint:

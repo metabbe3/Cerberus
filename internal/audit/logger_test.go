@@ -796,6 +796,15 @@ func TestDailyToolCallsCount_OnlyAllowsCounted(t *testing.T) {
 	if countOther != 1 {
 		t.Fatalf("expected 1 allow event for k-other, got %d", countOther)
 	}
+
+	// Verify DailyTeamCallsCount aggregates across multiple keys in the team
+	teamCount, err := l.DailyTeamCallsCount(ctx, []string{"k-target", "k-other"}, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("DailyTeamCallsCount: %v", err)
+	}
+	if teamCount != 3 {
+		t.Fatalf("expected 3 total allow events for team keys, got %d", teamCount)
+	}
 }
 
 // TestLogger_ShipOut_JoinedOnClose verifies D9:

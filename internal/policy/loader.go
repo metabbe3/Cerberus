@@ -30,7 +30,7 @@ var (
 var allowedTopKeys = map[string]bool{
 	"config": true, "teams": true, "agents": true,
 	"blocked_patterns": true, "domains": true, "_comment": true,
-	"prod_shield": true, "ssh": true,
+	"prod_shield": true, "ssh": true, "stages": true,
 }
 
 // Load compiles the Rego files under policyDir together with dataJSON into a
@@ -200,6 +200,9 @@ func extractStages(modules map[string]*ast.Module, data map[string]any) map[stri
 				stg := strings.Trim(m.Package.Path[2].Value.String(), `"`)
 				if stg != "ai" && stg != "" {
 					stages[stg] = true
+					if strings.HasPrefix(stg, "custom_") {
+						stages["custom:"+strings.TrimPrefix(stg, "custom_")] = true
+					}
 				}
 			}
 		}
@@ -208,6 +211,11 @@ func extractStages(modules map[string]*ast.Module, data map[string]any) map[stri
 		for s := range rawStages {
 			if s != "ai" && s != "" {
 				stages[s] = true
+				if strings.HasPrefix(s, "custom_") {
+					stages["custom:"+strings.TrimPrefix(s, "custom_")] = true
+				} else if strings.HasPrefix(s, "custom:") {
+					stages["custom_"+strings.TrimPrefix(s, "custom:")] = true
+				}
 			}
 		}
 	}

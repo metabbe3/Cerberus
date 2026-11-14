@@ -9,6 +9,10 @@ import data.shield.prod
 
 decision := ssh_decision
 
+args := object.get(input, "args", {})
+
+agent := object.get(data.agents, input.key_id, {})
+
 action := lower(object.get(input, "action", ""))
 
 host := object.get(input, "host", object.get(input, "resource", ""))
@@ -57,6 +61,12 @@ ssh_decision := {
 	"reason": sprintf("ssh request to prod resource %q denied without prod_access", [host]),
 } if {
 	ssh_prod_no_access
+} else := {
+	"decision": "deny",
+	"rule_id": "ssh.auth_pubkey_mismatch",
+	"reason": "ssh public key unauthenticated or fingerprint mismatch",
+} if {
+	auth_pubkey_mismatch
 } else := {
 	"decision": "deny",
 	"rule_id": "ssh.action_invalid",
@@ -178,5 +188,19 @@ ssh_prod_no_access if {
 }
 
 ssh_shield_target if prod.prod_ip(host)
+
+# ---------- public key auth mismatch checks ----------
+
+auth_pubkey_mismatch if {
+	input.key_id == "unauthenticated"
+}
+
+auth_pubkey_mismatch if {
+	fp := object.get(input, "fingerprint", object.get(args, "fingerprint", ""))
+	fp != ""
+	expected_fp := object.get(agent, "ssh_pubkey_fingerprint", "")
+	expected_fp != ""
+	lower(trim(fp, " \t\r\n")) != lower(trim(expected_fp, " \t\r\n"))
+}
 
 ssh_shield_target if prod.touches_prod(host)

@@ -82,7 +82,17 @@ known_stages contains s if {
 	s != "ai"
 }
 
-stage_decision := data.stages[input.stage].decision if {
+# Dynamic alias: stage packages named stages.custom_<name> also register as custom:<name>
+known_stages contains sprintf("custom:%s", [trim_prefix(s, "custom_")]) if {
+	some s, _ in data.stages
+	startswith(s, "custom_")
+}
+
+stage_key := replace(input.stage, ":", "_") if {
+	startswith(input.stage, "custom:")
+} else := input.stage
+
+stage_decision := data.stages[stage_key].decision if {
 	stage_is_known
 }
 

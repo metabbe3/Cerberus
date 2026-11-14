@@ -684,8 +684,11 @@ func TestStore_BundleDataSubtree(t *testing.T) {
 }
 
 func TestStore_BundleCoverageDropGate(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
+
+	// Coverage-drop gate requires the suite to actually run: force it ON even
+	// when the matrix runs with CERBERUS_SKIP_POLICY_SUITE=1. (Not parallel: t.Setenv.)
+	t.Setenv("CERBERUS_SKIP_POLICY_SUITE", "0")
 
 	tmpDir := t.TempDir()
 	policyDir := filepath.Join(tmpDir, "policies")
@@ -1117,8 +1120,11 @@ func TestStore_LoadBundle_CleansUpOnPartialFailure(t *testing.T) {
 // TestStore_LoadBundle_RedSuiteRejected verifies E2.2:
 // when the OPA test-suite inside a bundle fails (red), LoadBundle rejects the bundle.
 func TestStore_LoadBundle_RedSuiteRejected(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
+
+	// This test verifies the red-suite gate itself: force the suite ON even when
+	// the matrix runs with CERBERUS_SKIP_POLICY_SUITE=1. (Not parallel: t.Setenv.)
+	t.Setenv("CERBERUS_SKIP_POLICY_SUITE", "0")
 
 	tmpDir := t.TempDir()
 	policyDir := filepath.Join(tmpDir, "policies")

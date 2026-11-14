@@ -40,6 +40,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -76,6 +77,12 @@ const (
 	maxCommandSize = 1 << 20 // 1MB exec command cap
 )
 
+type pubKeyCache struct {
+	mu           sync.RWMutex
+	lastFetch    time.Time
+	fingerprints map[string]string // fingerprint -> key_id
+}
+
 // bastion is the SSH policy proxy server.
 type bastion struct {
 	cfg             config
@@ -83,6 +90,7 @@ type bastion struct {
 	upstreamSigner  ssh.Signer    // nil => decide-only mode
 	upstreamHostKey ssh.PublicKey // nil => InsecureIgnoreHostKey (TODO below)
 	hc              *http.Client
+	pubKeys         *pubKeyCache
 }
 
 // newBastion validates config and loads keys. Host key is generated and
@@ -99,6 +107,9 @@ func newBastion(cfg config) (*bastion, error) {
 		cfg:        cfg,
 		hostSigner: hostSigner,
 		hc:         &http.Client{Timeout: engineTimeout},
+		pubKeys: &pubKeyCache{
+			fingerprints: make(map[string]string),
+		},
 	}
 	if cfg.KeyFile != "" {
 		keyData, err := os.ReadFile(cfg.KeyFile)
@@ -121,15 +132,140 @@ func newBastion(cfg config) (*bastion, error) {
 	return b, nil
 }
 
-// serverConfig builds the SSH server config. NoClientAuth is deliberate:
-// agents live on an isolated network segment. TODO(identity): require
-// per-agent public keys once agent key distribution is in place.
+// serverConfig builds the SSH server config with public key authentication.
 func (b *bastion) serverConfig() *ssh.ServerConfig {
 	sc := &ssh.ServerConfig{
-		NoClientAuth: true, // TODO(identity): per-agent pubkey auth
+		PublicKeyCallback: b.authenticatePubKey,
 	}
 	sc.AddHostKey(b.hostSigner)
 	return sc
+}
+
+func (b *bastion) authenticatePubKey(conn ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
+	fp := ssh.FingerprintSHA256(pubKey)
+	keyID, ok := b.resolveKeyByFingerprint(fp)
+	if !ok {
+		b.emitAuthDeny(conn, fp)
+		return nil, fmt.Errorf("cerberus-ssh: unauthorized public key fingerprint: %s", fp)
+	}
+	return &ssh.Permissions{
+		Extensions: map[string]string{
+			"key_id":      keyID,
+			"fingerprint": fp,
+		},
+	}, nil
+}
+
+func (b *bastion) resolveKeyByFingerprint(fp string) (string, bool) {
+	b.pubKeys.mu.RLock()
+	keyID, ok := b.pubKeys.fingerprints[fp]
+	lastFetch := b.pubKeys.lastFetch
+	b.pubKeys.mu.RUnlock()
+	if ok {
+		return keyID, true
+	}
+
+	// Rate limit cache refresh: max 1 per 5 seconds
+	if time.Since(lastFetch) < 5*time.Second {
+		return "", false
+	}
+
+	b.refreshPubKeyCache()
+
+	b.pubKeys.mu.RLock()
+	keyID, ok = b.pubKeys.fingerprints[fp]
+	b.pubKeys.mu.RUnlock()
+	return keyID, ok
+}
+
+func (b *bastion) refreshPubKeyCache() {
+	b.pubKeys.mu.Lock()
+	defer b.pubKeys.mu.Unlock()
+
+	if time.Since(b.pubKeys.lastFetch) < 5*time.Second {
+		return
+	}
+	b.pubKeys.lastFetch = time.Now()
+
+	if b.cfg.EngineURL == "" {
+		return
+	}
+
+	url := strings.TrimSuffix(b.cfg.EngineURL, "/") + "/v1/admin/data"
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		log.Printf("[cerberus-ssh] refresh key cache bad request: %v", err)
+		return
+	}
+	if b.cfg.EngineToken != "" {
+		req.Header.Set("Authorization", "Bearer "+b.cfg.EngineToken)
+	}
+
+	resp, err := b.hc.Do(req)
+	if err != nil {
+		log.Printf("[cerberus-ssh] refresh key cache request failed: %v", err)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[cerberus-ssh] refresh key cache engine returned %d", resp.StatusCode)
+		return
+	}
+
+	var dataDoc struct {
+		Agents map[string]struct {
+			SSHPubKeyFingerprint string `json:"ssh_pubkey_fingerprint"`
+		} `json:"agents"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&dataDoc); err != nil {
+		log.Printf("[cerberus-ssh] decode key cache: %v", err)
+		return
+	}
+
+	newMap := make(map[string]string)
+	for kID, ag := range dataDoc.Agents {
+		agFp := strings.TrimSpace(ag.SSHPubKeyFingerprint)
+		if agFp != "" {
+			newMap[agFp] = kID
+		}
+	}
+	b.pubKeys.fingerprints = newMap
+}
+
+func (b *bastion) emitAuthDeny(conn ssh.ConnMetadata, fp string) {
+	if b.cfg.EngineURL == "" {
+		return
+	}
+	payload, err := json.Marshal(map[string]any{
+		"key_id":   "unauthenticated",
+		"stage":    bastionStage,
+		"action":   "connect",
+		"host":     b.cfg.UpstreamHost,
+		"user":     conn.User(),
+		"resource": b.cfg.UpstreamHost,
+		"args": map[string]any{
+			"fingerprint": fp,
+			"remote_addr": conn.RemoteAddr().String(),
+		},
+	})
+	if err != nil {
+		return
+	}
+	url := strings.TrimSuffix(b.cfg.EngineURL, "/") + "/v1/decide"
+	req, err := http.NewRequest("POST", url, bytes.NewReader(payload))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if b.cfg.EngineToken != "" {
+		req.Header.Set("Authorization", "Bearer "+b.cfg.EngineToken)
+	}
+	go func() {
+		resp, err := b.hc.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
 }
 
 // serve accepts TCP connections until the listener is closed.
@@ -153,6 +289,13 @@ func (b *bastion) handleConn(c net.Conn) {
 	defer func() { _ = sconn.Close() }()
 	go ssh.DiscardRequests(reqs)
 
+	keyID := "unauthenticated"
+	if sconn.Permissions != nil && sconn.Permissions.Extensions != nil {
+		if k := sconn.Permissions.Extensions["key_id"]; k != "" {
+			keyID = k
+		}
+	}
+
 	for newCh := range newChs {
 		if newCh.ChannelType() != "session" {
 			_ = newCh.Reject(ssh.Prohibited, "cerberus_ssh_error: only session channels are allowed")
@@ -163,12 +306,12 @@ func (b *bastion) handleConn(c net.Conn) {
 			log.Printf("[cerberus-ssh] channel accept: %v", err)
 			continue
 		}
-		go b.handleSession(ch, reqs)
+		go b.handleSession(ch, reqs, keyID)
 	}
 }
 
 // handleSession enforces the exec-only policy on one session channel.
-func (b *bastion) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request) {
+func (b *bastion) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request, keyID string) {
 	for req := range reqs {
 		switch req.Type {
 		case "pty-req", "shell":
@@ -178,7 +321,7 @@ func (b *bastion) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request) {
 			return
 		case "exec":
 			cmd := parseExecPayload(req.Payload)
-			b.handleExec(ch, req, cmd)
+			b.handleExec(ch, req, cmd, keyID)
 			return
 		default:
 			if req.WantReply {
@@ -189,8 +332,8 @@ func (b *bastion) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request) {
 }
 
 // handleExec is the policy gate for a single command.
-func (b *bastion) handleExec(ch ssh.Channel, req *ssh.Request, cmd string) {
-	verdict, allowed := b.decide(cmd)
+func (b *bastion) handleExec(ch ssh.Channel, req *ssh.Request, cmd string, keyID string) {
+	verdict, allowed := b.decide(keyID, cmd)
 	if !allowed {
 		_ = req.Reply(false, nil)
 		_, _ = fmt.Fprintf(ch.Stderr(), "cerberus_ssh_blocked: %s\n", verdict.Reason)
@@ -220,14 +363,21 @@ func (b *bastion) handleExec(ch ssh.Channel, req *ssh.Request, cmd string) {
 
 // decide asks the engine POST /v1/decide. Fail-closed: deny, unreachable,
 // non-200, or malformed engine response all block the command.
-func (b *bastion) decide(cmd string) (decideResp, bool) {
+func (b *bastion) decide(keyID, cmd string) (decideResp, bool) {
 	if b.cfg.EngineURL == "" {
 		return decideResp{Decision: "deny", Reason: "engine-url not configured"}, false
 	}
+	if keyID == "" {
+		keyID = bastionKeyID
+	}
 	body, err := json.Marshal(map[string]any{
-		"key_id": bastionKeyID,
-		"stage":  bastionStage,
-		"action": bastionAction,
+		"key_id":   keyID,
+		"stage":    bastionStage,
+		"action":   bastionAction,
+		"host":     b.cfg.UpstreamHost,
+		"user":     b.cfg.UpstreamUser,
+		"command":  cmd,
+		"resource": b.cfg.UpstreamHost,
 		"input": map[string]string{
 			"host": b.cfg.UpstreamHost,
 			"user": b.cfg.UpstreamUser,

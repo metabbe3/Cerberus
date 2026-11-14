@@ -252,3 +252,37 @@ test_ssh_userinfo_spoof_denied if {
 	out.decision == "deny"
 	out.rule_id == "ssh.host_not_allowed"
 }
+
+test_ssh_unauthenticated_pubkey_denied if {
+	out := decide({
+		"stage": "ssh",
+		"key_id": "unauthenticated",
+		"action": "connect",
+		"host": "dev.teknikal.id",
+		"user": "ubuntu",
+		"port": 22,
+	})
+	out.decision == "deny"
+	out.rule_id == "ssh.auth_pubkey_mismatch"
+}
+
+test_ssh_fingerprint_mismatch_denied if {
+	out := decision with input as {
+		"stage": "ssh",
+		"key_id": "k-open",
+		"action": "connect",
+		"host": "dev.teknikal.id",
+		"user": "ubuntu",
+		"port": 22,
+		"fingerprint": "SHA256:wrongfingerprint",
+	}
+		with data.config as data.testdata.config
+		with data.teams as data.testdata.teams
+		with data.agents as {"k-open": {"name": "open-agent", "ssh_pubkey_fingerprint": "SHA256:correctfingerprint"}}
+		with data.blocked_patterns as data.testdata.blocked_patterns
+		with data.domains as data.testdata.domains
+		with data.prod_shield as data.testdata.prod_shield
+		with data.ssh as data.testdata.ssh
+	out.decision == "deny"
+	out.rule_id == "ssh.auth_pubkey_mismatch"
+}

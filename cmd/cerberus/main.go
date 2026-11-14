@@ -136,7 +136,20 @@ func run() error {
 	stopHUP := watchHUP(ctx, store, log)
 	defer stopHUP()
 
-	api := server.New(server.Deps{Engine: eng, Store: store, Audit: auditLog, PGMirror: pgStore, AdminToken: cfg.AdminToken, Version: version})
+	api := server.New(server.Deps{
+		Engine:     eng,
+		Store:      store,
+		Audit:      auditLog,
+		PGMirror:   pgStore,
+		AdminToken: cfg.AdminToken,
+		Version:    version,
+		Cluster: server.ClusterConfig{
+			NodeID:       cfg.NodeID,
+			StartedAt:    time.Now().Unix(),
+			Peers:        cfg.Peers,
+			SyncInterval: cfg.ClusterSyncInterval,
+		},
+	})
 	srv := newHTTPServer(cfg.Addr, api)
 	// End SSE streams when shutdown begins; the events handler otherwise ends
 	// only on client disconnect or audit close (below), and Shutdown would wait

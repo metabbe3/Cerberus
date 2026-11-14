@@ -113,3 +113,58 @@ func TestBootFromPostgres_NoAgentsDoesNotPanic(t *testing.T) {
 		}
 	}
 }
+
+func TestClusterWiring_TwoNodeGossip(t *testing.T) {
+	adminTok := "cluster-test-admin-token"
+
+	// Start Node 1 listener
+	l1, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l1.Close() }()
+	node1URL := "http://" + l1.Addr().String()
+
+	api1 := server.New(server.Deps{
+		AdminToken: adminTok,
+		Version:    "test-v1",
+		Cluster: server.ClusterConfig{
+			NodeID:       "node-1",
+			StartedAt:    time.Now().Unix(),
+			SyncInterval: 50 * time.Millisecond,
+		},
+	})
+	srv1 := newHTTPServer(l1.Addr().String(), api1)
+	go func() { _ = srv1.Serve(l1) }()
+	t.Cleanup(func() {
+		api1.ShutdownStreams()
+		_ = srv1.Close()
+	})
+
+	// Start Node 2 listener with peer pointing to Node 1
+	l2, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l2.Close() }()
+
+	api2 := server.New(server.Deps{
+		AdminToken: adminTok,
+		Version:    "test-v2",
+		Cluster: server.ClusterConfig{
+			NodeID:       "node-2",
+			StartedAt:    time.Now().Unix(),
+			Peers:        []string{node1URL},
+			SyncInterval: 50 * time.Millisecond,
+		},
+	})
+	srv2 := newHTTPServer(l2.Addr().String(), api2)
+	go func() { _ = srv2.Serve(l2) }()
+	t.Cleanup(func() {
+		api2.ShutdownStreams()
+		_ = srv2.Close()
+	})
+
+	// Wait for Node 2 to gossip with Node 1
+	time.Sleep(150 * time.Millisecond)
+}

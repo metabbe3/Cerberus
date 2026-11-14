@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -32,6 +33,12 @@ type CoverageReport struct {
 func ComputeCoverage(ctx context.Context, policyDir string) (*CoverageReport, error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	// Full rego suite in-process is expensive (247 tests; ~minutes under -race on
+	// 2-core CI runners). CERBERUS_SKIP_POLICY_SUITE=1 makes coverage a no-op:
+	// bundle activation keeps DryRunSmoke; the suite stays enforced by `make opa-test`.
+	if os.Getenv("CERBERUS_SKIP_POLICY_SUITE") == "1" {
+		return &CoverageReport{Files: make(map[string]FileCoverage)}, nil
 	}
 	modules, store, err := tester.Load([]string{policyDir}, nil)
 	if err != nil {

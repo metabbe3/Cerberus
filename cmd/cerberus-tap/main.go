@@ -176,16 +176,19 @@ func (s *store) close() {
 
 // decideResp mirrors the engine /v1/decide response (subset we care about).
 type decideResp struct {
-	Decision string `json:"decision"`
-	RuleID   string `json:"rule_id"`
-	Reason   string `json:"reason"`
+	Decision   string `json:"decision"`
+	RuleID     string `json:"rule_id"`
+	Reason     string `json:"reason"`
+	TeamID     string `json:"team_id,omitempty"`
+	StatusCode int    `json:"-"`
+	RetryAfter string `json:"-"`
 }
 
 // askEngine calls POST /v1/decide/llm. Returns verdict, allowed.
 // strict=true: engine unreachable => NOT allowed (fail-closed).
 func askEngine(engineURL, token, keyID string, body []byte, strict bool) (decideResp, bool) {
 	if engineURL == "" {
-		return decideResp{Decision: "allow"}, true
+		return decideResp{Decision: "allow", StatusCode: http.StatusOK}, true
 	}
 	prompt, msgs := extractConversationAndPrompt(body)
 	payloadMap := map[string]any{
@@ -210,22 +213,32 @@ func askEngine(engineURL, token, keyID string, body []byte, strict bool) (decide
 	if err != nil {
 		if strict {
 			log.Printf("[tap] engine decide unreachable (STRICT: denying): %v", err)
-			return decideResp{Decision: "deny", RuleID: "tap.engine_unreachable_strict"}, false
+			return decideResp{Decision: "deny", RuleID: "tap.engine_unreachable_strict", StatusCode: http.StatusBadGateway}, false
 		}
 		// Engine unreachable: fail-open for visibility mode, but log loudly.
 		log.Printf("[tap] engine decide unreachable (allowing): %v", err)
-		return decideResp{Decision: "allow", RuleID: "tap.engine_unreachable"}, true
+		return decideResp{Decision: "allow", RuleID: "tap.engine_unreachable", StatusCode: http.StatusOK}, true
 	}
 	defer func() { _ = resp.Body.Close() }()
 	var dr decideResp
+	dr.StatusCode = resp.StatusCode
+	dr.RetryAfter = resp.Header.Get("Retry-After")
 	if err := json.NewDecoder(resp.Body).Decode(&dr); err != nil || dr.Decision == "" {
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return decideResp{Decision: "deny", RuleID: "ops.tenant_quota_exceeded", StatusCode: 429, RetryAfter: resp.Header.Get("Retry-After")}, false
+		}
 		if strict {
-			return decideResp{Decision: "deny", RuleID: "tap.engine_bad_response_strict"}, false
+			return decideResp{Decision: "deny", RuleID: "tap.engine_bad_response_strict", StatusCode: resp.StatusCode}, false
 		}
 		log.Printf("[tap] engine decide decode error (allowing)")
-		return decideResp{Decision: "allow", RuleID: "tap.engine_bad_response"}, true
+		return decideResp{Decision: "allow", RuleID: "tap.engine_bad_response", StatusCode: resp.StatusCode}, true
 	}
-	return dr, dr.Decision == "allow"
+	dr.StatusCode = resp.StatusCode
+	dr.RetryAfter = resp.Header.Get("Retry-After")
+	if dr.TeamID == "" {
+		dr.TeamID = resp.Header.Get("X-Cerberus-Team")
+	}
+	return dr, dr.Decision == "allow" && resp.StatusCode == http.StatusOK
 }
 
 func modelOf(body []byte) string {
@@ -511,7 +524,26 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Enforcement: ask the engine BEFORE forwarding. deny = request dies here.
 	// -strict: engine unreachable => deny (fail-closed). Default: fail-open (visibility mode).
 	verdict, allowed := askEngine(s.engineURL, s.engineTok, keyID, raw, s.strict)
+	teamID := verdict.TeamID
+	if teamID == "" {
+		teamID = r.Header.Get("X-Tap-Team")
+	}
 	if !allowed {
+		if verdict.StatusCode == http.StatusTooManyRequests || verdict.RuleID == "ops.tenant_quota_exceeded" {
+			if s.kills != nil && teamID != "" {
+				s.kills.killTeam(teamID)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if verdict.RetryAfter != "" {
+				w.Header().Set("Retry-After", verdict.RetryAfter)
+			}
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":{"type":"tenant_quota_exceeded","code":429,"rule_id":"ops.tenant_quota_exceeded"}}`))
+			s.st.save(turnRow{KeyID: keyID, Model: modelOf(raw), Kind: "quota_cut", Payload: mustJSON(map[string]any{
+				"verdict": verdict, "path": r.URL.Path,
+			})}, time.Since(start).Milliseconds(), 429)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(`{"error":{"type":"tap_blocked","message":"blocked by cerberus policy"}}`))
@@ -545,7 +577,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	isSSE := strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")
 	if isSSE {
-		s.proxySSE(w, resp, keyID, modelOf(raw), start)
+		s.proxySSE(w, resp, keyID, teamID, modelOf(raw), start)
 		return
 	}
 
@@ -603,6 +635,25 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					}
 					verdict, ok := s.askToolEngine(keyID, modelOf(raw), b.Name, rawInput)
 					if !ok {
+						if verdict.StatusCode == http.StatusTooManyRequests || verdict.RuleID == "ops.tenant_quota_exceeded" {
+							if verdict.TeamID != "" {
+								teamID = verdict.TeamID
+							}
+							if s.kills != nil && teamID != "" {
+								s.kills.killTeam(teamID)
+							}
+							w.Header().Set("Content-Type", "application/json")
+							if verdict.RetryAfter != "" {
+								w.Header().Set("Retry-After", verdict.RetryAfter)
+							}
+							w.WriteHeader(http.StatusTooManyRequests)
+							_, _ = w.Write([]byte(`{"error":{"type":"tenant_quota_exceeded","code":429,"rule_id":"ops.tenant_quota_exceeded"}}`))
+							s.st.save(turnRow{
+								KeyID: keyID, Model: modelOf(raw), Kind: "quota_cut",
+								Payload: mustJSON(map[string]any{"tool": b.Name, "verdict": verdict}),
+							}, lat, 429)
+							return
+						}
 						w.Header().Set("Content-Type", "application/json")
 						w.WriteHeader(http.StatusBadGateway)
 						_ = json.NewEncoder(w).Encode(map[string]any{
@@ -636,13 +687,13 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // proxySSE tees the stream to the client while reassembling thinking/text/tool_use.
-func (s *server) proxySSE(w http.ResponseWriter, resp *http.Response, keyID, model string, start time.Time) {
+func (s *server) proxySSE(w http.ResponseWriter, resp *http.Response, keyID, teamID, model string, start time.Time) {
 	flusher, _ := w.(http.Flusher)
 	// kill-switch hook: registering lets /tap/kill sever this stream mid-flight.
 	var killID int64
 	var killCtx context.Context
 	if s.kills != nil {
-		killID, killCtx = s.kills.add()
+		killID, killCtx = s.kills.add(keyID, teamID)
 		defer s.kills.remove(killID)
 		go func() {
 			<-killCtx.Done()
@@ -723,6 +774,22 @@ func (s *server) proxySSE(w http.ResponseWriter, resp *http.Response, keyID, mod
 					flushHeld()
 					inToolBlock = false
 				} else {
+					if verdict.StatusCode == http.StatusTooManyRequests || verdict.RuleID == "ops.tenant_quota_exceeded" {
+						if verdict.TeamID != "" {
+							teamID = verdict.TeamID
+						}
+						_, _ = w.Write([]byte("data: {\"type\":\"error\",\"error\":{\"type\":\"tenant_quota_exceeded\",\"code\":429,\"rule_id\":\"ops.tenant_quota_exceeded\"}}\n\n"))
+						if flusher != nil {
+							flusher.Flush()
+						}
+						if s.kills != nil && teamID != "" {
+							s.kills.killTeam(teamID)
+						}
+						s.st.save(turnRow{KeyID: keyID, Model: model, Kind: "quota_cut", Payload: mustJSON(map[string]any{
+							"tool": toolName, "verdict": verdict, "rule_id": "ops.tenant_quota_exceeded",
+						})}, time.Since(start).Milliseconds(), 429)
+						break
+					}
 					_, _ = w.Write([]byte("data: {\"type\":\"error\",\"error\":{\"type\":\"tap_tool_blocked\",\"message\":\"tool_use blocked by cerberus policy: " + verdict.Reason + "\"}}\n\n"))
 					if flusher != nil {
 						flusher.Flush()
@@ -897,7 +964,7 @@ func reconstructToolStart(ev toolStartEvent, toolName, verifiedInput string, had
 // No engine configured or unreachable => allow (visibility mode) unless strict.
 func (s *server) askToolEngine(keyID, model, tool, inputJSON string) (decideResp, bool) {
 	if s.engineURL == "" {
-		return decideResp{Decision: "allow"}, true
+		return decideResp{Decision: "allow", StatusCode: http.StatusOK}, true
 	}
 	var parsedArgs map[string]any
 	if err := json.Unmarshal([]byte(inputJSON), &parsedArgs); err != nil || parsedArgs == nil {
@@ -922,51 +989,72 @@ func (s *server) askToolEngine(keyID, model, tool, inputJSON string) (decideResp
 	}
 	client := &http.Client{Timeout: 4 * time.Second}
 	resp, err := client.Do(req)
-	if err != nil || resp.StatusCode != 200 {
+	if err != nil {
 		if s.strict {
-			return decideResp{Decision: "deny", RuleID: "tap.tool_engine_unreachable_strict", Reason: "engine unreachable (strict)"}, false
+			return decideResp{Decision: "deny", RuleID: "tap.tool_engine_unreachable_strict", Reason: "engine unreachable (strict)", StatusCode: http.StatusBadGateway}, false
 		}
-		return decideResp{Decision: "allow", RuleID: "tap.tool_engine_unreachable"}, true
+		return decideResp{Decision: "allow", RuleID: "tap.tool_engine_unreachable", StatusCode: http.StatusOK}, true
 	}
 	defer func() { _ = resp.Body.Close() }()
 	var dr decideResp
+	dr.StatusCode = resp.StatusCode
+	dr.RetryAfter = resp.Header.Get("Retry-After")
 	if err := json.NewDecoder(resp.Body).Decode(&dr); err != nil || dr.Decision == "" {
-		if s.strict {
-			return decideResp{Decision: "deny", RuleID: "tap.tool_engine_bad_response_strict", Reason: "bad engine response (strict)"}, false
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return decideResp{Decision: "deny", RuleID: "ops.tenant_quota_exceeded", StatusCode: 429, RetryAfter: resp.Header.Get("Retry-After")}, false
 		}
-		return decideResp{Decision: "allow", RuleID: "tap.tool_engine_bad_response"}, true
+		if s.strict {
+			return decideResp{Decision: "deny", RuleID: "tap.tool_engine_bad_response_strict", Reason: "bad engine response (strict)", StatusCode: resp.StatusCode}, false
+		}
+		return decideResp{Decision: "allow", RuleID: "tap.tool_engine_bad_response", StatusCode: resp.StatusCode}, true
 	}
-	return dr, dr.Decision == "allow"
+	dr.StatusCode = resp.StatusCode
+	dr.RetryAfter = resp.Header.Get("Retry-After")
+	if dr.TeamID == "" {
+		dr.TeamID = resp.Header.Get("X-Cerberus-Team")
+	}
+	return dr, dr.Decision == "allow" && resp.StatusCode == http.StatusOK
+}
+
+// streamEntry records in-flight SSE stream context and ownership.
+type streamEntry struct {
+	cancel context.CancelFunc
+	keyID  string
+	teamID string
 }
 
 // kill registry: per-request CancelFuncs so an external kill signal can sever
 // all in-flight SSE streams and tunnels immediately.
 type killRegistry struct {
 	mu      sync.Mutex
-	cancels map[int64]context.CancelFunc
+	streams map[int64]streamEntry
 	nextID  int64
 }
 
 func newKillRegistry() *killRegistry {
-	return &killRegistry{cancels: make(map[int64]context.CancelFunc)}
+	return &killRegistry{streams: make(map[int64]streamEntry)}
 }
 
-func (k *killRegistry) add() (int64, context.Context) {
+func (k *killRegistry) add(keyID, teamID string) (int64, context.Context) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.nextID++
 	id := k.nextID
 	ctx, cancel := context.WithCancel(context.Background())
-	k.cancels[id] = cancel
+	k.streams[id] = streamEntry{
+		cancel: cancel,
+		keyID:  keyID,
+		teamID: teamID,
+	}
 	return id, ctx
 }
 
 func (k *killRegistry) remove(id int64) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	if c, ok := k.cancels[id]; ok {
-		c()
-		delete(k.cancels, id)
+	if e, ok := k.streams[id]; ok {
+		e.cancel()
+		delete(k.streams, id)
 	}
 }
 
@@ -974,11 +1062,29 @@ func (k *killRegistry) remove(id int64) {
 func (k *killRegistry) killAll() int {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	n := len(k.cancels)
-	for _, c := range k.cancels {
-		c()
+	n := len(k.streams)
+	for _, e := range k.streams {
+		e.cancel()
 	}
-	k.cancels = make(map[int64]context.CancelFunc)
+	k.streams = make(map[int64]streamEntry)
+	return n
+}
+
+// killTeam cancels every in-flight stream for a specific teamID.
+func (k *killRegistry) killTeam(teamID string) int {
+	if teamID == "" {
+		return 0
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	n := 0
+	for id, e := range k.streams {
+		if e.teamID == teamID {
+			e.cancel()
+			delete(k.streams, id)
+			n++
+		}
+	}
 	return n
 }
 

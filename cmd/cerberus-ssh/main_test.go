@@ -11,6 +11,8 @@ package main
 // key is generated at runtime into t.TempDir().
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
 	"io"
@@ -31,7 +33,26 @@ const (
 	testEngineToken  = "test-engine-token" // dummy, lives only in these tests
 	testUpstreamHost = "upstream.example.internal"
 	testUpstreamUser = "deploy"
+	testAgentKeyID   = "k-test-agent"
 )
+
+var (
+	testSigner         ssh.Signer
+	testPubFingerprint string
+)
+
+func init() {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	s, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		panic(err)
+	}
+	testSigner = s
+	testPubFingerprint = ssh.FingerprintSHA256(s.PublicKey())
+}
 
 // startBastion launches a decide-only bastion (no -key-file => no relay, no
 // upstream secret needed) on 127.0.0.1:0 with a runtime-generated host key.
@@ -57,13 +78,19 @@ func startBastion(t *testing.T, engineURL string) string {
 	if b.upstreamSigner != nil {
 		t.Fatal("expected decide-only mode (no upstream signer)")
 	}
+	// Seed known test key in cache
+	b.pubKeys.fingerprints[testPubFingerprint] = testAgentKeyID
 	go b.serve(ln)
 	return ln.Addr().String()
 }
 
-// dialBastion connects an SSH client. The server runs NoClientAuth, so an
-// empty auth list (the "none" method) is the client-side equivalent.
+// dialBastion connects an SSH client authenticated with testSigner.
 func dialBastion(t *testing.T, addr string) *ssh.Client {
+	t.Helper()
+	return dialBastionWithAuth(t, addr, []ssh.AuthMethod{ssh.PublicKeys(testSigner)})
+}
+
+func dialBastionWithAuth(t *testing.T, addr string, auth []ssh.AuthMethod) *ssh.Client {
 	t.Helper()
 	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
@@ -71,7 +98,7 @@ func dialBastion(t *testing.T, addr string) *ssh.Client {
 	}
 	cc, chans, reqs, err := ssh.NewClientConn(conn, addr, &ssh.ClientConfig{
 		User:            "agent",
-		Auth:            []ssh.AuthMethod{},
+		Auth:            auth,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // test-only // test host key is ephemeral
 		Timeout:         5 * time.Second,
 	})
@@ -128,6 +155,17 @@ func (c *engineCapture) get() (string, map[string]any) {
 func newEngine(t *testing.T, decision, reason string, engCap *engineCapture) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/admin/data" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"agents": map[string]any{
+					testAgentKeyID: map[string]any{
+						"ssh_pubkey_fingerprint": testPubFingerprint,
+					},
+				},
+			})
+			return
+		}
 		if r.URL.Path != "/v1/decide" {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
@@ -232,14 +270,20 @@ func TestExecAllowedDecideOnly(t *testing.T) {
 	if auth != "Bearer "+testEngineToken {
 		t.Errorf("engine Authorization = %q, want Bearer token", auth)
 	}
-	if decide["key_id"] != bastionKeyID {
-		t.Errorf("key_id = %v, want %q", decide["key_id"], bastionKeyID)
+	if decide["key_id"] != testAgentKeyID {
+		t.Errorf("key_id = %v, want %q", decide["key_id"], testAgentKeyID)
 	}
 	if decide["stage"] != bastionStage {
 		t.Errorf("stage = %v, want %q", decide["stage"], bastionStage)
 	}
 	if decide["action"] != bastionAction {
 		t.Errorf("action = %v, want %q", decide["action"], bastionAction)
+	}
+	if decide["command"] != "uptime" {
+		t.Errorf("command = %v, want uptime", decide["command"])
+	}
+	if decide["host"] != testUpstreamHost {
+		t.Errorf("host = %v, want %q", decide["host"], testUpstreamHost)
 	}
 	input, _ := decide["input"].(map[string]any)
 	if input["host"] != testUpstreamHost {
@@ -357,5 +401,105 @@ func TestHostKeyGeneratedTight(t *testing.T) {
 	after, _ := os.ReadFile(path) //nolint:gosec // G304: test temp path
 	if string(before) != string(after) {
 		t.Error("existing host key was regenerated instead of reused")
+	}
+}
+
+func TestSSH_NoClientAuthRejected(t *testing.T) {
+	engCap := &engineCapture{}
+	engine := newEngine(t, "allow", "ok", engCap)
+	addr := startBastion(t, engine.URL)
+
+	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	if err != nil {
+		t.Fatalf("dial bastion: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	_, _, _, err = ssh.NewClientConn(conn, addr, &ssh.ClientConfig{
+		User:            "agent",
+		Auth:            nil,
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // test-only
+		Timeout:         5 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("expected handshake error when no auth method provided, got nil")
+	}
+	if !strings.Contains(err.Error(), "unable to authenticate") && !strings.Contains(err.Error(), "handshake failed") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestSSH_UnregisteredKeyRejected(t *testing.T) {
+	engCap := &engineCapture{}
+	engine := newEngine(t, "allow", "ok", engCap)
+	addr := startBastion(t, engine.URL)
+
+	// Generate a rogue key
+	_, roguePriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate ed25519: %v", err)
+	}
+	rogueSigner, err := ssh.NewSignerFromKey(roguePriv)
+	if err != nil {
+		t.Fatalf("signer: %v", err)
+	}
+
+	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	if err != nil {
+		t.Fatalf("dial bastion: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	_, _, _, err = ssh.NewClientConn(conn, addr, &ssh.ClientConfig{
+		User:            "agent",
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(rogueSigner)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // test-only
+		Timeout:         5 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("expected handshake error for unregistered public key, got nil")
+	}
+	if !strings.Contains(err.Error(), "unable to authenticate") && !strings.Contains(err.Error(), "handshake failed") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestSSH_RegisteredKeyAccepted(t *testing.T) {
+	engCap := &engineCapture{}
+	engine := newEngine(t, "allow", "ok", engCap)
+	addr := startBastion(t, engine.URL)
+
+	client := dialBastion(t, addr)
+	defer func() { _ = client.Close() }()
+
+	ch, _, err := client.OpenChannel("session", nil)
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	defer func() { _ = ch.Close() }()
+
+	ok, err := ch.SendRequest("exec", true, execPayload("hostname"))
+	if err != nil {
+		t.Fatalf("send exec: %v", err)
+	}
+	if !ok {
+		t.Fatal("exec request should be accepted")
+	}
+
+	_, decide := engCap.get()
+	if decide == nil {
+		t.Fatal("engine received no decide request")
+	}
+	if decide["key_id"] != testAgentKeyID {
+		t.Errorf("key_id = %v, want %v", decide["key_id"], testAgentKeyID)
+	}
+	if decide["host"] != testUpstreamHost {
+		t.Errorf("host = %v, want %v", decide["host"], testUpstreamHost)
+	}
+	if decide["user"] != testUpstreamUser {
+		t.Errorf("user = %v, want %v", decide["user"], testUpstreamUser)
+	}
+	if decide["command"] != "hostname" {
+		t.Errorf("command = %v, want hostname", decide["command"])
 	}
 }

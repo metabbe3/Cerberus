@@ -7,38 +7,44 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
 // Default limits, ceilings, and timeouts across Cerberus.
 const (
-	DefaultAddr           = ":8089"
-	DefaultPolicyDir      = "policies"
-	DefaultDataFile       = "data/prod.json"
-	DefaultAuditDB        = "cerberus.db"
-	DefaultCacheSize      = 10000
-	DefaultEvalTimeout    = 3 * time.Second // was 10ms: OPA cold compile on slow runners spiked internal.timeout denials
-	DefaultRetentionDays  = 30
-	DefaultMaxBodyBytes   = 1 << 20
-	MaxBreakGlassDuration = 15 * time.Minute
+	DefaultAddr                = ":8089"
+	DefaultPolicyDir           = "policies"
+	DefaultDataFile            = "data/prod.json"
+	DefaultAuditDB             = "cerberus.db"
+	DefaultCacheSize           = 10000
+	DefaultEvalTimeout         = 3 * time.Second // was 10ms: OPA cold compile on slow runners spiked internal.timeout denials
+	DefaultRetentionDays       = 30
+	DefaultMaxBodyBytes        = 1 << 20
+	MaxBreakGlassDuration      = 15 * time.Minute
+	DefaultClusterSyncInterval = 60 * time.Second
 )
 
 // Config is the resolved runtime configuration. AdminToken must be non-empty
 // or Load returns an error (required secret fails startup, CONVENTIONS.md).
 type Config struct {
-	Addr               string
-	PolicyDir          string
-	DataFile           string
-	AuditDB            string
-	AuditRetentionDays int
-	ShipURL            string
-	AdminToken         string
-	PGDSN              string
-	LogLevel           string
-	CacheSize          int
-	EvalTimeout        time.Duration
-	BundlePubKey       string
+	Addr                string
+	PolicyDir           string
+	DataFile            string
+	AuditDB             string
+	AuditRetentionDays  int
+	ShipURL             string
+	AdminToken          string
+	PGDSN               string
+	LogLevel            string
+	CacheSize           int
+	EvalTimeout         time.Duration
+	BundlePubKey        string
+	NodeID              string
+	Peers               []string
+	ClusterSyncInterval time.Duration
 }
 
 // Load resolves env (via getenv) then flags (args, os.Args[1:] style). Flag >
@@ -56,19 +62,35 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	clusterSyncInterval, err := envDuration(getenv, "CERBERUS_CLUSTER_SYNC_INTERVAL", DefaultClusterSyncInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	var initialPeers []string
+	if rawPeers := firstNonEmpty(getenv("CERBERUS_CLUSTER_PEERS"), getenv("CERBERUS_PEERS")); rawPeers != "" {
+		for _, p := range strings.Split(rawPeers, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				initialPeers = append(initialPeers, p)
+			}
+		}
+	}
 	c := Config{
-		Addr:               firstNonEmpty(getenv("CERBERUS_ADDR"), DefaultAddr),
-		PolicyDir:          firstNonEmpty(getenv("CERBERUS_POLICY_DIR"), DefaultPolicyDir),
-		DataFile:           firstNonEmpty(getenv("CERBERUS_DATA_FILE"), DefaultDataFile),
-		AuditDB:            firstNonEmpty(getenv("CERBERUS_AUDIT_DB"), DefaultAuditDB),
-		PGDSN:              getenv("CERBERUS_PG_DSN"),
-		AuditRetentionDays: retentionDays,
-		ShipURL:            firstNonEmpty(getenv("CERBERUS_DECISION_LOG_SHIP_URL"), getenv("CERBERUS_SHIP_URL")),
-		AdminToken:         getenv("CERBERUS_ADMIN_TOKEN"),
-		LogLevel:           firstNonEmpty(getenv("CERBERUS_LOG_LEVEL"), "info"),
-		CacheSize:          cacheSize,
-		EvalTimeout:        evalTimeout,
-		BundlePubKey:       getenv("CERBERUS_BUNDLE_PUBKEY"),
+		Addr:                firstNonEmpty(getenv("CERBERUS_ADDR"), DefaultAddr),
+		PolicyDir:           firstNonEmpty(getenv("CERBERUS_POLICY_DIR"), DefaultPolicyDir),
+		DataFile:            firstNonEmpty(getenv("CERBERUS_DATA_FILE"), DefaultDataFile),
+		AuditDB:             firstNonEmpty(getenv("CERBERUS_AUDIT_DB"), DefaultAuditDB),
+		PGDSN:               getenv("CERBERUS_PG_DSN"),
+		AuditRetentionDays:  retentionDays,
+		ShipURL:             firstNonEmpty(getenv("CERBERUS_DECISION_LOG_SHIP_URL"), getenv("CERBERUS_SHIP_URL")),
+		AdminToken:          getenv("CERBERUS_ADMIN_TOKEN"),
+		LogLevel:            firstNonEmpty(getenv("CERBERUS_LOG_LEVEL"), "info"),
+		CacheSize:           cacheSize,
+		EvalTimeout:         evalTimeout,
+		BundlePubKey:        getenv("CERBERUS_BUNDLE_PUBKEY"),
+		NodeID:              getenv("CERBERUS_NODE_ID"),
+		Peers:               initialPeers,
+		ClusterSyncInterval: clusterSyncInterval,
 	}
 
 	fs := flag.NewFlagSet("cerberus", flag.ContinueOnError)
@@ -80,6 +102,17 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	fs.IntVar(&c.AuditRetentionDays, "audit-retention-days", c.AuditRetentionDays, "days to retain daily audit SQLite logs ($CERBERUS_AUDIT_RETENTION_DAYS)")
 	fs.StringVar(&c.ShipURL, "ship-url", c.ShipURL, "endpoint for shipping decision logs ($CERBERUS_DECISION_LOG_SHIP_URL)")
 	fs.StringVar(&c.BundlePubKey, "bundle-pubkey", c.BundlePubKey, "base64/PEM ed25519 public key for bundle signature verification ($CERBERUS_BUNDLE_PUBKEY)")
+	fs.StringVar(&c.NodeID, "node-id", c.NodeID, "cluster node ID ($CERBERUS_NODE_ID)")
+	var peersFlag string
+	fs.StringVar(&peersFlag, "peers", "", "comma-separated peer URLs ($CERBERUS_CLUSTER_PEERS, $CERBERUS_PEERS)")
+	fs.Func("cluster-sync-interval", "cluster gossip interval ($CERBERUS_CLUSTER_SYNC_INTERVAL)", func(s string) error {
+		d, err := time.ParseDuration(s)
+		if err != nil {
+			return err
+		}
+		c.ClusterSyncInterval = d
+		return nil
+	})
 	// No -admin-token flag: a secret on argv is readable by any local user via
 	// ps or /proc/<pid>/cmdline. The token comes from the environment only.
 	fs.StringVar(&c.LogLevel, "log-level", c.LogLevel, "debug|info|warn|error ($CERBERUS_LOG_LEVEL)")
@@ -94,6 +127,23 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	})
 	if err := fs.Parse(args); err != nil {
 		return Config{}, fmt.Errorf("config: flags: %w", err)
+	}
+
+	if peersFlag != "" {
+		c.Peers = nil
+		for _, p := range strings.Split(peersFlag, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				c.Peers = append(c.Peers, p)
+			}
+		}
+	}
+
+	for _, p := range c.Peers {
+		u, err := url.Parse(p)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return Config{}, fmt.Errorf("config: invalid peer URL %q: scheme must be http or https with host", p)
+		}
 	}
 
 	if c.AdminToken == "" {

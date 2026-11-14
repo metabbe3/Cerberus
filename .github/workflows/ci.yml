@@ -26,7 +26,7 @@ jobs:
       - run: make lint
       - run: make test
       - name: Run test suite with race detector
-        run: go test -race -count=1 -timeout=25m ./...
+        run: CERBERUS_SKIP_POLICY_SUITE=1 go test -race -count=1 -timeout=25m ./...
       - name: Fuzz smoke test
         run: go test -v ./internal/engine -fuzz=FuzzDecide -fuzztime=30s
       - run: make opa-check

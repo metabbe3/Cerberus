@@ -41,14 +41,14 @@ type EgressConfig struct {
 // EgressProxy inspects all outbound HTTP and HTTPS (via CONNECT) traffic,
 // evaluating destination hosts against stage http and PROD SHIELD CIDRs.
 type EgressProxy struct {
-	engine      *engine.Engine
+	engine      engine.Decider
 	cfg         EgressConfig
 	transport   *http.Transport
 	dialControl func(network, address string, c syscall.RawConn) error
 }
 
 // NewEgressProxy constructs an EgressProxy handler.
-func NewEgressProxy(eng *engine.Engine, cfg EgressConfig) (*EgressProxy, error) {
+func NewEgressProxy(eng engine.Decider, cfg EgressConfig) (*EgressProxy, error) {
 	if eng == nil {
 		return nil, fmt.Errorf("proxy: nil engine")
 	}
@@ -106,7 +106,7 @@ func NewEgressProxy(eng *engine.Engine, cfg EgressConfig) (*EgressProxy, error) 
 // DenyHostIP evaluates shield policy against a concrete post-resolution IP.
 // Used by the dial Control hook — any deny verdict aborts the connection
 // before the TCP handshake completes.
-func DenyHostIP(ctx context.Context, eng *engine.Engine, ipStr string) error {
+func DenyHostIP(ctx context.Context, eng engine.Decider, ipStr string) error {
 	ipStr = NormalizeIPString(ipStr)
 	ipIn := engine.Input{
 		Stage:    "http",

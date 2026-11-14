@@ -131,3 +131,18 @@ func TestEngineOptions(t *testing.T) {
 		t.Fatalf("expected EvalTimeout 5s, got %v", optsOverride.EvalTimeout)
 	}
 }
+
+func TestUnifiedMode_MissingEngineURLFails(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "go", "run", ".", "-engine-url", "", "-listen", ":2375")
+	cmd.Env = append(cmd.Environ(), "CERBERUS_ENGINE_URL=", "CERBERUS_STANDALONE=false")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected failure when -engine-url is empty in unified mode, got success: %s", out)
+	}
+	if !strings.Contains(string(out), "-engine-url is required") {
+		t.Fatalf("expected '-engine-url is required' error, got:\n%s", out)
+	}
+}

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -33,17 +34,18 @@ func TestLoad_Defaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Config{
-		Addr:               ":8089",
-		PolicyDir:          "policies",
-		DataFile:           "data/prod.json",
-		AuditDB:            "cerberus.db",
-		AuditRetentionDays: 30,
-		AdminToken:         "tok",
-		LogLevel:           "info",
-		CacheSize:          10000,
-		EvalTimeout:        3 * time.Second,
+		Addr:                ":8089",
+		PolicyDir:           "policies",
+		DataFile:            "data/prod.json",
+		AuditDB:             "cerberus.db",
+		AuditRetentionDays:  30,
+		AdminToken:          "tok",
+		LogLevel:            "info",
+		CacheSize:           10000,
+		EvalTimeout:         3 * time.Second,
+		ClusterSyncInterval: 60 * time.Second,
 	}
-	if c != want {
+	if !reflect.DeepEqual(c, want) {
 		t.Fatalf("got %+v, want %+v", c, want)
 	}
 }
@@ -122,5 +124,60 @@ func TestLoad_BundlePubKey(t *testing.T) {
 	}
 	if c.BundlePubKey != "ZmxhZy1rZXk=" {
 		t.Fatalf("bundle pubkey from flag: got %q, want ZmxhZy1rZXk=", c.BundlePubKey)
+	}
+}
+
+func TestLoad_ClusterConfig(t *testing.T) {
+	t.Parallel()
+	c, err := Load(
+		[]string{"-node-id", "node-alpha", "-peers", "http://10.0.0.1:8089, https://10.0.0.2:8089", "-cluster-sync-interval", "15s"},
+		env(map[string]string{
+			"CERBERUS_ADMIN_TOKEN": "tok",
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.NodeID != "node-alpha" {
+		t.Errorf("NodeID: got %q, want node-alpha", c.NodeID)
+	}
+	if len(c.Peers) != 2 || c.Peers[0] != "http://10.0.0.1:8089" || c.Peers[1] != "https://10.0.0.2:8089" {
+		t.Errorf("Peers: got %v, want [http://10.0.0.1:8089 https://10.0.0.2:8089]", c.Peers)
+	}
+	if c.ClusterSyncInterval != 15*time.Second {
+		t.Errorf("ClusterSyncInterval: got %v, want 15s", c.ClusterSyncInterval)
+	}
+}
+
+func TestLoad_ClusterConfig_EnvFallback(t *testing.T) {
+	t.Parallel()
+	c, err := Load(nil, env(map[string]string{
+		"CERBERUS_ADMIN_TOKEN":           "tok",
+		"CERBERUS_NODE_ID":               "node-beta",
+		"CERBERUS_CLUSTER_PEERS":         "http://node1:8089,http://node2:8089",
+		"CERBERUS_CLUSTER_SYNC_INTERVAL": "30s",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.NodeID != "node-beta" {
+		t.Errorf("NodeID: got %q, want node-beta", c.NodeID)
+	}
+	if len(c.Peers) != 2 || c.Peers[0] != "http://node1:8089" || c.Peers[1] != "http://node2:8089" {
+		t.Errorf("Peers: got %v", c.Peers)
+	}
+	if c.ClusterSyncInterval != 30*time.Second {
+		t.Errorf("ClusterSyncInterval: got %v, want 30s", c.ClusterSyncInterval)
+	}
+}
+
+func TestLoad_ClusterConfig_InvalidPeerURL(t *testing.T) {
+	t.Parallel()
+	_, err := Load(
+		[]string{"-peers", "ftp://invalid-peer:8089"},
+		env(map[string]string{"CERBERUS_ADMIN_TOKEN": "tok"}),
+	)
+	if err == nil {
+		t.Fatal("expected error for non-http/https peer URL, got nil")
 	}
 }

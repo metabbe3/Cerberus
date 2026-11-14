@@ -710,6 +710,37 @@ func (m *dbManager) countToolCallsToday(ctx context.Context, keyID string, today
 	return count, err
 }
 
+func (m *dbManager) countTeamCallsToday(ctx context.Context, teamKeys []string, today time.Time) (int64, error) {
+	if len(teamKeys) == 0 {
+		return 0, nil
+	}
+	placeholders := make([]string, len(teamKeys))
+	args := make([]any, len(teamKeys))
+	for i, k := range teamKeys {
+		placeholders[i] = "?"
+		args[i] = k
+	}
+	query := "SELECT COUNT(*) FROM events WHERE key_id IN (" + strings.Join(placeholders, ",") + ") AND stage = 'tool' AND decision = 'allow'"
+
+	if m.isMemory {
+		db := m.dbs["memory"]
+		if db == nil {
+			return 0, nil
+		}
+		var count int64
+		err := db.QueryRowContext(ctx, query, args...).Scan(&count)
+		return count, err
+	}
+
+	db, err := m.getDBForTime(today)
+	if err != nil {
+		return 0, err
+	}
+	var count int64
+	err = db.QueryRowContext(ctx, query, args...).Scan(&count)
+	return count, err
+}
+
 func boolInt(b bool) int64 {
 	if b {
 		return 1

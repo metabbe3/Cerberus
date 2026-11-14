@@ -149,7 +149,15 @@ func (s *Server) decide(stage string) http.HandlerFunc {
 			return
 		}
 
-		// Rate limiting and quota check per key
+		// Rate limiting and quota check per key and team
+		var teamID string
+		if s.deps.Store != nil && s.deps.Store.Current() != nil {
+			teamID = extractTeamID(s.deps.Store.Current().Data, in.KeyID)
+		}
+		if teamID != "" {
+			w.Header().Set("X-Cerberus-Team", teamID)
+		}
+
 		if s.limiter != nil {
 			verdict := s.limiter.Allow(r.Context(), in.KeyID, in.Stage)
 			if !verdict.Allowed {
@@ -178,6 +186,17 @@ func (s *Server) decide(stage string) http.HandlerFunc {
 				}
 				writeJSON(w, http.StatusTooManyRequests, d)
 				return
+			}
+
+			// Inject team budget spend into input.context.budget_spent_usd if not already set
+			if in.KeyID != "" {
+				teamSpend := s.limiter.GetTeamSpend(in.KeyID)
+				if in.Context == nil {
+					in.Context = make(map[string]any)
+				}
+				if _, exists := in.Context["budget_spent_usd"]; !exists {
+					in.Context["budget_spent_usd"] = teamSpend
+				}
 			}
 		}
 
@@ -208,8 +227,46 @@ func (s *Server) decide(stage string) http.HandlerFunc {
 		}
 
 		d := s.deps.Engine.Decide(r.Context(), in)
+		if d.Decision == "allow" && in.Context != nil && s.limiter != nil && in.KeyID != "" {
+			for _, k := range []string{"spend_usd", "cost_usd"} {
+				if val, ok := in.Context[k]; ok {
+					var spend float64
+					switch v := val.(type) {
+					case float64:
+						spend = v
+					case int:
+						spend = float64(v)
+					case int64:
+						spend = float64(v)
+					}
+					if spend > 0 {
+						s.limiter.RecordSpend(in.KeyID, spend)
+						break
+					}
+				}
+			}
+		}
 		writeJSON(w, http.StatusOK, d)
 	}
+}
+
+func extractTeamID(data map[string]any, keyID string) string {
+	if data == nil || keyID == "" {
+		return ""
+	}
+	agents, ok := data["agents"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	agent, ok := agents[keyID].(map[string]any)
+	if !ok {
+		return ""
+	}
+	teamID, ok := agent["team_id"].(string)
+	if !ok {
+		return ""
+	}
+	return teamID
 }
 
 // explain handles POST /v1/admin/explain (dry-run evaluation with OPA rule trace).

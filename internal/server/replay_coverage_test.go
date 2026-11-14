@@ -111,7 +111,9 @@ func TestAdmin_ReplayAudit(t *testing.T) {
 }
 
 func TestAdmin_GetCoverage(t *testing.T) {
-	t.Parallel()
+	// Coverage semantics under test: suite must run even when the matrix
+	// uses CERBERUS_SKIP_POLICY_SUITE=1. (Not parallel: t.Setenv.)
+	t.Setenv("CERBERUS_SKIP_POLICY_SUITE", "0")
 	h := newHarness(t)
 
 	// 1. Unauthorized request fails with 401

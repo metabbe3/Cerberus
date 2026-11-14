@@ -58,7 +58,7 @@ type DockerConfig struct {
 // DockerProxy intercepts Docker Engine API calls and evaluates them against the
 // Cerberus engine's docker stage.
 type DockerProxy struct {
-	engine       *engine.Engine
+	engine       engine.Decider
 	cfg          DockerConfig
 	reverseProxy *httputil.ReverseProxy
 	labelCache   sync.Map // containerID -> cachedLabel
@@ -71,7 +71,7 @@ type cachedLabel struct {
 }
 
 // NewDockerProxy constructs a Docker socket-proxy handler.
-func NewDockerProxy(eng *engine.Engine, cfg DockerConfig) (*DockerProxy, error) {
+func NewDockerProxy(eng engine.Decider, cfg DockerConfig) (*DockerProxy, error) {
 	if eng == nil {
 		return nil, fmt.Errorf("proxy: nil engine")
 	}

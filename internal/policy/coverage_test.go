@@ -8,6 +8,7 @@ import (
 )
 
 func TestComputeCoverage_RealPolicies(t *testing.T) {
+	t.Setenv("CERBERUS_SKIP_POLICY_SUITE", "0") // coverage semantics under test: suite must run
 	ctx := context.Background()
 	// Policies directory in repo root: "../../policies"
 	rep, err := ComputeCoverage(ctx, "../../policies")
@@ -32,6 +33,7 @@ func TestComputeCoverage_RealPolicies(t *testing.T) {
 }
 
 func TestStore_CoverageMethod(t *testing.T) {
+	t.Setenv("CERBERUS_SKIP_POLICY_SUITE", "0") // coverage semantics under test: suite must run
 	ctx := context.Background()
 	store, err := NewStore(ctx, "../../policies", "../../policies/testdata/data.json")
 	if err != nil {
@@ -51,6 +53,7 @@ func TestStore_CoverageMethod(t *testing.T) {
 }
 
 func TestComputeCoverage_FailingTest(t *testing.T) {
+	t.Setenv("CERBERUS_SKIP_POLICY_SUITE", "0") // coverage semantics under test: suite must run
 	dir := t.TempDir()
 	policy := "package example\nimport rego.v1\ndefault allow := false\n"
 	test := "package example\nimport rego.v1\ntest_fail if {\n\t1 == 2\n}\n"

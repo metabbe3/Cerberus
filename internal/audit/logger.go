@@ -315,6 +315,14 @@ func (l *Logger) DailyToolCallsCount(ctx context.Context, keyID string, today ti
 	return l.mgr.countToolCallsToday(ctx, keyID, today)
 }
 
+// DailyTeamCallsCount returns the number of tool stage events logged today across all keys in teamKeys.
+func (l *Logger) DailyTeamCallsCount(ctx context.Context, teamKeys []string, today time.Time) (int64, error) {
+	if l == nil || l.mgr == nil || len(teamKeys) == 0 {
+		return 0, nil
+	}
+	return l.mgr.countTeamCallsToday(ctx, teamKeys, today)
+}
+
 // Close flushes pending batches, stops writer & shipper, and closes SQLite.
 func (l *Logger) Close() error {
 	activeLogger.CompareAndSwap(l, nil)

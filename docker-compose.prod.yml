@@ -86,24 +86,21 @@ services:
       cerberus-proxy
       -listen ${CERBERUS_PROXY_LISTEN:-0.0.0.0:2377}
       -docker-host ${CERBERUS_PROXY_DOCKER_HOST:-unix:///var/run/docker.sock}
-      -policy-dir /gate-policies
-      -data-file /gate-data/prod.json
-      -audit-db /audit/proxy-audit.db
+      -engine-url ${CERBERUS_ENGINE_URL:-http://engine:8089}
       -default-key ${CERBERUS_PROXY_DEFAULT_KEY:-k-default-agent}
     environment:
+      CERBERUS_ENGINE_URL: ${CERBERUS_ENGINE_URL:-http://engine:8089}
       CERBERUS_ADMIN_TOKEN: ${CERBERUS_ADMIN_TOKEN:-}
       CERBERUS_PROXY_DEFAULT_KEY: ${CERBERUS_PROXY_DEFAULT_KEY:-k-default-agent}
       CERBERUS_EVAL_TIMEOUT: ${CERBERUS_EVAL_TIMEOUT:-3s}
       CERBERUS_LOG_LEVEL: ${CERBERUS_LOG_LEVEL:-info}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./policies:/gate-policies:ro
-      - ./data:/gate-data:ro
-      - proxyaudit:/audit
     ports:
       - "127.0.0.1:2377:2377"
     networks:
       - edge
+      - internal
     depends_on:
       engine:
         condition: service_started
@@ -119,25 +116,21 @@ services:
     restart: unless-stopped
     command: >-
       cerberus-proxy
-      -listen 127.0.0.1:8087
+      -listen none
       -egress-addr ${CERBERUS_EGRESS_ADDR:-0.0.0.0:8088}
-      -policy-dir /gate-policies
-      -data-file /gate-data/prod.json
-      -audit-db /audit/egress-audit.db
+      -engine-url ${CERBERUS_ENGINE_URL:-http://engine:8089}
       -default-key ${CERBERUS_PROXY_DEFAULT_KEY:-k-default-agent}
     environment:
+      CERBERUS_ENGINE_URL: ${CERBERUS_ENGINE_URL:-http://engine:8089}
       CERBERUS_ADMIN_TOKEN: ${CERBERUS_ADMIN_TOKEN:-}
       CERBERUS_PROXY_DEFAULT_KEY: ${CERBERUS_PROXY_DEFAULT_KEY:-k-default-agent}
       CERBERUS_EVAL_TIMEOUT: ${CERBERUS_EVAL_TIMEOUT:-3s}
       CERBERUS_LOG_LEVEL: ${CERBERUS_LOG_LEVEL:-info}
-    volumes:
-      - ./policies:/gate-policies:ro
-      - ./data:/gate-data:ro
-      - egressaudit:/audit
     ports:
       - "127.0.0.1:8088:8088"
     networks:
       - edge
+      - internal
     depends_on:
       engine:
         condition: service_started
@@ -208,6 +201,4 @@ networks:
 volumes:
   engineaudit: {}
   tapdata: {}
-  proxyaudit: {}
-  egressaudit: {}
   sshdata: {}

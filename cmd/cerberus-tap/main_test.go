@@ -1121,4 +1121,95 @@ func TestAskToolEnginePayloadRestrictedTools(t *testing.T) {
 	}
 }
 
+func TestTenantQuota_PreCallBlocked_429(t *testing.T) {
+	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "30")
+		w.Header().Set("X-Cerberus-Team", "team-quota-test")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = fmt.Fprint(w, `{"decision":"deny","rule_id":"ops.tenant_quota_exceeded","reason":"team requests per minute limit exceeded (60/min)"}`)
+	}))
+	defer engine.Close()
+
+	srv := newTap("http://127.0.0.1:1", engine.URL, t.TempDir(), "", false)
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	req, _ := http.NewRequest("POST", ts.URL+"/v1/messages", strings.NewReader(`{"model":"claude-3","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("X-Tap-Key", "k-test-quota")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", resp.StatusCode)
+	}
+	if retry := resp.Header.Get("Retry-After"); retry != "30" {
+		t.Errorf("Retry-After = %q, want 30", retry)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "tenant_quota_exceeded") {
+		t.Errorf("body = %s, want it to contain tenant_quota_exceeded", body)
+	}
+}
+
+func TestTenantQuota_MidStreamToolQuotaCut(t *testing.T) {
+	// Upstream returns an SSE stream with a tool_use block
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl := w.(http.Flusher)
+		_, _ = fmt.Fprintf(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_1\",\"name\":\"db_query\"}}\n\n")
+		fl.Flush()
+		_, _ = fmt.Fprintf(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"q\\\":\\\"select 1\\\"}\"}}\n\n")
+		fl.Flush()
+		_, _ = fmt.Fprintf(w, "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n")
+		fl.Flush()
+		// If stream is not cut, upstream would continue sending tokens
+		_, _ = fmt.Fprintf(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"after-tool\"}}\n\n")
+		fl.Flush()
+	}))
+	defer up.Close()
+
+	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/decide/tool") {
+			w.Header().Set("Retry-After", "60")
+			w.Header().Set("X-Cerberus-Team", "team-quota-cut")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = fmt.Fprint(w, `{"decision":"deny","rule_id":"ops.tenant_quota_exceeded","reason":"team daily tool calls quota exceeded (100/100)"}`)
+			return
+		}
+		// LLM pre-call allowed
+		_, _ = fmt.Fprint(w, `{"decision":"allow","rule_id":"ai.llm.allow"}`)
+	}))
+	defer engine.Close()
+
+	srv := newTap(up.URL, engine.URL, t.TempDir(), "", false)
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	req, _ := http.NewRequest("POST", ts.URL+"/v1/messages", strings.NewReader(`{"model":"claude-3","messages":[{"role":"user","content":"run query"}]}`))
+	req.Header.Set("X-Tap-Key", "k-team-key")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Stream must contain the SSE error event for tenant_quota_exceeded
+	if !strings.Contains(bodyStr, "tenant_quota_exceeded") {
+		t.Errorf("stream body does not contain tenant_quota_exceeded event: %s", bodyStr)
+	}
+	// Stream must be cut immediately: upstream's "after-tool" must NOT reach client
+	if strings.Contains(bodyStr, "after-tool") {
+		t.Errorf("stream should have been cut, but received after-tool token: %s", bodyStr)
+	}
+}
+
 var _ = bytes.TrimSpace

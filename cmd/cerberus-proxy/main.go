@@ -47,6 +47,8 @@ func run() error {
 		listenAddr = ":2375"
 		dockerHost = "unix:///var/run/docker.sock"
 		egressAddr = ""
+		engineURL  = "http://127.0.0.1:8089"
+		standalone = false
 		defaultKey = "k-default-agent"
 		policyDir  = "policies"
 		dataFile   = "data/prod.json"
@@ -63,6 +65,12 @@ func run() error {
 	}
 	if v := os.Getenv("CERBERUS_PROXY_EGRESS_ADDR"); v != "" {
 		egressAddr = v
+	}
+	if v := os.Getenv("CERBERUS_ENGINE_URL"); v != "" {
+		engineURL = v
+	}
+	if v := os.Getenv("CERBERUS_STANDALONE"); v == "true" || v == "1" {
+		standalone = true
 	}
 	if v := os.Getenv("CERBERUS_PROXY_DEFAULT_KEY"); v != "" {
 		defaultKey = v
@@ -81,13 +89,15 @@ func run() error {
 	}
 
 	fs := flag.NewFlagSet("cerberus-proxy", flag.ContinueOnError)
-	fs.StringVar(&listenAddr, "listen", listenAddr, "listen address (TCP :2375 or unix:///path/to/sock)")
+	fs.StringVar(&listenAddr, "listen", listenAddr, "listen address (TCP :2375 or unix:///path/to/sock, or empty/none to disable)")
 	fs.StringVar(&dockerHost, "docker-host", dockerHost, "backend Docker host URL (unix:///var/run/docker.sock or http://127.0.0.1:2375)")
 	fs.StringVar(&egressAddr, "egress-addr", egressAddr, "optional HTTP egress proxy listen address (:8080)")
+	fs.StringVar(&engineURL, "engine-url", engineURL, "Cerberus engine URL ($CERBERUS_ENGINE_URL)")
+	fs.BoolVar(&standalone, "standalone", standalone, "run with local embedded engine instead of remote HTTP engine ($CERBERUS_STANDALONE)")
 	fs.StringVar(&defaultKey, "default-key", defaultKey, "fallback policy key ID")
-	fs.StringVar(&policyDir, "policy-dir", policyDir, "policies directory")
-	fs.StringVar(&dataFile, "data-file", dataFile, "data JSON file")
-	fs.StringVar(&auditDB, "audit-db", auditDB, "audit database path")
+	fs.StringVar(&policyDir, "policy-dir", policyDir, "policies directory (standalone mode only)")
+	fs.StringVar(&dataFile, "data-file", dataFile, "data JSON file (standalone mode only)")
+	fs.StringVar(&auditDB, "audit-db", auditDB, "audit database path (standalone mode only)")
 	fs.StringVar(&adminToken, "admin-token", adminToken, "admin token for bearer auth")
 	fs.StringVar(&logLevel, "log-level", logLevel, "log level (debug|info|warn|error)")
 
@@ -102,77 +112,109 @@ func run() error {
 		log.Warn("UNAUTHENTICATED mode: CERBERUS_ADMIN_TOKEN not set, proxy requests are unauthenticated")
 	}
 
+	if (listenAddr == "" || listenAddr == "none") && egressAddr == "" {
+		return errors.New("cerberus-proxy: at least one of -listen or -egress-addr must be specified")
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	store, err := policy.NewStore(ctx, policyDir, dataFile)
-	if err != nil {
-		return fmt.Errorf("cerberus-proxy: load policy: %w", err)
-	}
+	var (
+		dec      engine.Decider
+		lim      *ratelimit.Limiter
+		auditLog *audit.Logger
+	)
 
-	auditLog, err := audit.Open(ctx, auditDB, audit.Options{})
-	if err != nil {
-		return fmt.Errorf("cerberus-proxy: open audit db: %w", err)
-	}
-	defer func() { _ = auditLog.Close() }()
-
-	eng, err := engine.New(store, auditLog, engineOptions())
-	if err != nil {
-		return fmt.Errorf("cerberus-proxy: engine: %w", err)
-	}
-	defer eng.Close()
-
-	lim := ratelimit.NewLimiter(store, auditLog)
-	defer lim.Close()
-
-	parsedDockerHost, err := url.Parse(dockerHost)
-	if err != nil {
-		return fmt.Errorf("cerberus-proxy: invalid docker host: %w", err)
-	}
-
-	dp, err := proxy.NewDockerProxy(eng, proxy.DockerConfig{
-		TargetURL:     parsedDockerHost,
-		FallbackKeyID: defaultKey,
-		Limiter:       lim,
-		Audit:         auditLog,
-	})
-	if err != nil {
-		return fmt.Errorf("cerberus-proxy: init docker proxy: %w", err)
-	}
-
-	isUnix := strings.HasPrefix(listenAddr, "unix://") || strings.HasPrefix(listenAddr, "/")
-	network := "tcp"
-	bindPath := listenAddr
-	if isUnix {
-		network = "unix"
-		bindPath = strings.TrimPrefix(listenAddr, "unix://")
-		_ = os.Remove(bindPath) //nolint:gosec // G703 operator-set unix path
-	}
-
-	listener, err := net.Listen(network, bindPath) //nolint:gosec // G703/G704 bindPath is operator-set flag
-	if err != nil {
-		return fmt.Errorf("cerberus-proxy: listen on %s: %w", listenAddr, err)
-	}
-	defer func() {
-		_ = listener.Close()
-		if isUnix {
-			_ = os.Remove(bindPath) //nolint:gosec // G703 operator-set unix path
+	if standalone {
+		log.Info("cerberus-proxy running in STANDALONE mode with local engine")
+		store, err := policy.NewStore(ctx, policyDir, dataFile)
+		if err != nil {
+			return fmt.Errorf("cerberus-proxy: load policy: %w", err)
 		}
-	}()
 
-	srv := &http.Server{
-		Handler:           requireAdminAuth(adminToken, dp),
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		aLog, err := audit.Open(ctx, auditDB, audit.Options{})
+		if err != nil {
+			return fmt.Errorf("cerberus-proxy: open audit db: %w", err)
+		}
+		defer func() { _ = aLog.Close() }()
+		auditLog = aLog
+
+		eng, err := engine.New(store, auditLog, engineOptions())
+		if err != nil {
+			return fmt.Errorf("cerberus-proxy: engine: %w", err)
+		}
+		defer eng.Close()
+
+		lim = ratelimit.NewLimiter(store, auditLog)
+		defer lim.Close()
+
+		dec = eng
+	} else {
+		if strings.TrimSpace(engineURL) == "" {
+			return errors.New("cerberus-proxy: -engine-url is required (or run with CERBERUS_STANDALONE=true)")
+		}
+		log.Info("cerberus-proxy running in UNIFIED mode forwarding to engine", "engine_url", engineURL)
+		dec = engine.NewHTTPDecider(engineURL, adminToken)
 	}
 
 	serveErr := make(chan error, 2)
-	go func() { serveErr <- srv.Serve(listener) }()
-	log.Info("cerberus-proxy listening", "network", network, "addr", bindPath, "docker_host", dockerHost)
+	var (
+		srv          *http.Server
+		listener     net.Listener
+		isUnix       bool
+		bindPath     string
+		egressSrv    *http.Server
+		egressListen net.Listener
+	)
 
-	var egressSrv *http.Server
+	if listenAddr != "" && listenAddr != "none" {
+		parsedDockerHost, err := url.Parse(dockerHost)
+		if err != nil {
+			return fmt.Errorf("cerberus-proxy: invalid docker host: %w", err)
+		}
+
+		dp, err := proxy.NewDockerProxy(dec, proxy.DockerConfig{
+			TargetURL:     parsedDockerHost,
+			FallbackKeyID: defaultKey,
+			Limiter:       lim,
+			Audit:         auditLog,
+		})
+		if err != nil {
+			return fmt.Errorf("cerberus-proxy: init docker proxy: %w", err)
+		}
+
+		isUnix = strings.HasPrefix(listenAddr, "unix://") || strings.HasPrefix(listenAddr, "/")
+		network := "tcp"
+		bindPath = listenAddr
+		if isUnix {
+			network = "unix"
+			bindPath = strings.TrimPrefix(listenAddr, "unix://")
+			_ = os.Remove(bindPath) //nolint:gosec // G703 operator-set unix path
+		}
+
+		l, err := net.Listen(network, bindPath) //nolint:gosec // G703/G704 bindPath is operator-set flag
+		if err != nil {
+			return fmt.Errorf("cerberus-proxy: listen on %s: %w", listenAddr, err)
+		}
+		listener = l
+		defer func() {
+			_ = listener.Close()
+			if isUnix {
+				_ = os.Remove(bindPath) //nolint:gosec // G703 operator-set unix path
+			}
+		}()
+
+		srv = &http.Server{
+			Handler:           requireAdminAuth(adminToken, dp),
+			ReadHeaderTimeout: 5 * time.Second,
+			IdleTimeout:       120 * time.Second,
+		}
+		go func() { serveErr <- srv.Serve(listener) }()
+		log.Info("cerberus-proxy listening", "network", network, "addr", bindPath, "docker_host", dockerHost)
+	}
+
 	if egressAddr != "" {
-		ep, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		ep, err := proxy.NewEgressProxy(dec, proxy.EgressConfig{
 			FallbackKeyID: defaultKey,
 			Limiter:       lim,
 			Audit:         auditLog,
@@ -180,18 +222,19 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("cerberus-proxy: init egress proxy: %w", err)
 		}
-		egressListener, err := net.Listen("tcp", egressAddr)
+		el, err := net.Listen("tcp", egressAddr)
 		if err != nil {
 			return fmt.Errorf("cerberus-proxy: egress listen on %s: %w", egressAddr, err)
 		}
-		defer func() { _ = egressListener.Close() }()
+		egressListen = el
+		defer func() { _ = egressListen.Close() }()
 
 		egressSrv = &http.Server{
 			Handler:           requireAdminAuth(adminToken, ep),
 			ReadHeaderTimeout: 5 * time.Second,
 			IdleTimeout:       120 * time.Second,
 		}
-		go func() { serveErr <- egressSrv.Serve(egressListener) }()
+		go func() { serveErr <- egressSrv.Serve(egressListen) }()
 		log.Info("cerberus-proxy egress proxy listening", "addr", egressAddr)
 	}
 
@@ -208,7 +251,10 @@ func run() error {
 	if egressSrv != nil {
 		_ = egressSrv.Shutdown(shutdownCtx)
 	}
-	return srv.Shutdown(shutdownCtx)
+	if srv != nil {
+		return srv.Shutdown(shutdownCtx)
+	}
+	return nil
 }
 
 func newLogger(level string) *slog.Logger {
