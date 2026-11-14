@@ -442,6 +442,47 @@ func (s *Store) ResetUserPassword(ctx context.Context, id int64, newPassword str
 	return tx.Commit()
 }
 
+// ChangeOwnPassword memverifikasi password lama lalu mengganti hash user.
+// Semua session user DICABUT kecuali token yang sedang dipakai (keepToken).
+func (s *Store) ChangeOwnPassword(ctx context.Context, userID int64, currentPassword, newPassword, keepToken string) error {
+	if len(newPassword) < 12 {
+		return ErrPasswordTooShort
+	}
+	var hash string
+	err := s.db.QueryRowContext(ctx, "SELECT password_hash FROM users WHERE id = ?", userID).Scan(&hash)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrUserNotFound
+		}
+		return err
+	}
+	if !CheckPassword(currentPassword, hash) {
+		return ErrInvalidCredentials
+	}
+	newHash, err := HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, "UPDATE users SET password_hash = ? WHERE id = ?", newHash, userID); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	keepHash := HashToken(keepToken)
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND token_hash != ? AND revoked_at IS NULL",
+		now, userID, keepHash); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // Close closes the underlying database connection.
 func (s *Store) Close() error {
 	return s.db.Close()

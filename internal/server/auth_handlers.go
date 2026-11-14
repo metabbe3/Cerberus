@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log/slog"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -407,4 +408,56 @@ func (s *Server) handleResetUserPassword(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleAuthChangePassword mengganti password sendiri (verifikasi password lama,
+// session lain dicabut otomatis kecuali yang dipakai).
+func (s *Server) handleAuthChangePassword(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "body JSON tidak valid")
+		return
+	}
+	if req.CurrentPassword == "" || req.NewPassword == "" {
+		writeErr(w, http.StatusBadRequest, "current_password dan new_password wajib diisi")
+		return
+	}
+	tok, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if tok == "" {
+		if cookie, err := r.Cookie("owl_session"); err == nil {
+			tok = cookie.Value
+		}
+	}
+	user, err := s.auth.ValidateSession(r.Context(), tok)
+	if err != nil || user == nil {
+		writeErr(w, http.StatusUnauthorized, "sesi tidak valid")
+		return
+	}
+	if err := s.auth.ChangeOwnPassword(r.Context(), user.ID, req.CurrentPassword, req.NewPassword, tok); err != nil {
+		switch {
+		case errors.Is(err, auth.ErrInvalidCredentials):
+			writeErr(w, http.StatusUnauthorized, "password saat ini salah")
+		case errors.Is(err, auth.ErrPasswordTooShort):
+			writeErr(w, http.StatusBadRequest, "kata sandi baru minimal 12 karakter")
+		default:
+			slog.Error("auth: change password", "err", err)
+			writeErr(w, http.StatusInternalServerError, "kesalahan internal")
+		}
+		return
+	}
+	if s.deps.Audit != nil {
+		s.deps.Audit.Emit(audit.Event{
+			Time:     time.Now().UTC(),
+			Stage:    "auth",
+			KeyID:    user.Username,
+			Subject:  "auth",
+			Decision: "allow",
+			RuleID:   "auth.password_changed",
+			Reason:   "password diganti sendiri",
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "password diganti; session lain dicabut"})
 }

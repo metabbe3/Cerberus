@@ -143,6 +143,7 @@ func New(d Deps) *Server {
 	mux.HandleFunc("POST /v1/auth/login", s.handleAuthLogin)
 	mux.HandleFunc("POST /v1/auth/logout", s.handleAuthLogout)
 	mux.HandleFunc("GET /v1/auth/me", s.handleAuthMe)
+	mux.HandleFunc("POST /v1/auth/password", s.handleAuthChangePassword)
 	mux.HandleFunc("GET /v1/admin/users", s.admin(s.handleListUsers))
 	mux.HandleFunc("POST /v1/admin/users", s.admin(s.handleCreateUser))
 	mux.HandleFunc("POST /v1/admin/users/{id}/disable", s.admin(s.handleSetUserDisabled))
