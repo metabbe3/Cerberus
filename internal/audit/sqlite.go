@@ -181,6 +181,11 @@ func openSQLite(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("audit: open %s: %w", path, err)
 	}
+	if path == ":memory:" {
+		// :memory: = database per-KONEKSI di SQLite; tanpa pool 1-koneksi,
+		// koneksi kedua databasego kosong ("no such table: events").
+		db.SetMaxOpenConns(1)
+	}
 	if path != ":memory:" {
 		_ = os.Chmod(path, 0o640) //nolint:gosec // G302 group-readable for audit ship-out
 	}
