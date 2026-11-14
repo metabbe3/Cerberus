@@ -1,0 +1,221 @@
+{
+  "version": "1.0.0",
+  "generated_at": "2026-11-14T04:17:06.118038Z",
+  "master_seed": 20261114,
+  "total_samples": 900,
+  "total_duration": "341.284542ms",
+  "overall_tps": 2637.10,
+  "overall_p50_ms": 2.37,
+  "overall_p99_ms": 12.88,
+  "total_allow": 657,
+  "total_deny": 398,
+  "total_flaky": 0,
+  "total_escapes": 249,
+  "overall_p_ub99": 0.316605,
+  "stages": {
+    "tool": {
+      "stage": "tool",
+      "samples": 100,
+      "duration": "60.15ms",
+      "tps": 1662.0,
+      "p50_ms": 5.38,
+      "p99_ms": 14.40,
+      "hits_allow": 94,
+      "hits_deny": 6,
+      "flaky": 0,
+      "escapes": 0,
+      "p_ub99": 0.045007
+    },
+    "llm": {
+      "stage": "llm",
+      "samples": 100,
+      "duration": "63.82ms",
+      "tps": 1567.0,
+      "p50_ms": 4.27,
+      "p99_ms": 15.13,
+      "hits_allow": 95,
+      "hits_deny": 5,
+      "flaky": 0,
+      "escapes": 0,
+      "p_ub99": 0.045007
+    },
+    "http": {
+      "stage": "http",
+      "samples": 100,
+      "duration": "49.03ms",
+      "tps": 2039.0,
+      "p50_ms": 3.75,
+      "p99_ms": 11.27,
+      "hits_allow": 94,
+      "hits_deny": 6,
+      "flaky": 0,
+      "escapes": 0,
+      "p_ub99": 0.045007
+    },
+    "db": {
+      "stage": "db",
+      "samples": 100,
+      "duration": "62.94ms",
+      "tps": 1589.0,
+      "p50_ms": 5.00,
+      "p99_ms": 12.06,
+      "hits_allow": 7,
+      "hits_deny": 93,
+      "flaky": 0,
+      "escapes": 0,
+      "p_ub99": 0.045007
+    },
+    "k8s": {
+      "stage": "k8s",
+      "samples": 100,
+      "duration": "32.23ms",
+      "tps": 3103.0,
+      "p50_ms": 0.43,
+      "p99_ms": 5.59,
+      "hits_allow": 96,
+      "hits_deny": 4,
+      "flaky": 0,
+      "escapes": 0,
+      "p_ub99": 0.045007
+    },
+    "docker": {
+      "stage": "docker",
+      "samples": 100,
+      "duration": "10.72ms",
+      "tps": 9332.0,
+      "p50_ms": 1.38,
+      "p99_ms": 5.01,
+      "hits_allow": 1,
+      "hits_deny": 99,
+      "flaky": 0,
+      "escapes": 0,
+      "p_ub99": 0.045007
+    },
+    "ssh": {
+      "stage": "ssh",
+      "samples": 100,
+      "duration": "36.14ms",
+      "tps": 2767.0,
+      "p50_ms": 0.90,
+      "p99_ms": 5.47,
+      "hits_allow": 32,
+      "hits_deny": 68,
+      "flaky": 0,
+      "escapes": 0,
+      "p_ub99": 0.045007
+    },
+    "chains": {
+      "stage": "chains",
+      "samples": 200,
+      "duration": "26.18ms",
+      "tps": 7640.0,
+      "p50_ms": 0.99,
+      "p99_ms": 12.88,
+      "hits_allow": 238,
+      "hits_deny": 117,
+      "flaky": 0,
+      "escapes": 249,
+      "p_ub99": 1.0
+    }
+  },
+  "coverage_matrix": {
+    "authz": {
+      "family": "authz",
+      "hits": 700,
+      "ratio": 0.7778
+    },
+    "shield.prod": {
+      "family": "shield.prod",
+      "hits": 31,
+      "ratio": 0.0344
+    },
+    "shield.cmd": {
+      "family": "shield.cmd",
+      "hits": 6,
+      "ratio": 0.0067
+    },
+    "shield.container": {
+      "family": "shield.container",
+      "hits": 97,
+      "ratio": 0.1078
+    },
+    "shellguard": {
+      "family": "shellguard",
+      "hits": 0,
+      "ratio": 0
+    },
+    "ai.llm": {
+      "family": "ai.llm",
+      "hits": 5,
+      "ratio": 0.0056
+    },
+    "ai.tool": {
+      "family": "ai.tool",
+      "hits": 0,
+      "ratio": 0
+    },
+    "http": {
+      "family": "http",
+      "hits": 0,
+      "ratio": 0
+    },
+    "docker": {
+      "family": "docker",
+      "hits": 97,
+      "ratio": 0.1078
+    },
+    "ssh": {
+      "family": "ssh",
+      "hits": 37,
+      "ratio": 0.0411
+    },
+    "db": {
+      "family": "db",
+      "hits": 93,
+      "ratio": 0.1033
+    },
+    "k8s": {
+      "family": "k8s",
+      "hits": 4,
+      "ratio": 0.0044
+    },
+    "chain": {
+      "family": "chain",
+      "hits": 0,
+      "ratio": 0
+    }
+  },
+  "dead_rules": [
+    "ai.tool",
+    "chain",
+    "http",
+    "shellguard"
+  ],
+  "flaky_records": [],
+  "escapes": [
+    {
+      "seed": 8312374598293675888,
+      "sample_idx": 0,
+      "stage": "chains",
+      "chain_id": "S01-step1",
+      "input_json": "{\"action\":\"GET\",\"key_id\":\"k-open\",\"resource\":\"http://169.254.169.254/latest/meta-data/iam/\",\"stage\":\"http\"}",
+      "expected_decision": "deny",
+      "expected_rule_family": "shield.prod.",
+      "actual_decision": "allow",
+      "actual_rule_id": "http.allow",
+      "repro_curl": "curl -s -X POST 'http://127.0.0.1:18089/v1/decide' -H 'Content-Type: application/json' -H 'Authorization: Bearer mc-test-admin-token' -d '{\"action\":\"GET\",\"key_id\":\"k-open\",\"resource\":\"http://169.254.169.254/latest/meta-data/iam/\",\"stage\":\"http\"}'"
+    },
+    {
+      "seed": 1656443435225984922,
+      "sample_idx": 8,
+      "stage": "chains",
+      "chain_id": "S09-step1",
+      "input_json": "{\"args\":{\"manifest\":\"capabilities:\\n  add: [SYS_ADMIN]\",\"namespace\":\"staging\",\"resource\":\"pod\",\"verb\":\"apply\"},\"key_id\":\"k-k8s\",\"stage\":\"k8s\"}",
+      "expected_decision": "deny",
+      "expected_rule_family": "k8s.",
+      "actual_decision": "allow",
+      "actual_rule_id": "config.bypass_unknown_keys",
+      "repro_curl": "curl -s -X POST 'http://127.0.0.1:18089/v1/decide' -H 'Content-Type: application/json' -H 'Authorization: Bearer mc-test-admin-token' -d '{\"args\":{\"manifest\":\"capabilities:\\n  add: [SYS_ADMIN]\",\"namespace\":\"staging\",\"resource\":\"pod\",\"verb\":\"apply\"},\"key_id\":\"k-k8s\",\"stage\":\"k8s\"}'"
+    }
+  ]
+}

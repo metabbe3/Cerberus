@@ -12,6 +12,7 @@ build:
 	CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION)" -o bin/cerberus-ssh ./cmd/cerberus-ssh
 	CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION)" -o bin/cerberus-bundle ./cmd/cerberus-bundle
 	CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION)" -o bin/cerberus-redteam ./cmd/cerberus-redteam
+	CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION)" -o bin/cerberus-montecarlo ./cmd/cerberus-montecarlo
 
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
