@@ -774,20 +774,27 @@ func TestDailyToolCallsCount_OnlyAllowsCounted(t *testing.T) {
 	// Emit for another key
 	l.Emit(Event{Stage: "tool", KeyID: "k-other", Decision: "allow", RuleID: "ai.tool.allow"})
 
-	// Give flush worker time to insert
-	time.Sleep(50 * time.Millisecond)
-
-	countTarget, err := l.DailyToolCallsCount(ctx, "k-target", time.Now().UTC())
-	if err != nil {
-		t.Fatalf("DailyToolCallsCount target: %v", err)
+	// Poll until counts are visible (flush worker async; Linux CI can be slow).
+	// Deterministic deadline instead of fixed sleep: poll up to 5s for each expectation.
+	deadline := time.Now().Add(5 * time.Second)
+	var countTarget, countOther int64 = -1, -1
+	for time.Now().Before(deadline) {
+		var err error
+		countTarget, err = l.DailyToolCallsCount(ctx, "k-target", time.Now().UTC())
+		if err != nil {
+			t.Fatalf("DailyToolCallsCount target: %v", err)
+		}
+		countOther, err = l.DailyToolCallsCount(ctx, "k-other", time.Now().UTC())
+		if err != nil {
+			t.Fatalf("DailyToolCallsCount other: %v", err)
+		}
+		if countTarget == 2 && countOther == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	if countTarget != 2 {
 		t.Fatalf("expected 2 allow events for k-target, got %d", countTarget)
-	}
-
-	countOther, err := l.DailyToolCallsCount(ctx, "k-other", time.Now().UTC())
-	if err != nil {
-		t.Fatalf("DailyToolCallsCount other: %v", err)
 	}
 	if countOther != 1 {
 		t.Fatalf("expected 1 allow event for k-other, got %d", countOther)
