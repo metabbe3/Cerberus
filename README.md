@@ -11,7 +11,7 @@
 - 🚀 [docs/QUICKSTART.md](docs/QUICKSTART.md) — Panduan instalasi cepat (< 5 menit), integrasi runtime agent (Claude Code, Cursor, Python), & FAQ.
 - ⚙️ [docs/SETUP.md](docs/SETUP.md) — Arsitektur detail, referensi variabel lingkungan (12-factor), dan flag CLI.
 - 🔒 [docs/CHANGELOG-AUDIT.md](docs/CHANGELOG-AUDIT.md) — Ledger audit append-only: semua temuan & fix dengan commit + bukti.
-- 🎲 [docs/MONTE-CARLO.md](docs/MONTE-CARLO.md) — Catalog skenario attack monte carlo (yang diuji & yang tidak).
+- 🎲 [docs/MONTE-CARLO.md](docs/qa/MONTE-CARLO.md) — Catalog skenario attack monte carlo (yang diuji & yang tidak).
 
 ---
 
