@@ -783,8 +783,79 @@ func TestEngine_MetricStage_Dynamic(t *testing.T) {
 	if got := metricStage(snap, "db"); got != "db" {
 		t.Fatalf("expected 'db', got %s", got)
 	}
+	if got := metricStage(snap, "k8s"); got != "k8s" {
+		t.Fatalf("expected 'k8s', got %s", got)
+	}
 	if got := metricStage(snap, "unknown-random-stage"); got != "other" {
 		t.Fatalf("expected 'other', got %s", got)
+	}
+}
+
+func TestDecide_StageDB_DestructiveDeny(t *testing.T) {
+	e := newTestEngine(t, &recSink{}, Options{})
+	d := e.Decide(context.Background(), Input{
+		Stage:    "db",
+		KeyID:    "k-open",
+		ToolCall: "sql_exec",
+		Args: map[string]any{
+			"dialect":  "postgres",
+			"sql":      "DROP TABLE accounts;",
+			"database": "customers-prod",
+		},
+	})
+	if d.Decision != "deny" || d.RuleID != "db.destructive_statement" {
+		t.Fatalf("decision = %s/%s, want deny/db.destructive_statement", d.Decision, d.RuleID)
+	}
+}
+
+func TestDecide_StageDB_SelectAllow(t *testing.T) {
+	e := newTestEngine(t, &recSink{}, Options{})
+	d := e.Decide(context.Background(), Input{
+		Stage:    "db",
+		KeyID:    "k-open",
+		ToolCall: "sql_exec",
+		Args: map[string]any{
+			"dialect":  "postgres",
+			"sql":      "SELECT id, name FROM items LIMIT 10;",
+			"database": "customers-prod",
+		},
+	})
+	if d.Decision != "allow" || d.RuleID != "db.allow" {
+		t.Fatalf("decision = %s/%s, want allow/db.allow", d.Decision, d.RuleID)
+	}
+}
+
+func TestDecide_StageK8s_ExecDeny(t *testing.T) {
+	e := newTestEngine(t, &recSink{}, Options{})
+	d := e.Decide(context.Background(), Input{
+		Stage:    "k8s",
+		KeyID:    "k-open",
+		ToolCall: "kubectl",
+		Args: map[string]any{
+			"verb":      "exec",
+			"resource":  "pods",
+			"namespace": "prod",
+		},
+	})
+	if d.Decision != "deny" || d.RuleID != "k8s.exec_into_pod" {
+		t.Fatalf("decision = %s/%s, want deny/k8s.exec_into_pod", d.Decision, d.RuleID)
+	}
+}
+
+func TestDecide_StageK8s_GetAllow(t *testing.T) {
+	e := newTestEngine(t, &recSink{}, Options{})
+	d := e.Decide(context.Background(), Input{
+		Stage:    "k8s",
+		KeyID:    "k-open",
+		ToolCall: "kubectl",
+		Args: map[string]any{
+			"verb":      "get",
+			"resource":  "pods",
+			"namespace": "staging",
+		},
+	})
+	if d.Decision != "allow" || d.RuleID != "k8s.allow" {
+		t.Fatalf("decision = %s/%s, want allow/k8s.allow", d.Decision, d.RuleID)
 	}
 }
 

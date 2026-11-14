@@ -172,6 +172,7 @@ func extractStages(modules map[string]*ast.Module, data map[string]any) map[stri
 		"docker": true,
 		"ssh":    true,
 		"db":     true,
+		"k8s":    true,
 	}
 	for _, m := range modules {
 		if m.Package != nil && len(m.Package.Path) >= 3 {
