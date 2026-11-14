@@ -25,28 +25,37 @@ prod_ip(ip) if {
 	net.cidr_contains(cidr, candidate)
 }
 
+# normalize(s): NFKC unicode, strip zero-width (\u200b\u200c\u200d\ufeff), collapse whitespace, lower.
+normalize(s) := out if {
+	is_string(s)
+	s1 := regex.replace(s, "[\u200b\u200c\u200d\ufeff]", "")
+	s2 := trim_space(regex.replace(s1, `\s+`, " "))
+	out := lower(s2)
+} else := s
+
 # touches_prod(text): true if some host_keyword or db_keyword (lower contains) is in text
 touches_prod(text) if {
 	is_string(text)
-	lower_text := lower(text)
+	norm_text := normalize(text)
 	some kw in data.prod_shield.host_keywords
-	contains(lower_text, lower(kw))
+	contains(norm_text, normalize(kw))
 }
 
 touches_prod(text) if {
 	is_string(text)
-	lower_text := lower(text)
+	norm_text := normalize(text)
 	some kw in data.prod_shield.db_keywords
-	contains(lower_text, lower(kw))
+	contains(norm_text, normalize(kw))
 }
 
 # dangerous_cmd(cmd): set of pattern ids that match regex.match
 dangerous_cmd(cmd) := ids if {
 	is_string(cmd)
+	norm_cmd := normalize(cmd)
 	ids := {p.id |
 		some p in data.prod_shield.dangerous_cmd_patterns
 		object.get(p, "enabled", true) == true
-		regex.match(p.regex, cmd)
+		regex.match(p.regex, norm_cmd)
 	}
 }
 
@@ -72,9 +81,9 @@ is_container_delete_call(call) if {
 # touches_protected_container(text): true if text names a protected container or touches prod
 touches_protected_container(text) if {
 	is_string(text)
-	lower_text := lower(text)
+	norm_text := normalize(text)
 	some c in data.prod_shield.protected_containers
-	contains(lower_text, lower(c))
+	contains(norm_text, normalize(c))
 }
 
 touches_protected_container(text) if {

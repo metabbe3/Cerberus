@@ -13,11 +13,15 @@ package shellguard
 import (
 	"bytes"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 
 	"mvdan.cc/sh/v3/syntax"
 )
+
+// sensitivePathRe matches absolute paths to sensitive system files and directories.
+var sensitivePathRe = regexp.MustCompile(`^/(etc|root|home/.*\.ssh|var/spool/cron|etc/cron|proc|sys)`)
 
 // ExtractedCommand is one simple command that passed validation.
 type ExtractedCommand struct {
@@ -91,6 +95,37 @@ func ExtractAndValidate(rawScript string) ([]ExtractedCommand, error) {
 			// the whole script.
 			blocked = fmt.Errorf("construct %s rejected as obfuscation vector (fail-closed)", nodeName(n))
 			return false
+		case *syntax.Stmt:
+			if len(node.Redirs) > 0 {
+				if node.Cmd == nil {
+					blocked = fmt.Errorf("empty command with redirection rejected (fail-closed)")
+					return false
+				}
+				if call, ok := node.Cmd.(*syntax.CallExpr); ok && len(call.Args) == 0 {
+					blocked = fmt.Errorf("empty command with redirection rejected (fail-closed)")
+					return false
+				}
+			}
+		case *syntax.Redirect:
+			if err := validateRedirect(node); err != nil {
+				blocked = err
+				return false
+			}
+			if node.Hdoc != nil {
+				hdocBody := literalString(node.Hdoc)
+				if sensitivePathRe.MatchString(hdocBody) {
+					blocked = fmt.Errorf("heredoc body references sensitive path (fail-closed)")
+					return false
+				}
+				if strings.TrimSpace(hdocBody) != "" {
+					hcmds, err := ExtractAndValidate(hdocBody)
+					if err != nil {
+						blocked = fmt.Errorf("heredoc body command invalid (fail-closed): %w", err)
+						return false
+					}
+					cmds = append(cmds, hcmds...)
+				}
+			}
 		case *syntax.CallExpr:
 			cmd, err := validateCall(node)
 			if err != nil {
@@ -149,6 +184,26 @@ func validateCall(call *syntax.CallExpr) (*ExtractedCommand, error) {
 		args = append(args, s)
 	}
 	return &ExtractedCommand{Binary: printed, Args: args}, nil
+}
+
+// validateRedirect checks a redirection operator and target.
+// It rejects sensitive target paths (e.g. /etc, /root, /home/*/.ssh) and file descriptor duplication (&).
+func validateRedirect(r *syntax.Redirect) error {
+	opStr := r.Op.String()
+	if strings.Contains(opStr, "&") {
+		return fmt.Errorf("redirection with fd duplication %q rejected (fail-closed)", opStr)
+	}
+	if r.Word != nil {
+		target := pureLiteral(r.Word)
+		targetLit := literalString(r.Word)
+		if strings.HasPrefix(target, "&") || strings.HasPrefix(targetLit, "&") {
+			return fmt.Errorf("redirection with fd duplication %q rejected (fail-closed)", targetLit)
+		}
+		if sensitivePathRe.MatchString(target) || sensitivePathRe.MatchString(targetLit) {
+			return fmt.Errorf("redirection to sensitive path rejected (fail-closed)")
+		}
+	}
+	return nil
 }
 
 // literalString renders w exactly as the shell sees it, keeping glob

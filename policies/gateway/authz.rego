@@ -15,7 +15,13 @@ agent := data.agents[input.key_id]
 
 team := data.teams[agent.team_id]
 
-# Tool matching: exact == OR glob.match(pattern, [], tool) ONLY if pattern contains "*".
+# normalize(s): strip zero-width chars (\u200b\u200c\u200d\ufeff), collapse whitespace, lower.
+normalize(s) := out if {
+	is_string(s)
+	s1 := regex.replace(s, "[\u200b\u200c\u200d\ufeff]", "")
+	s2 := trim_space(regex.replace(s1, `\s+`, " "))
+	out := lower(s2)
+} else := s
 call_matches_pattern(pattern, name) if {
 	contains(pattern, "*")
 	glob.match(lower(pattern), [], lower(name))
@@ -25,7 +31,6 @@ call_matches_pattern(pattern, name) if {
 	not contains(pattern, "*")
 	lower(name) == lower(pattern)
 }
-
 # Host matching: exact match OR wildcard suffix (*.domain) without userinfo and host != suffix.
 host_matches("*", _) if true
 
@@ -58,14 +63,13 @@ pattern_matches(pattern, target) if {
 pattern_matches(pattern, target) if {
 	endswith(pattern, "*")
 	prefix := trim_suffix(pattern, "*")
-	startswith(lower(target), lower(prefix))
+	startswith(lower(normalize(target)), lower(normalize(prefix)))
 }
 
 pattern_matches(pattern, target) if {
 	not contains(pattern, "*")
-	lower(pattern) == lower(target)
+	lower(normalize(target)) == lower(normalize(pattern))
 }
-
 # Prod access flag for the resolved agent
 agent_has_prod_access if agent.prod_access == true
 

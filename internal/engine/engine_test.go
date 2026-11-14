@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -833,4 +834,90 @@ func TestEngine_MaskPrompt_AllocsReduction(t *testing.T) {
 	if !ok || len(msgs) != 2 {
 		t.Fatalf("expected 2 messages, got %v", msgs)
 	}
+}
+
+// H5: Engine e2e tests for shellguard wiring (3 cases)
+func TestDecide_ShellGuardE2E(t *testing.T) {
+	// Case 1: unparseable / obfuscation vector in tool args cmd -> deny shellguard.unparseable
+	t.Run("obfuscation_vector_denied", func(t *testing.T) {
+		e := newTestEngine(t, &recSink{}, Options{})
+		d := e.Decide(context.Background(), Input{
+			Stage:    "tool",
+			KeyID:    "k-open",
+			ToolCall: "shell_exec",
+			Args:     map[string]any{"cmd": "echo $(id)"},
+		})
+		if d.Decision != "deny" || d.RuleID != "shellguard.unparseable" {
+			t.Fatalf("case 1 decision = %s/%s, want deny/shellguard.unparseable", d.Decision, d.RuleID)
+		}
+	})
+
+	// Case 2: sensitive redirect target in tool args cmd -> deny shellguard.unparseable
+	t.Run("sensitive_redirect_denied", func(t *testing.T) {
+		e := newTestEngine(t, &recSink{}, Options{})
+		d := e.Decide(context.Background(), Input{
+			Stage:    "tool",
+			KeyID:    "k-open",
+			ToolCall: "shell_exec",
+			Args:     map[string]any{"cmd": "echo x > /etc/shadow"},
+		})
+		if d.Decision != "deny" || d.RuleID != "shellguard.unparseable" {
+			t.Fatalf("case 2 decision = %s/%s, want deny/shellguard.unparseable", d.Decision, d.RuleID)
+		}
+	})
+
+	// Case 3: command allowlist validation -> unknown command denied shellguard.unparseable, allowed command passes
+	t.Run("command_allowlist_enforced", func(t *testing.T) {
+		var data map[string]any
+		raw, err := os.ReadFile(testData)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(raw, &data); err != nil {
+			t.Fatal(err)
+		}
+		agents := data["agents"].(map[string]any)
+		agents["k-restricted-shell"] = map[string]any{
+			"name":             "restricted-agent",
+			"allowed_commands": []string{"ls", "grep"},
+		}
+		dj, _ := json.Marshal(data)
+		tmpData := filepath.Join(t.TempDir(), "data.json")
+		if err := os.WriteFile(tmpData, raw, 0600); err != nil { //nolint:gosec // test fixture path/taint only
+			t.Fatal(err)
+		}
+		store, err := policy.NewStore(context.Background(), policyDir, tmpData)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.ReplaceData(context.Background(), dj); err != nil {
+			t.Fatal(err)
+		}
+		e, err := New(store, &recSink{}, Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Unknown command "curl" -> deny shellguard.unparseable
+		d1 := e.Decide(context.Background(), Input{
+			Stage:    "tool",
+			KeyID:    "k-restricted-shell",
+			ToolCall: "shell_exec",
+			Args:     map[string]any{"cmd": "curl http://example.com"},
+		})
+		if d1.Decision != "deny" || d1.RuleID != "shellguard.unparseable" {
+			t.Fatalf("unknown command decision = %s/%s, want deny/shellguard.unparseable", d1.Decision, d1.RuleID)
+		}
+
+		// Allowed command "ls -la" -> allow
+		d2 := e.Decide(context.Background(), Input{
+			Stage:    "tool",
+			KeyID:    "k-restricted-shell",
+			ToolCall: "shell_exec",
+			Args:     map[string]any{"cmd": "ls -la /tmp"},
+		})
+		if d2.Decision != "allow" {
+			t.Fatalf("allowed command decision = %s/%s, want allow", d2.Decision, d2.RuleID)
+		}
+	})
 }

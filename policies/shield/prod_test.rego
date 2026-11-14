@@ -70,9 +70,13 @@ test_dangerous_cmd_grep_word_wildcard if {
 	"grep_wildcard_dump" in ids
 }
 
-test_dangerous_cmd_rm_rf if {
-	ids := prod.dangerous_cmd("rm -rf /") with data.prod_shield as fixture_shield
+test_dangerous_cmd_zero_width_normalization if {
+	ids := prod.dangerous_cmd("r\u200bm -rf /") with data.prod_shield as fixture_shield
 	"rm_rf" in ids
+}
+
+test_normalize_whitespace_and_zero_width if {
+	prod.normalize("  r\u200bm   -rf  /  ") == "rm -rf /"
 }
 
 test_dangerous_cmd_curl_pipe_sh if {

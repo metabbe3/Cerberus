@@ -25,6 +25,7 @@ import (
 	"github.com/metabbe3/cerberus/internal/masking"
 	"github.com/metabbe3/cerberus/internal/policy"
 	"github.com/metabbe3/cerberus/internal/util"
+	"github.com/metabbe3/cerberus/pkg/shellguard"
 	"github.com/open-policy-agent/opa/v1/ast"
 	"github.com/open-policy-agent/opa/v1/rego"
 	"github.com/open-policy-agent/opa/v1/topdown"
@@ -219,6 +220,11 @@ func (e *Engine) Explain(ctx context.Context, in Input) Decision {
 	start := time.Now()
 	snap := e.store.Current()
 
+	if d := e.checkShellGuard(snap, in); d != nil {
+		d.LatencyUS = time.Since(start).Microseconds()
+		return *d
+	}
+
 	evalCtx, cancel := context.WithTimeout(ctx, e.opts.EvalTimeout)
 	defer cancel()
 
@@ -351,6 +357,10 @@ func (e *Engine) EvalSnapshot(ctx context.Context, snap *policy.Snapshot, in Inp
 // eval runs the prepared query under the eval timeout, maps the Rego decision
 // object to a Decision, and applies the key's masking rules to args.
 func (e *Engine) eval(ctx context.Context, snap *policy.Snapshot, in Input) Decision {
+	if d := e.checkShellGuard(snap, in); d != nil {
+		return *d
+	}
+
 	evalCtx, cancel := context.WithTimeout(ctx, e.opts.EvalTimeout)
 	defer cancel()
 
@@ -498,4 +508,106 @@ func cacheKey(epoch uint64, in Input) (string, bool) {
 // str extracts a string field from the Rego decision object.
 func str(v any) string {
 	return util.Str(v)
+}
+
+// checkShellGuard validates tool commands using shellguard AST extraction.
+// If stage=="tool" and args contains "cmd", "command", or "script", it parses and extracts simple commands.
+// Any parse error, forbidden AST construct, or unknown command produces a fail-closed deny with "shellguard.unparseable".
+func (e *Engine) checkShellGuard(snap *policy.Snapshot, in Input) *Decision {
+	if in.Stage != "tool" || in.Args == nil {
+		return nil
+	}
+	var cmdStr string
+	for _, k := range []string{"cmd", "command", "script"} {
+		if v, ok := in.Args[k]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				cmdStr = s
+				break
+			}
+		}
+	}
+	if cmdStr == "" {
+		return nil
+	}
+
+	cmds, err := shellguard.ExtractAndValidate(cmdStr)
+	if err != nil {
+		return &Decision{
+			Decision: "deny",
+			RuleID:   "shellguard.unparseable",
+			Reason:   fmt.Sprintf("shellguard validation failed: %v", err),
+			Epoch:    snap.Epoch,
+		}
+	}
+
+	// Validate call names against allowlist if configured
+	allowlist, hasAllowlist := getCommandAllowlist(snap.Data, in.KeyID, in.ToolCall)
+	if hasAllowlist {
+		for _, c := range cmds {
+			bin := c.Binary
+			base := filepath.Base(bin)
+			matched := false
+			for _, allowed := range allowlist {
+				if allowed == "*" || bin == allowed || base == allowed {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return &Decision{
+					Decision: "deny",
+					RuleID:   "shellguard.unparseable",
+					Reason:   fmt.Sprintf("command %q not in allowlist (fail-closed)", bin),
+					Epoch:    snap.Epoch,
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func getCommandAllowlist(data map[string]any, keyID, toolCall string) ([]string, bool) {
+	if data == nil || keyID == "" {
+		return nil, false
+	}
+	agents, ok := data["agents"].(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	ag, ok := agents[keyID].(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	if raw, ok := ag["allowed_commands"]; ok && raw != nil {
+		return toStringSlice(raw), true
+	}
+	if raw, ok := ag["allowed_tool_calls"]; ok && raw != nil {
+		list := toStringSlice(raw)
+		if toolCall != "" {
+			for _, item := range list {
+				if item == toolCall || (strings.HasSuffix(item, "*") && strings.HasPrefix(toolCall, strings.TrimSuffix(item, "*"))) {
+					return nil, false
+				}
+			}
+		}
+		return list, true
+	}
+	return nil, false
+}
+
+func toStringSlice(raw any) []string {
+	switch v := raw.(type) {
+	case []string:
+		return v
+	case []any:
+		var out []string
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
 }

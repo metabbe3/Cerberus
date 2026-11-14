@@ -216,3 +216,36 @@ func TestConcurrentExtractAndValidate(t *testing.T) {
 		<-done
 	}
 }
+
+// H5: unit tests for redirect shadow, authorized_keys, heredoc cron, echo x > /etc/shadow, empty call with redirect, fd dup
+
+func TestRedirectShadowRejected(t *testing.T) {
+	mustReject(t, "cat foo > /etc/shadow", "sensitive path")
+}
+
+func TestRedirectAuthorizedKeysRejected(t *testing.T) {
+	mustReject(t, "echo 'ssh-rsa AAAAB3...' >> /home/deploy/.ssh/authorized_keys", "sensitive path")
+	mustReject(t, "cat key >> /root/.ssh/authorized_keys", "sensitive path")
+}
+
+func TestHeredocCronRejected(t *testing.T) {
+	cronScript := "cat << 'EOF' > /tmp/cron\n* * * * * root /tmp/evil.sh\nEOF"
+	mustReject(t, cronScript, "fail-closed")
+
+	directCron := "cat << 'EOF'\n/var/spool/cron/root\nEOF"
+	mustReject(t, directCron, "fail-closed")
+}
+
+func TestEchoRedirectShadowRejected(t *testing.T) {
+	mustReject(t, "echo x > /etc/shadow", "sensitive path")
+}
+
+func TestEmptyCommandWithRedirectRejected(t *testing.T) {
+	mustReject(t, "> /etc/shadow", "empty command with redirection")
+	mustReject(t, "> /tmp/safe", "empty command with redirection")
+}
+
+func TestFdDuplicationRedirectRejected(t *testing.T) {
+	mustReject(t, "ls >&2", "fd duplication")
+	mustReject(t, "cat 2>&1", "fd duplication")
+}
