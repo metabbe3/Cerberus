@@ -129,10 +129,38 @@ export function UpstreamCard() {
           <Input
             id="upstream-endpoint"
             placeholder="http://litellm.company.internal:4000/v1"
+            list="cerberus-upstream-presets"
             value={endpoint}
             onChange={(e) => setEndpoint(e.target.value)}
             spellCheck={false}
           />
+          <datalist id="cerberus-upstream-presets">
+            <option value="https://api.z.ai/api/anthropic">Z.ai (Anthropic-compatible)</option>
+            <option value="https://api.anthropic.com">Anthropic resmi</option>
+            <option value="https://api.openai.com/v1">OpenAI-compatible</option>
+            <option value="http://litellm.company.internal:4000/v1">LiteLLM internal</option>
+          </datalist>
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            <span className="text-xs text-muted-foreground">Cepat:</span>
+            {[
+              ["Z.ai", "https://api.z.ai/api/anthropic"],
+              ["Anthropic", "https://api.anthropic.com"],
+              ["OpenAI-compat", "https://api.openai.com/v1"],
+            ].map(([label, url]) => (
+              <button
+                key={url}
+                type="button"
+                onClick={() => setEndpoint(url)}
+                className={`rounded-full border px-2 py-0.5 text-xs transition-colors ${
+                  endpoint === url
+                    ? "border-primary bg-primary/10 text-foreground"
+                    : "bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
         <details className="group rounded-md border border-border/60 bg-muted/30 px-3 py-2">
           <summary className="cursor-pointer select-none text-xs font-medium text-muted-foreground hover:text-foreground">

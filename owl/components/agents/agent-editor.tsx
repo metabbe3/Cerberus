@@ -48,6 +48,18 @@ const KNOWN_TOOLS = [
   "db_query", "docker_exec", "docker rm", "ssh_run", "k8s_apply",
   "execute_shell", "send_message", "schedule_task", "analyze_logs",
 ];
+
+// Preset masking umum (klik = tambah rule redact) dan argumen tool yang sering dibatasi.
+const MASKING_PRESETS: { label: string; pattern: string }[] = [
+  { label: "API key (sk-…)", pattern: "sk-[A-Za-z0-9_-]{8,}" },
+  { label: "Bearer token", pattern: "Bearer\\s+[A-Za-z0-9._-]{8,}" },
+  { label: "JWT", pattern: "eyJ[A-Za-z0-9_-]{10,}" },
+  { label: "Email", pattern: "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}" },
+  { label: "Private key", pattern: "-----BEGIN [A-Z ]*PRIVATE KEY-----" },
+  { label: "IP address", pattern: "\\b\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\b" },
+];
+const COMMON_ARGS = ["path", "host", "command", "cmd", "url", "domain", "user", "image", "container", "sql", "query"];
+
 const KNOWN_MODELS = [
   "glm-*", "glm-5.2", "glm-5.2-flash",
   "gemini-*", "gpt-4", "m1", "claude-*", "gpt-*",
@@ -529,18 +541,30 @@ function ConstraintsEditor({
           <Input
             className="font-mono w-52"
             placeholder="tool_call"
+            list="cerberus-known-tools"
             value={newTool}
             onChange={(e) => setNewTool(e.target.value)}
           />
+          <datalist id="cerberus-known-tools">
+            {KNOWN_TOOLS.map((t) => (
+              <option key={t} value={t} />
+            ))}
+          </datalist>
         </label>
         <label className="space-y-1.5">
           <span className="text-sm font-medium">Argument</span>
           <Input
             className="font-mono w-52"
             placeholder="argument"
+            list="cerberus-common-args"
             value={newArg}
             onChange={(e) => setNewArg(e.target.value)}
           />
+          <datalist id="cerberus-common-args">
+            {COMMON_ARGS.map((a) => (
+              <option key={a} value={a} />
+            ))}
+          </datalist>
         </label>
         <Button variant="outline" size="sm" onClick={add} disabled={!newTool.trim() || !newArg.trim()}>
           <Plus />
@@ -681,6 +705,24 @@ function MaskingEditor({
         Regex rules applied to args/response before the decision leaves the engine
         (scope both = args + response).
       </p>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-xs text-muted-foreground">Preset cepat:</span>
+        {MASKING_PRESETS.map((p) => (
+          <button
+            key={p.pattern}
+            type="button"
+            title={p.pattern}
+            onClick={() => {
+              if (value.some((r) => r.pattern === p.pattern)) return;
+              onChange([...value, { pattern: p.pattern, transform: "redact" }]);
+            }}
+            className="inline-flex items-center gap-1 rounded-full border bg-muted/40 px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <Plus className="size-3" aria-hidden />
+            {p.label}
+          </button>
+        ))}
+      </div>
       {value.map((rule, i) => (
         <div key={i} className="flex items-center gap-2">
           <Input
