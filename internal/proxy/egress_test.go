@@ -2,6 +2,7 @@ package proxy_test
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,12 +10,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/metabbe3/cerberus/internal/audit"
+	"github.com/metabbe3/cerberus/internal/engine"
+	"github.com/metabbe3/cerberus/internal/policy"
 	"github.com/metabbe3/cerberus/internal/proxy"
 	"github.com/metabbe3/cerberus/internal/ratelimit"
 )
@@ -920,5 +926,311 @@ func TestEgressProxy_CONNECT_Watchdog(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if time.Since(startCancel) > 2*time.Second {
 		t.Fatal("handler did not return within 2s after client close")
+	}
+}
+
+func setupTestEngineWithTempData(t *testing.T) (*engine.Engine, *policy.Store) {
+	t.Helper()
+	repoRoot := findRepoRoot(t)
+	policyDir := filepath.Join(repoRoot, "policies")
+	dataFile := filepath.Join(repoRoot, "policies", "testdata", "data.json")
+	raw, err := os.ReadFile(dataFile)
+	if err != nil {
+		t.Fatalf("os.ReadFile: %v", err)
+	}
+	tmpData := filepath.Join(t.TempDir(), "data.json")
+	if err := os.WriteFile(tmpData, raw, 0600); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	ctx := context.Background()
+	store, err := policy.NewStore(ctx, policyDir, tmpData)
+	if err != nil {
+		t.Fatalf("policy.NewStore: %v", err)
+	}
+
+	auditDB := filepath.Join(t.TempDir(), "audit.db")
+	auditLog, err := audit.Open(ctx, auditDB, audit.Options{})
+	if err != nil {
+		t.Fatalf("audit.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = auditLog.Close() })
+
+	eng, err := engine.New(store, auditLog, engine.Options{
+		CacheSize:   1000,
+		EvalTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	return eng, store
+}
+
+func TestEgressProxy_RedirectDeniedOnSecondHop(t *testing.T) {
+	eng, store := setupTestEngineWithTempData(t)
+
+	repoRoot := findRepoRoot(t)
+	dataFile := filepath.Join(repoRoot, "policies", "testdata", "data.json")
+	raw, err := os.ReadFile(dataFile)
+	if err != nil {
+		t.Fatalf("read dataFile: %v", err)
+	}
+	var dataDoc map[string]any
+	if err := json.Unmarshal(raw, &dataDoc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	agents, ok := dataDoc["agents"].(map[string]any)
+	if !ok {
+		agents = make(map[string]any)
+		dataDoc["agents"] = agents
+	}
+	fixtureServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://evil-host.com/pwned", http.StatusFound)
+	}))
+	defer fixtureServer.Close()
+
+	fixtureURL, _ := url.Parse(fixtureServer.URL)
+	agents["k-redirect-test"] = map[string]any{
+		"allowed_hosts": []string{"127.0.0.1"},
+		"allowed_ports": []any{80, 443, fixtureURL.Port()},
+		"name":          "redirect-test-agent",
+	}
+	modData, err := json.Marshal(dataDoc)
+	if err != nil {
+		t.Fatalf("marshal modData: %v", err)
+	}
+	if _, err := store.ReplaceData(context.Background(), modData); err != nil {
+		t.Fatalf("ReplaceData: %v", err)
+	}
+
+	egress, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		DenyLocalIPs:  &[]bool{false}[0],
+		FallbackKeyID: "k-redirect-test",
+	})
+	if err != nil {
+		t.Fatalf("NewEgressProxy: %v", err)
+	}
+
+	proxyServer := httptest.NewServer(egress)
+	defer func() {
+		proxyServer.CloseClientConnections()
+		proxyServer.Close()
+	}()
+
+	proxyURL, _ := url.Parse(proxyServer.URL)
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+		},
+		Timeout: 5 * time.Second,
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, fixtureServer.URL+"/initial", nil)
+	req.Header.Set("X-Cerberus-Key", "k-redirect-test")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("expected 502 Bad Gateway on second hop, got %d", resp.StatusCode)
+	}
+
+	var errBody map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&errBody); err != nil {
+		t.Fatalf("decode errBody: %v", err)
+	}
+	if errBody["rule_id"] != "http.host_not_allowed" {
+		t.Fatalf("expected rule_id http.host_not_allowed, got %v", errBody["rule_id"])
+	}
+	if errBody["error"] != "egress redirect denied" {
+		t.Fatalf("expected error 'egress redirect denied', got %v", errBody["error"])
+	}
+}
+
+func TestEgressProxy_RedirectAllowed(t *testing.T) {
+	eng, store := setupTestEngineWithTempData(t)
+
+	repoRoot := findRepoRoot(t)
+	dataFile := filepath.Join(repoRoot, "policies", "testdata", "data.json")
+	raw, err := os.ReadFile(dataFile)
+	if err != nil {
+		t.Fatalf("read dataFile: %v", err)
+	}
+	var dataDoc map[string]any
+	if err := json.Unmarshal(raw, &dataDoc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	agents, ok := dataDoc["agents"].(map[string]any)
+	if !ok {
+		agents = make(map[string]any)
+		dataDoc["agents"] = agents
+	}
+	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("redirect target response"))
+	}))
+	defer targetServer.Close()
+
+	initialServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, targetServer.URL+"/landing", http.StatusFound)
+	}))
+	defer initialServer.Close()
+
+	initURL, _ := url.Parse(initialServer.URL)
+	targetURL, _ := url.Parse(targetServer.URL)
+
+	agents["k-redirect-test"] = map[string]any{
+		"allowed_hosts": []string{"127.0.0.1"},
+		"allowed_ports": []any{80, 443, initURL.Port(), targetURL.Port()},
+		"name":          "redirect-test-agent",
+	}
+	modData, err := json.Marshal(dataDoc)
+	if err != nil {
+		t.Fatalf("marshal modData: %v", err)
+	}
+	if _, err := store.ReplaceData(context.Background(), modData); err != nil {
+		t.Fatalf("ReplaceData: %v", err)
+	}
+
+	egress, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		DenyLocalIPs:  &[]bool{false}[0],
+		FallbackKeyID: "k-redirect-test",
+	})
+	if err != nil {
+		t.Fatalf("NewEgressProxy: %v", err)
+	}
+
+	proxyServer := httptest.NewServer(egress)
+	defer func() {
+		proxyServer.CloseClientConnections()
+		proxyServer.Close()
+	}()
+
+	proxyURL, _ := url.Parse(proxyServer.URL)
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+		},
+		Timeout: 5 * time.Second,
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, initialServer.URL+"/start", nil)
+	req.Header.Set("X-Cerberus-Key", "k-redirect-test")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK after following redirect, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "redirect target response" {
+		t.Fatalf("unexpected body: %q", string(body))
+	}
+}
+
+func TestEgressProxy_RedirectMaxHopsExceeded(t *testing.T) {
+	eng := setupTestEngine(t)
+
+	var loopServer *httptest.Server
+	loopServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, loopServer.URL+"/loop", http.StatusFound)
+	}))
+	defer loopServer.Close()
+
+	egress, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		DenyLocalIPs:  &[]bool{false}[0],
+		FallbackKeyID: "k-open",
+	})
+	if err != nil {
+		t.Fatalf("NewEgressProxy: %v", err)
+	}
+
+	proxyServer := httptest.NewServer(egress)
+	defer func() {
+		proxyServer.CloseClientConnections()
+		proxyServer.Close()
+	}()
+
+	proxyURL, _ := url.Parse(proxyServer.URL)
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+		},
+		Timeout: 5 * time.Second,
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, loopServer.URL+"/loop", nil)
+	req.Header.Set("X-Cerberus-Key", "k-open")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("expected 502 Bad Gateway on redirect loop, got %d", resp.StatusCode)
+	}
+	var errBody map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&errBody); err != nil {
+		t.Fatalf("decode errBody: %v", err)
+	}
+	if errBody["rule_id"] != "proxy.egress.too_many_redirects" {
+		t.Fatalf("expected rule_id proxy.egress.too_many_redirects, got %v", errBody["rule_id"])
+	}
+}
+
+func TestEgressProxy_RedirectProdIPBlocked(t *testing.T) {
+	eng := setupTestEngine(t)
+
+	fixtureServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 10.0.0.5 is in prod CIDR 10.0.0.0/8
+		http.Redirect(w, r, "http://10.0.0.5/admin", http.StatusFound)
+	}))
+	defer fixtureServer.Close()
+
+	egress, err := proxy.NewEgressProxy(eng, proxy.EgressConfig{
+		DenyLocalIPs:  &[]bool{false}[0],
+		FallbackKeyID: "k-open",
+	})
+	if err != nil {
+		t.Fatalf("NewEgressProxy: %v", err)
+	}
+
+	proxyServer := httptest.NewServer(egress)
+	defer func() {
+		proxyServer.CloseClientConnections()
+		proxyServer.Close()
+	}()
+
+	proxyURL, _ := url.Parse(proxyServer.URL)
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+		},
+		Timeout: 5 * time.Second,
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, fixtureServer.URL+"/initial", nil)
+	req.Header.Set("X-Cerberus-Key", "k-open")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("expected 502 Bad Gateway on prod IP redirect hop, got %d", resp.StatusCode)
+	}
+	var errBody map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&errBody); err != nil {
+		t.Fatalf("decode errBody: %v", err)
+	}
+	if errBody["rule_id"] != "shield.prod.ip_blocked" {
+		t.Fatalf("expected rule_id shield.prod.ip_blocked, got %v", errBody["rule_id"])
 	}
 }

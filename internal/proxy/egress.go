@@ -1,12 +1,14 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"syscall"
@@ -420,34 +422,233 @@ func (p *EgressProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Forward plain HTTP
-	outReq, err := http.NewRequestWithContext(r.Context(), r.Method, destURL, r.Body) //nolint:gosec // G704 dial guarded by SecureDialer allowlist
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	// Buffer body if present for potential redirect replay
+	var bodyBytes []byte
+	if r.Body != nil {
+		bodyBytes, err = io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
-	copyHeaders(outReq.Header, r.Header)
-	// Strip hop-by-hop headers
-	outReq.Header.Del("Proxy-Authorization")
-	outReq.Header.Del("Proxy-Connection")
+	const maxRedirects = 5
 
-	resp, err := p.transport.RoundTrip(outReq)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"error":   "egress roundtrip failed",
-			"rule_id": "proxy.egress.bad_gateway",
-			"reason":  err.Error(),
-		})
-		return
+	client := &http.Client{
+		Transport: p.transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
-	defer func() { _ = resp.Body.Close() }()
 
-	copyHeaders(w.Header(), resp.Header)
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	currentURL := destURL
+	currentMethod := r.Method
+	currentBody := bodyBytes
+
+	currentHeaders := r.Header.Clone()
+	currentHeaders.Del("Proxy-Authorization")
+	currentHeaders.Del("Proxy-Connection")
+
+	for redirectCount := 0; redirectCount <= maxRedirects; redirectCount++ {
+		var bodyReader io.Reader
+		if currentBody != nil {
+			bodyReader = bytes.NewReader(currentBody)
+		}
+
+		outReq, err := http.NewRequestWithContext(r.Context(), currentMethod, currentURL, bodyReader)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		copyHeaders(outReq.Header, currentHeaders)
+
+		parsedCurURL, parseErr := url.Parse(currentURL)
+		if parseErr == nil && parsedCurURL.Host != "" {
+			outReq.Host = parsedCurURL.Host
+		}
+
+		resp, err := client.Do(outReq)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error":   "egress roundtrip failed",
+				"rule_id": "proxy.egress.bad_gateway",
+				"reason":  err.Error(),
+			})
+			return
+		}
+
+		// Check if redirect
+		isRedirect := (resp.StatusCode == http.StatusMovedPermanently ||
+			resp.StatusCode == http.StatusFound ||
+			resp.StatusCode == http.StatusSeeOther ||
+			resp.StatusCode == http.StatusTemporaryRedirect ||
+			resp.StatusCode == http.StatusPermanentRedirect)
+
+		loc := resp.Header.Get("Location")
+		if !isRedirect || loc == "" {
+			defer func() { _ = resp.Body.Close() }()
+			copyHeaders(w.Header(), resp.Header)
+			w.WriteHeader(resp.StatusCode)
+			_, _ = io.Copy(w, resp.Body)
+			return
+		}
+
+		// Response is a redirect: clean up body before proceeding
+		_ = resp.Body.Close()
+
+		if redirectCount == maxRedirects {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error":   "too many redirects",
+				"rule_id": "proxy.egress.too_many_redirects",
+				"reason":  "maximum redirect limit (5) exceeded",
+			})
+			return
+		}
+
+		locURL, err := url.Parse(loc)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error":   "invalid redirect location",
+				"rule_id": "proxy.egress.invalid_redirect",
+				"reason":  err.Error(),
+			})
+			return
+		}
+		nextURL := parsedCurURL.ResolveReference(locURL)
+
+		if nextURL.Scheme != "http" && nextURL.Scheme != "https" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error":   "unsupported redirect scheme",
+				"rule_id": "proxy.egress.unsupported_scheme",
+				"reason":  fmt.Sprintf("scheme %q is not supported", nextURL.Scheme),
+			})
+			return
+		}
+
+		// RFC 7231 / RFC 9110 method semantics
+		if resp.StatusCode == http.StatusSeeOther {
+			if currentMethod != http.MethodHead {
+				currentMethod = http.MethodGet
+			}
+			currentBody = nil
+		} else if (resp.StatusCode == http.StatusMovedPermanently || resp.StatusCode == http.StatusFound) && currentMethod == http.MethodPost {
+			currentMethod = http.MethodGet
+			currentBody = nil
+		}
+
+		// Strip Authorization header if redirecting across different hosts
+		if !strings.EqualFold(parsedCurURL.Host, nextURL.Host) {
+			currentHeaders.Del("Authorization")
+		}
+
+		// Evaluate redirect destination hop
+		nextHostOnly, nextPort, err := util.ExtractHost(nextURL.Host)
+		if err != nil || nextHostOnly == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error":   "invalid redirect host",
+				"rule_id": "proxy.egress.invalid_redirect_host",
+				"reason":  fmt.Sprintf("cannot extract host from redirect URL %q", nextURL.String()),
+			})
+			return
+		}
+		if nextPort == "443" && !strings.Contains(nextURL.Host, ":") {
+			if nextURL.Scheme == "http" {
+				nextPort = "80"
+			}
+		}
+
+		hopIn := engine.Input{
+			Stage:    "http",
+			KeyID:    keyID,
+			Action:   currentMethod,
+			Resource: nextURL.String(),
+			Args: map[string]any{
+				"method": currentMethod,
+				"host":   nextHostOnly,
+				"port":   nextPort,
+				"path":   nextURL.Path,
+			},
+		}
+		hopDec := p.engine.Decide(r.Context(), hopIn)
+		if !hopDec.Allowed() {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"decision": "deny",
+				"error":    "egress redirect denied",
+				"rule_id":  hopDec.RuleID,
+				"reason":   hopDec.Reason,
+			})
+			if p.cfg.Audit != nil {
+				p.cfg.Audit.Emit(audit.Event{
+					Time:     time.Now(),
+					Stage:    "http",
+					KeyID:    keyID,
+					Subject:  nextHostOnly,
+					Decision: "deny",
+					RuleID:   hopDec.RuleID,
+					Reason:   hopDec.Reason,
+				})
+			}
+			return
+		}
+
+		// Pre-check IP: if host is not a raw IP, resolve and check each IP against prod shield
+		if net.ParseIP(nextHostOnly) == nil && p.cfg.LookupIP != nil {
+			if ips, err := p.cfg.LookupIP(nextHostOnly); err == nil {
+				for _, ip := range ips {
+					ipIn := engine.Input{
+						Stage:    "http",
+						KeyID:    keyID,
+						Action:   currentMethod,
+						Resource: net.JoinHostPort(ip.String(), nextPort),
+						Args: map[string]any{
+							"method": currentMethod,
+							"host":   ip.String(),
+							"port":   nextPort,
+							"path":   nextURL.Path,
+						},
+					}
+					ipDec := p.engine.Decide(r.Context(), ipIn)
+					if strings.HasPrefix(ipDec.RuleID, "shield.prod.") {
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusBadGateway)
+						_ = json.NewEncoder(w).Encode(map[string]any{
+							"decision": "deny",
+							"error":    "egress redirect denied",
+							"rule_id":  ipDec.RuleID,
+							"reason":   ipDec.Reason,
+						})
+						if p.cfg.Audit != nil {
+							p.cfg.Audit.Emit(audit.Event{
+								Time:     time.Now(),
+								Stage:    "http",
+								KeyID:    keyID,
+								Subject:  ip.String(),
+								Decision: "deny",
+								RuleID:   ipDec.RuleID,
+								Reason:   ipDec.Reason,
+							})
+						}
+						return
+					}
+				}
+			}
+		}
+
+		currentURL = nextURL.String()
+	}
 }
 
 func (p *EgressProxy) writeForbidden(w http.ResponseWriter, dec engine.Decision) {

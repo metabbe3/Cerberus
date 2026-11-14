@@ -53,6 +53,14 @@ func TestRequireAdminAuth(t *testing.T) {
 		t.Fatalf("status with wrong token = %d, want 401", recWrong.Code)
 	}
 
+	// Query token -> 401 (?token= ignored)
+	recQuery := httptest.NewRecorder()
+	reqQuery := httptest.NewRequest("GET", "/test?token="+expectedVal, nil)
+	handlerWithToken.ServeHTTP(recQuery, reqQuery)
+	if recQuery.Code != http.StatusUnauthorized {
+		t.Fatalf("status with query token = %d, want 401", recQuery.Code)
+	}
+
 	// Correct token -> 200
 	recGood := httptest.NewRecorder()
 	reqGood := httptest.NewRequest("GET", "/test", nil)

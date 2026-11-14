@@ -15,17 +15,25 @@ agent := data.agents[input.key_id]
 
 team := data.teams[agent.team_id]
 
+# normalize(s): NFKC unicode, strip zero-width (\u200b\u200c\u200d\ufeff), collapse whitespace, lower.
+normalize(s) := out if {
+	is_string(s)
+	s1 := regex.replace(s, "[\u200b\u200c\u200d\ufeff]", "")
+	s2 := trim_space(regex.replace(s1, `\s+`, " "))
+	out := lower(s2)
+} else := s
+
 # Glob semantics: trailing "*" = case-insensitive prefix; otherwise
 # case-insensitive substring.
 call_matches_pattern(pattern, name) if {
 	endswith(pattern, "*")
 	prefix := trim_suffix(pattern, "*")
-	startswith(lower(name), lower(prefix))
+	startswith(normalize(name), normalize(prefix))
 }
 
 call_matches_pattern(pattern, name) if {
 	not endswith(pattern, "*")
-	contains(lower(name), lower(pattern))
+	contains(normalize(name), normalize(pattern))
 }
 
 # Common pattern matcher: glob with ":" separator, wildcard prefix/contains, or case-insensitive exact.
@@ -33,7 +41,7 @@ pattern_matches(pattern, target) if glob.match(pattern, [":"], target)
 
 pattern_matches(pattern, target) if call_matches_pattern(pattern, target)
 
-pattern_matches(pattern, target) if lower(pattern) == lower(target)
+pattern_matches(pattern, target) if normalize(pattern) == normalize(target)
 
 # Prod access flag for the resolved agent
 agent_has_prod_access if agent.prod_access == true

@@ -126,24 +126,47 @@ budget_spent_exceeded if {
 blocked_prompt if {
 	is_string(input.prompt)
 	some pattern in data.blocked_patterns
-	contains(lower(input.prompt), lower(pattern))
+	contains(authz.normalize(input.prompt), authz.normalize(pattern))
 }
 
-# Deep scan: injection payload can hide in any message content (incl. OCR'd
-# image text, pasted transcript, or tool result) — check every string value
-# in input.messages and input.args, not just input.prompt.
+# Scan input.system (string or array of blocks {type, text})
+blocked_prompt if {
+	is_string(input.system)
+	some pattern in data.blocked_patterns
+	contains(authz.normalize(input.system), authz.normalize(pattern))
+}
+
+blocked_prompt if {
+	not is_string(input.system)
+	some pattern in data.blocked_patterns
+	[_, val] := walk(input.system)
+	is_string(val)
+	contains(authz.normalize(val), authz.normalize(pattern))
+}
+
+# Deep scan: injection payload can hide in any message content (incl. string,
+# array of blocks {type, text}, OCR'd image text, pasted transcript, or tool result) — check
+# every string value in input.messages and input.args, not just input.prompt.
 blocked_prompt if {
 	some pattern in data.blocked_patterns
 	some msg in input.messages
 	is_string(msg.content)
-	contains(lower(msg.content), lower(pattern))
+	contains(authz.normalize(msg.content), authz.normalize(pattern))
 }
 
 blocked_prompt if {
 	some pattern in data.blocked_patterns
-	some _, val in input.args
+	some msg in input.messages
+	not is_string(msg.content)
+	[_, val] := walk(msg.content)
 	is_string(val)
-	contains(lower(val), lower(pattern))
+	contains(authz.normalize(val), authz.normalize(pattern))
+}
+
+blocked_prompt if {
+	some pattern in data.blocked_patterns
+	some str in prod.all_arg_strings(input.args)
+	contains(authz.normalize(str), authz.normalize(pattern))
 }
 
 # Denied when an allow-list exists (agent or team) and the model is not in it.
@@ -289,20 +312,19 @@ allow_list_match if {
 
 tool_blocked_pattern if {
 	some pattern in data.blocked_patterns
-	contains(lower(tool_call), lower(pattern))
+	contains(authz.normalize(tool_call), authz.normalize(pattern))
 }
 
 tool_blocked_pattern if {
 	is_string(input.prompt)
 	some pattern in data.blocked_patterns
-	contains(lower(input.prompt), lower(pattern))
+	contains(authz.normalize(input.prompt), authz.normalize(pattern))
 }
 
 tool_blocked_pattern if {
-	some _, val in input.args
-	is_string(val)
+	some str in prod.all_arg_strings(input.args)
 	some pattern in data.blocked_patterns
-	contains(lower(val), lower(pattern))
+	contains(authz.normalize(str), authz.normalize(pattern))
 }
 
 # Argument constraints: only args present in input.args are checked — a

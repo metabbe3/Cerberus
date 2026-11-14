@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -186,14 +187,18 @@ func askEngine(engineURL, token, keyID string, body []byte, strict bool) (decide
 	if engineURL == "" {
 		return decideResp{Decision: "allow"}, true
 	}
-	prompt := summarizePrompt(body)
-	payload, _ := json.Marshal(map[string]any{
+	prompt, msgs := extractConversationAndPrompt(body)
+	payloadMap := map[string]any{
 		"key_id": keyID,
 		"stage":  "llm",
 		"action": "chat",
 		"model":  modelOf(body),
 		"prompt": prompt,
-	})
+	}
+	if len(msgs) > 0 {
+		payloadMap["messages"] = msgs
+	}
+	payload, _ := json.Marshal(payloadMap)
 	url := strings.TrimSuffix(engineURL, "/") + "/v1/decide/llm"
 	req, _ := http.NewRequest("POST", url, bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
@@ -233,43 +238,119 @@ func modelOf(body []byte) string {
 
 // summarizePrompt extracts last user text + tool names for policy eval.
 func summarizePrompt(body []byte) string {
+	prompt, _ := extractConversationAndPrompt(body)
+	return prompt
+}
+
+// extractConversationAndPrompt parses full conversation (system + all turns),
+// flattening content arrays to strings, capped at 64KB with middle truncation.
+func extractConversationAndPrompt(body []byte) (string, []map[string]any) {
 	var p struct {
-		System   json.RawMessage   `json:"system"`
-		Messages []json.RawMessage `json:"messages"`
-		Tools    []struct {
+		System   json.RawMessage `json:"system"`
+		Messages []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+		Tools []struct {
 			Name string `json:"name"`
 		} `json:"tools"`
 	}
 	if err := json.Unmarshal(body, &p); err != nil {
-		return ""
+		return "", nil
 	}
-	var last string
+
+	var allTurns []map[string]any
+	if sysText := contentText(p.System); sysText != "" {
+		allTurns = append(allTurns, map[string]any{
+			"role":    "system",
+			"content": sysText,
+		})
+	}
+
+	var lastUserText string
 	for _, m := range p.Messages {
-		var mm struct {
-			Role    string          `json:"role"`
-			Content json.RawMessage `json:"content"`
-		}
-		if json.Unmarshal(m, &mm) != nil {
-			continue
-		}
-		if mm.Role == "user" {
-			if s := contentText(mm.Content); s != "" {
-				last = s
-			}
+		txt := contentText(m.Content)
+		allTurns = append(allTurns, map[string]any{
+			"role":    m.Role,
+			"content": txt,
+		})
+		if m.Role == "user" && txt != "" {
+			lastUserText = txt
 		}
 	}
+
 	var toolNames []string
 	for _, t := range p.Tools {
 		toolNames = append(toolNames, t.Name)
 	}
-	summary := last
+	summary := lastUserText
 	if len(p.Tools) > 0 {
 		summary += "\n[tools: " + strings.Join(toolNames, ",") + "]"
 	}
 	if len(summary) > 4000 {
 		summary = summary[:4000] + "…"
 	}
-	return summary
+
+	cappedTurns := capConversation(allTurns, 64*1024)
+	return summary, cappedTurns
+}
+
+func capConversation(turns []map[string]any, limit int) []map[string]any {
+	total := 0
+	for _, t := range turns {
+		s, _ := t["content"].(string)
+		total += len(s)
+	}
+	if total <= limit {
+		return turns
+	}
+	half := limit / 2
+	var head []map[string]any
+	headBytes := 0
+	i := 0
+	for i < len(turns) && headBytes < half {
+		s, _ := turns[i]["content"].(string)
+		if headBytes+len(s) <= half {
+			head = append(head, turns[i])
+			headBytes += len(s)
+			i++
+		} else {
+			rem := half - headBytes
+			if rem > 0 {
+				head = append(head, map[string]any{
+					"role":    turns[i]["role"],
+					"content": s[:rem],
+				})
+			}
+			break
+		}
+	}
+	var tail []map[string]any
+	tailBytes := 0
+	j := len(turns) - 1
+	for j >= i && tailBytes < half {
+		s, _ := turns[j]["content"].(string)
+		if tailBytes+len(s) <= half {
+			tail = append([]map[string]any{turns[j]}, tail...)
+			tailBytes += len(s)
+			j--
+		} else {
+			rem := half - tailBytes
+			if rem > 0 {
+				tail = append([]map[string]any{{
+					"role":    turns[j]["role"],
+					"content": s[len(s)-rem:],
+				}}, tail...)
+			}
+			break
+		}
+	}
+	out := append(head, map[string]any{
+		"role":    "system",
+		"content": "[...truncated...]",
+	})
+	out = append(out, tail...)
+	return out
 }
 
 // contentText handles content as string or []blocks.
@@ -319,8 +400,8 @@ func (s *server) handleTap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "admin token not configured", http.StatusServiceUnavailable)
 		return
 	}
-	got := r.Header.Get("Authorization")
-	if got != "Bearer "+s.adminTok && r.URL.Query().Get("token") != s.adminTok {
+	tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok || subtle.ConstantTimeCompare([]byte(tok), []byte(s.adminTok)) != 1 {
 		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 		return
 	}
@@ -573,6 +654,9 @@ func (s *server) proxySSE(w http.ResponseWriter, resp *http.Response, keyID, mod
 	inToolBlock := false
 	var heldLines [][]byte
 	aborted := false
+	var startEv toolStartEvent
+	var startInput string
+	var hadDelta bool
 
 	flushHeld := func() {
 		for _, hl := range heldLines {
@@ -601,9 +685,22 @@ func (s *server) proxySSE(w http.ResponseWriter, resp *http.Response, keyID, mod
 
 		if inToolBlock {
 			if isContentBlockStop(lineCopy) {
+				finalInput := strings.TrimSpace(toolInput.String())
+				if hadDelta && finalInput != "" {
+					// verified via delta
+				} else if startInput != "" {
+					finalInput = startInput
+				} else if finalInput == "" {
+					finalInput = "{}"
+				}
+
 				// verify the completed tool_use before the agent sees it
-				verdict, ok := s.askToolEngine(keyID, model, toolName, strings.TrimSpace(toolInput.String()))
+				verdict, ok := s.askToolEngine(keyID, model, toolName, finalInput)
 				if ok {
+					recon := reconstructToolStart(startEv, toolName, finalInput, hadDelta)
+					if len(heldLines) > 0 {
+						heldLines[0] = recon
+					}
 					heldLines = append(heldLines, lineCopy)
 					flushHeld()
 					inToolBlock = false
@@ -619,15 +716,27 @@ func (s *server) proxySSE(w http.ResponseWriter, resp *http.Response, keyID, mod
 				}
 				continue
 			}
+			if isPartialJSONDelta(lineCopy) {
+				hadDelta = true
+			}
 			parseSSE(lineCopy, &thinking, &text, &toolName, &toolInput)
 			heldLines = append(heldLines, lineCopy)
 			continue
 		}
 		if isToolBlockStart(lineCopy) {
 			inToolBlock = true
-			heldLines = append(heldLines, lineCopy)
-			toolName = ""
+			startEv = parseToolStart(lineCopy)
+			toolName = startEv.ContentBlock.Name
 			toolInput.Reset()
+			startInput = ""
+			hadDelta = false
+			if len(startEv.ContentBlock.Input) > 0 {
+				raw := strings.TrimSpace(string(startEv.ContentBlock.Input))
+				if raw != "" && raw != "{}" && raw != "null" {
+					startInput = raw
+				}
+			}
+			heldLines = append(heldLines, lineCopy)
 			parseSSE(lineCopy, &thinking, &text, &toolName, &toolInput)
 			continue
 		}
@@ -653,8 +762,12 @@ func (s *server) proxySSE(w http.ResponseWriter, resp *http.Response, keyID, mod
 	if t := strings.TrimSpace(text.String()); t != "" {
 		assembled["text"] = t
 	}
+	finalAssembled := strings.TrimSpace(toolInput.String())
+	if !hadDelta && startInput != "" {
+		finalAssembled = startInput
+	}
 	if toolName != "" {
-		assembled["tool_use"] = map[string]any{"name": toolName, "input_raw": strings.TrimSpace(toolInput.String())}
+		assembled["tool_use"] = map[string]any{"name": toolName, "input_raw": finalAssembled}
 	}
 	if len(assembled) > 0 {
 		s.st.save(turnRow{KeyID: keyID, Model: model, Kind: "sse_assembled", Payload: mustJSON(assembled)}, lat, resp.StatusCode)
@@ -694,21 +807,94 @@ func isContentBlockStop(line []byte) bool {
 	return ev.Type == "content_block_stop"
 }
 
+type toolStartEvent struct {
+	Type         string `json:"type"`
+	Index        int    `json:"index,omitempty"`
+	ContentBlock struct {
+		Type  string          `json:"type"`
+		ID    string          `json:"id,omitempty"`
+		Name  string          `json:"name"`
+		Input json.RawMessage `json:"input,omitempty"`
+	} `json:"content_block"`
+}
+
+func parseToolStart(line []byte) toolStartEvent {
+	var ev toolStartEvent
+	if !bytes.HasPrefix(line, []byte("data:")) {
+		return ev
+	}
+	data := bytes.TrimSpace(line[5:])
+	_ = json.Unmarshal(data, &ev)
+	return ev
+}
+
+func isPartialJSONDelta(line []byte) bool {
+	if !bytes.HasPrefix(line, []byte("data:")) {
+		return false
+	}
+	data := bytes.TrimSpace(line[5:])
+	var ev struct {
+		Type  string `json:"type"`
+		Delta struct {
+			Type        string `json:"type"`
+			PartialJSON string `json:"partial_json"`
+		} `json:"delta"`
+	}
+	if json.Unmarshal(data, &ev) != nil {
+		return false
+	}
+	return ev.Type == "content_block_delta" && (ev.Delta.Type == "input_json_delta" || ev.Delta.PartialJSON != "")
+}
+
+func reconstructToolStart(ev toolStartEvent, toolName, verifiedInput string, hadDelta bool) []byte {
+	block := map[string]any{
+		"type": "tool_use",
+		"name": toolName,
+	}
+	if ev.ContentBlock.ID != "" {
+		block["id"] = ev.ContentBlock.ID
+	}
+	if hadDelta {
+		block["input"] = map[string]any{}
+	} else {
+		var inputObj any
+		if err := json.Unmarshal([]byte(verifiedInput), &inputObj); err == nil && inputObj != nil {
+			block["input"] = inputObj
+		} else {
+			block["input"] = map[string]any{}
+		}
+	}
+	out := map[string]any{
+		"type":          "content_block_start",
+		"content_block": block,
+	}
+	if ev.Index != 0 {
+		out["index"] = ev.Index
+	}
+	b, _ := json.Marshal(out)
+	return append([]byte("data: "), b...)
+}
+
 // askToolEngine runs POST /v1/decide/tool for a completed tool_use block.
 // No engine configured or unreachable => allow (visibility mode) unless strict.
 func (s *server) askToolEngine(keyID, model, tool, inputJSON string) (decideResp, bool) {
 	if s.engineURL == "" {
 		return decideResp{Decision: "allow"}, true
 	}
+	var parsedArgs map[string]any
+	if err := json.Unmarshal([]byte(inputJSON), &parsedArgs); err != nil || parsedArgs == nil {
+		parsedArgs = make(map[string]any)
+	}
+	parsedArgs["input_raw"] = inputJSON
+	if _, ok := parsedArgs["model"]; !ok && model != "" {
+		parsedArgs["model"] = model
+	}
 	payload, _ := json.Marshal(map[string]any{
-		"key_id": keyID,
-		"stage":  "tool",
-		"action": tool,
-		"input": map[string]any{
-			"key_id": keyID,
-			"tool":   tool,
-			"args":   map[string]any{"input_raw": inputJSON, "model": model},
-		},
+		"key_id":    keyID,
+		"stage":     "tool",
+		"action":    tool,
+		"tool_call": tool,
+		"args":      parsedArgs,
 	})
 	url := strings.TrimSuffix(s.engineURL, "/") + "/v1/decide/tool"
 	req, _ := http.NewRequest("POST", url, bytes.NewReader(payload))
@@ -798,8 +984,9 @@ func parseSSE(line []byte, thinking, text *strings.Builder, toolName *string, to
 			ReasoningCon string `json:"reasoning_content"`
 		} `json:"delta"`
 		ContentBlock struct {
-			Type string `json:"type"`
-			Name string `json:"name"`
+			Type  string          `json:"type"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
 		} `json:"content_block"`
 	}
 	if json.Unmarshal(data, &ev) != nil {
