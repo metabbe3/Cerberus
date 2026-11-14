@@ -4,106 +4,102 @@
 [![Docker Image](https://img.shields.io/badge/GHCR-cerberus%3Alatest-blue?logo=docker)](https://github.com/metabbe3/Cerberus/pkgs/container/cerberus)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> **The "OPA" for the AI agent ecosystem**: a single policy enforcement gateway for tool/command/data permissions, at-rest & in-flight masking, and multi-team governance — evaluated with deterministic Rego rules, hot-reloaded dynamically, zero recompilation needed.
+> **The "OPA" for the AI agent ecosystem**: a single zero-trust policy enforcement gateway for tool/command/data permissions, at-rest & in-flight masking, egress CIDR shields, and multi-team governance — evaluated with deterministic Rego rules, hot-reloaded dynamically, zero recompilation needed.
 
-📖 **Comprehensive Setup & Env Reference:** See [docs/SETUP.md](docs/SETUP.md) for full architecture diagrams, installation pathways, and configuration tables.
+📖 **Dokumentasi Lengkap:**
+- 🚀 [docs/QUICKSTART.md](docs/QUICKSTART.md) — Panduan instalasi cepat (< 5 menit), integrasi runtime agent (Claude Code, Cursor, Python), & FAQ.
+- ⚙️ [docs/SETUP.md](docs/SETUP.md) — Arsitektur detail, referensi variabel lingkungan (12-factor), dan flag CLI.
 
 ---
 
-## Quickstart (5 lines)
+## Quickstart (< 5 Menit) 🚀
+
+Instalasi dan jalankan seluruh stack Cerberus (Engine, LLM Tap, Docker Proxy, Egress Proxy, SSH Bastion, Owl UI) secara otomatis:
 
 ```bash
-git clone https://github.com/metabbe3/Cerberus && cd Cerberus
-cp .env.example .env && sed -i.bak "s|^CERBERUS_ADMIN_TOKEN=.*|CERBERUS_ADMIN_TOKEN=$(openssl rand -base64 32)|" .env && rm -f .env.bak
-docker compose -f docker-compose.prod.yml up -d
-curl -s http://127.0.0.1:8090/tap/healthz
-docker compose -f docker-compose.prod.yml exec engine wget -qO- --post-data='{"key_id":"k-glob","tool_call":"kubernetes_get_pods","args":{"cmd":"kubectl get pods"}}' --header="Content-Type: application/json" http://127.0.0.1:8089/v1/decide/tool
+# Satu perintah instalasi dengan kredensial 12-factor acak & verifikasi smoke
+curl -fsSL https://raw.githubusercontent.com/metabbe3/Cerberus/main/scripts/get.sh | bash
 ```
 
+*Jika Anda sudah mengkloning repositori:*
+```bash
+./scripts/get.sh
+```
+
+👉 **Lihat [docs/QUICKSTART.md](docs/QUICKSTART.md)** untuk:
+- 3 jalur instalasi (Otomatis `get.sh`, Docker Compose manual 12-factor, dan build dari source).
+- Panduan integrasi runtime: **Claude Code**, **Cursor IDE**, **OpenAI / Anthropic SDK**, **HTTP_PROXY**, dan **DOCKER_HOST**.
+- Pemecahan masalah awal (401 token mismatch, 403 unknown agent key).
+
 ---
 
-## Services & Tooling
+## Komponen Cerberus (6 Core Services)
 
-Cerberus packages its entire ecosystem into a single unified container image (`ghcr.io/metabbe3/cerberus:latest`):
+Cerberus mengemas seluruh ekosistemnya dalam container image terpadu (`ghcr.io/metabbe3/cerberus:latest`) dan dashboard UI (`owl`):
 
-### 5 Core Services
-| Service | Binary | Role | Port / Target |
+| Komponen | Binary / App | Peran & Tanggung Jawab | Port & Jaringan |
 |---|---|---|---|
-| **Engine** | `cerberus` | Policy decision brain, OPA evaluator, admin API, metrics, audit DB | `:8089` (Internal) |
-| **LLM Tap** | `cerberus-tap` | In-path LLM proxy, stream capture, redaction & fail-closed deny | `127.0.0.1:8090` |
-| **Docker Proxy** | `cerberus-proxy` | Docker daemon socket protection shield (container isolation) | `127.0.0.1:2377` |
-| **Egress Proxy** | `cerberus-proxy` | Outbound HTTP/CONNECT proxy enforcing CIDR & host shields | `127.0.0.1:8088` |
-| **SSH Bastion** | `cerberus-ssh` | Command-level SSH inspection & audit gate | `127.0.0.1:2222` |
+| **Engine** | `cerberus` | Otak keputusan kebijakan, evaluator OPA Rego, API admin, metrik Prometheus, SQLite WAL audit | `127.0.0.1:8089` (Internal + Loopback) |
+| **LLM Tap** | `cerberus-tap` | In-path LLM proxy, stream capture (SSE), masking rahasia otomatis, & fail-closed deny | `127.0.0.1:8090` (Edge) |
+| **Docker Proxy** | `cerberus-proxy` | Perisai perlindungan socket daemon Docker, container isolation, pencegah container escape | `127.0.0.1:2377` (Edge) |
+| **Egress Proxy** | `cerberus-proxy` | Outbound HTTP/CONNECT egress proxy penegak perisai CIDR privat & metadata cloud | `127.0.0.1:8088` (Edge) |
+| **SSH Bastion** | `cerberus-ssh` | Bastion gate pemeriksa perintah SSH per-eksekusi via engine (relay & decide-only) | `127.0.0.1:2222` (Edge) |
+| **Owl Dashboard** | `owl` | Web UI administratif (Next.js 15), visualisasi time-series, live SSE audit, & manajemen agen | `127.0.0.1:3000` (Edge) |
 
-### 3 Offline CLI Tools
-| Binary | Role | Usage |
+### Perangkat CLI Tambahan (Offline Tooling)
+| Binary | Peran | Penggunaan |
 |---|---|---|
-| **`cerberus-bundle`** | Policy Bundle Compiler | Compiles and validates Rego policy sets offline |
-| **`cerberus-redteam`** | Red-Team Suite | Runs deterministic security attack simulations & bypass checks |
-| **`loadgen-stress`** | Stress Testing Tool | High-concurrency benchmark tool (sustained ~85k TPS) |
+| **`cerberus-bundle`** | Compiler Policy Bundle | Mengompilasi dan memvalidasi bundle Rego secara offline |
+| **`cerberus-redteam`** | Red-Team Simulation Suite | Menjalankan simulasi serangan keamanan dan deteksi bypass |
+| **`loadgen-stress`** | High-Throughput Load Generator | Alat uji beban konkurensi tinggi (~85k TPS) |
 
 ---
 
-## Core Concepts
+## Matriks Stage Penegakan Kebijakan
 
-1. **Production-grade Rego Policies:** Deterministic, auditable policy-as-code evaluated in microsecond-to-millisecond latency.
-2. **Policy vs. Data Split:** `authz.rego` defines static decision logic; JSON / PostgreSQL stores dynamic team, agent, and limit data — hot-reloaded dynamically without process restarts.
-3. **Per-Key & Per-Team Governance:** Agents are governed by LiteLLM `key_id` identifiers with configurable fail-open/fail-closed bypass flags.
-4. **Enforcing ACTUAL Invocations:** Tool permissions (`allowed_tool_calls`, `restricted_tool_calls`) are verified against the exact tool and parameters invoked by the LLM.
-5. **Decision Points:**
-   - `POST /v1/decide/llm`: Pre-call model allowlists (glob-aware), cumulative budgets, and prompt injection/pattern scanner (EN+ID).
-   - `POST /v1/decide/tool`: Pre-execution tool validation, argument constraints (bare-array, allowlists, regex, range), and masking.
-   - `POST /v1/decide`: Generic decision endpoint covering `llm`, `tool`, `http`, `docker`, `ssh`, and `custom:*` stages.
-6. **Dynamic Masking:** Regex-driven redaction, masking (`10****.7`), and hashing (`sha256`) applied per-agent on tool arguments and LLM prompt turns.
-7. **Emergency Kill-Switch & Break-Glass:** Immediate estate-wide or per-key execution kill switch with 15-minute dashboard break-glass overrides.
-8. **Three Enforcement Planes:**
-   - Client SDK `GuardedExecutor` (Go, Python, TypeScript)
-   - Docker socket proxy (`cerberus-proxy`) shielding protected containers
-   - Egress HTTP proxy (`cerberus-proxy`) shielding internal CIDRs and DNS spoofing
-9. **PostgreSQL System of Record:** Dual persistence with database-backed revision history and seamless local file fallback.
+Cerberus menegakkan tata kelola zero-trust di seluruh siklus hidup interaksi agent:
+
+| Stage | Cakupan Penegakan | Contoh Pencegahan | Status |
+|---|---|---|---|
+| **`shell` / `tool`** | Eksekusi CLI & tool calls LLM | Memblokir `rm -rf /`, `curl \| bash`, `dd of=/dev/`, dump kredensial `grep * /etc/passwd` | ✅ **Live** |
+| **`http` (Egress)** | Koneksi outbound agent | Memutus akses ke subnet internal (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) & AWS metadata (`169.254.169.254`) | ✅ **Live** |
+| **`docker`** | Socket API Docker | Melarang container privileged, mount direktori host sensitif (`/etc`, `/var/run`, `~/.ssh`, `.env*`), dan penghapusan container terlindungi | ✅ **Live** |
+| **`ssh`** | Sesi bastion SSH | Memeriksa setiap `exec` command sebelum di-relay ke server upstream | ✅ **Live** |
+| **`llm`** | Prompt & Turn LLM | Memverifikasi allowlist model (misal `claude-*`), kuota budget USD kumulatif, dan deteksi prompt injection | ✅ **Live** |
+| **`db`** | Query database & SQL parser | Mencegah `DROP TABLE`, `TRUNCATE`, query destruktif, atau akses ke database production tanpa otorisasi | ⏳ *Coming Soon* |
+| **`k8s`** | Kubernetes API admission | Mencegah penghapusan pod critical, modifikasi ConfigMap/Secrets sensitive, dan namespace bypass | ⏳ *Coming Soon* |
+
+---
+
+## Konsep Inti Arsitektur
+
+1. **Production-grade Rego Policies:** Evaluasi deterministik policy-as-code berbasis Open Policy Agent dalam skala microsecond.
+2. **Policy vs. Data Split:** `authz.rego` mendefinisikan logika keputusan statis; JSON / PostgreSQL menyimpan data tim, agen, dan batas rate limit dinamis — hot-reload instan tanpa restart.
+3. **Per-Key & Per-Team Governance:** Agen diidentifikasi via `key_id` (LiteLLM-compatible sha256) dengan mode fail-open (onboarding) atau fail-closed (enforcement ketat).
+4. **Actual Invocation Verification:** Validasi tool calls dan argumen aktual yang dipanggil agent, bukan sekadar prompt teks.
+5. **Dynamic Data Masking:** Redaksi otomatis pola sensitif (`sk-*`, token API, email, postgres DSN) pada argument tool dan log audit.
+6. **Emergency Kill-Switch:** Tombol darurat pemutus akses global atau per-agen, dengan dukungan break-glass 15 menit melalui dashboard Owl.
+7. **PostgreSQL System of Record:** Opsi persistensi ganda dengan database relasional dan fallback otomatis ke file lokal (`prod.json`).
 
 ---
 
 ## Monitoring & Observability
 
-- **`GET /v1/health/components`:** Estate-wide health summary reporting engine, agents, kill-switch, postgres, and audit subsystems.
-- **`GET /v1/audit/timeseries`:** Epoch-aligned aggregated server-side time buckets for Grafana/Owl dashboards.
-- **Owl Dashboard (Next.js 15):** Web UI providing live audit stream, time-series metrics, policy inspection, and agent configuration.
-- **Daily Rotating Audit Logs:** SQLite WAL mode with at-rest masking and asynchronous fire-and-forget log shipping.
-
----
-
-## Repository Layout
-
-```
-Cerberus/                        # Monorepo: engine + Owl dashboard + SDKs
-  cmd/                           # Service and CLI binaries
-    cerberus/                    # Policy engine binary (:8089)
-    cerberus-tap/                # LLM in-path proxy gate (:8090)
-    cerberus-proxy/              # Docker socket & egress proxy (:2377 / :8088)
-    cerberus-ssh/                # SSH bastion command inspection (:2222)
-    cerberus-bundle/             # Offline Rego bundle utility
-    cerberus-redteam/            # Security attack simulation suite
-    loadgen-stress/              # High-throughput load generator
-  internal/                      # Core engine, OPA evaluation, audit, store, masking
-  policies/                      # Rego bundles (gateway, stages, shield)
-  migrations/                    # PostgreSQL system-of-record schema (001_postgres.sql)
-  owl/                           # Next.js 15 administrative dashboard
-  sdk/{go,python,ts}/            # Multi-language SDKs (GuardedExecutor, retries, hot-cache)
-  docs/                          # Documentation index (see docs/SETUP.md, docs/ARCHIVE.md)
-  docker-compose.prod.yml        # Production 5-service single-image compose stack
-  Dockerfile                     # Multi-stage container build manifest
-```
+- **`GET /v1/health/components`:** Endpoint status kesehatan seluruh sub-sistem (engine, agents, kill-switch, postgres, audit).
+- **`GET /v1/audit/timeseries`:** Agregasi time-series keputusan evaluasi per interval waktu untuk visualisasi Owl / Grafana.
+- **Owl Dashboard (Next.js 15):** Dashboard visual di `http://127.0.0.1:3000` dengan live streaming event SSE.
+- **Daily Rotating Audit Logs:** Database SQLite harian berformat WAL dengan retensi otomatis dan fire-and-forget log shipping.
 
 ---
 
 ## Admin API (Bearer CERBERUS_ADMIN_TOKEN)
 
-| Endpoint | Method | Description |
+| Endpoint | Method | Deskripsi |
 |---|---|---|
-| `/v1/admin/data` | `GET`, `PUT` | Read or update full policy configuration data (persisted to PostgreSQL) |
-| `/v1/admin/templates` | `GET`, `PUT`, `DELETE` | Server-side policy templates management |
-| `/v1/health/components` | `GET` | Single endpoint estate health status |
-| `/v1/audit` | `GET` | Query decision audit logs with time and field filters |
-| `/v1/audit/timeseries` | `GET` | Aggregated decision time-series buckets for visualization |
-| `/v1/status`, `/v1/events` | `GET` | Real-time status and SSE event stream |
+| `/v1/admin/data` | `GET`, `PUT` | Membaca atau memperbarui data konfigurasi kebijakan (disimpan ke PG/file) |
+| `/v1/admin/templates` | `GET`, `PUT`, `DELETE` | Manajemen template kebijakan server-side |
+| `/v1/health/components` | `GET` | Status kesehatan estate engine dan gates |
+| `/v1/audit` | `GET` | Kueri log audit keputusan dengan filter waktu dan field |
+| `/v1/audit/timeseries` | `GET` | Data deret waktu keputusan evaluasi |
+| `/v1/status`, `/v1/events` | `GET` | Endpoint status dan streaming event SSE real-time |
+| `/v1/decide/tool`, `/v1/decide/llm`, `/v1/decide` | `POST` | Endpoint evaluasi keputusan kebijakan |
