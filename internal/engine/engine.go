@@ -256,7 +256,7 @@ func (e *Engine) Decide(ctx context.Context, in Input) Decision {
 				Epoch:     d.Epoch,
 				Cached:    false,
 				LatencyUS: d.LatencyUS,
-				Args:      auditArgsFor(in.Stage, d),
+				Args:      auditArgsFor(in, d),
 			})
 			return d
 		}
@@ -328,7 +328,7 @@ func (e *Engine) Decide(ctx context.Context, in Input) Decision {
 		Epoch:     d.Epoch,
 		Cached:    d.Cached,
 		LatencyUS: d.LatencyUS,
-		Args:      auditArgsFor(in.Stage, d),
+		Args:      auditArgsFor(in, d),
 	})
 	return d
 }
@@ -553,16 +553,30 @@ func (e *Engine) eval(ctx context.Context, snap *policy.Snapshot, in Input) Deci
 }
 
 // auditArgsFor picks what lands in the audit Args column: tool stages carry
-// masked args; the llm stage carries the masked conversation so a secret in a
-// prompt is never stored in clear, while still recording what was asked.
-func auditArgsFor(stage string, d Decision) map[string]any {
-	if stage == "llm" {
+// masked args or original args when unmasked; the llm stage carries the masked
+// conversation (or input messages/prompt) so a secret in a prompt is never
+// stored in clear at rest, while still recording what was asked.
+func auditArgsFor(in Input, d Decision) map[string]any {
+	if in.Stage == "llm" {
 		if mp, ok := d.MaskedPrompt.(map[string]any); ok && len(mp) > 0 {
 			return mp
 		}
+		doc := map[string]any{}
+		if len(in.Messages) > 0 {
+			doc["messages"] = in.Messages
+		}
+		if in.Prompt != "" {
+			doc["prompt"] = in.Prompt
+		}
+		if len(doc) > 0 {
+			return doc
+		}
 		return nil
 	}
-	return d.MaskedArgs
+	if d.MaskedArgs != nil {
+		return d.MaskedArgs
+	}
+	return in.Args
 }
 
 // applyMasking applies per-key masking rules to args map.

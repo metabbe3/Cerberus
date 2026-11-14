@@ -995,3 +995,33 @@ func TestDecide_ShellGuardE2E(t *testing.T) {
 		}
 	})
 }
+
+func TestAuditArgs_DenyShellguardWithoutMasking(t *testing.T) {
+	sink := &recSink{}
+	e := newTestEngine(t, sink, Options{})
+
+	cmd := "rm -rf / --no-preserve-root"
+	in := Input{
+		Stage:    "tool",
+		KeyID:    "k-prod-ops",
+		ToolCall: "shell_exec",
+		Args:     map[string]any{"cmd": cmd},
+	}
+
+	d := e.Decide(context.Background(), in)
+	if d.Decision != "deny" {
+		t.Fatalf("expected deny, got %s (rule: %s)", d.Decision, d.RuleID)
+	}
+
+	evs := sink.got()
+	if len(evs) == 0 {
+		t.Fatal("expected audit event to be emitted")
+	}
+	lastEv := evs[len(evs)-1]
+	if lastEv.Args == nil {
+		t.Fatal("expected event.Args to be populated, got nil (breach evidence lost)")
+	}
+	if gotCmd, ok := lastEv.Args["cmd"].(string); !ok || gotCmd != cmd {
+		t.Fatalf("expected event.Args[cmd] = %q, got %v", cmd, lastEv.Args["cmd"])
+	}
+}

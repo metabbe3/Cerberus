@@ -12,48 +12,28 @@ import { PageHeader } from "@/components/page-header";
 import { agentColumns, type AgentRow } from "@/components/agents/agents-table";
 import { AddAgentDialog } from "@/components/agents/add-agent-dialog";
 import { ConnectInfoCard } from "@/components/agents/connect-info-card";
-import { useAudit, useData } from "@/lib/queries";
+import { useAgentsSummary, useData } from "@/lib/queries";
 
 export default function AgentsPage() {
   const router = useRouter();
   const [wizardOpen, setWizardOpen] = useState(false);
   const { data, isPending, isError, error } = useData();
+  const { data: summaryData } = useAgentsSummary("24h");
 
-  // 24h audit window for client-side aggregation
-  const twentyFourHoursAgo = useMemo(
-    () => new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-    [],
-  );
-
-  const auditParams = useMemo(() => {
-    const p = new URLSearchParams();
-    p.set("since", twentyFourHoursAgo);
-    p.set("limit", "1000");
-    return p;
-  }, [twentyFourHoursAgo]);
-
-  const { data: auditEvents } = useAudit(auditParams);
-
-  // Client-side aggregate decisions in last 24h and last event timestamp
+  // Summary statistics from engine agents-summary
   const agentStats = useMemo(() => {
-    const stats: Record<string, { count24h: number; lastActive?: string }> = {};
-    if (auditEvents) {
-      for (const ev of auditEvents) {
-        if (!stats[ev.key_id]) {
-          stats[ev.key_id] = { count24h: 1, lastActive: ev.time };
-        } else {
-          stats[ev.key_id].count24h += 1;
-          if (
-            !stats[ev.key_id].lastActive ||
-            new Date(ev.time) > new Date(stats[ev.key_id].lastActive!)
-          ) {
-            stats[ev.key_id].lastActive = ev.time;
-          }
-        }
+    const stats: Record<string, { count24h: number; breachCount24h: number; lastActive?: string }> = {};
+    if (summaryData) {
+      for (const s of summaryData) {
+        stats[s.key_id] = {
+          count24h: s.total,
+          breachCount24h: s.breach_count,
+          lastActive: s.last_active || undefined,
+        };
       }
     }
     return stats;
-  }, [auditEvents]);
+  }, [summaryData]);
 
   if (isPending) {
     return (
@@ -77,7 +57,9 @@ export default function AgentsPage() {
   const rows: AgentRow[] = Object.entries(data.data.agents).map(([keyId, agent]) => ({
     keyId,
     count24h: agentStats[keyId]?.count24h ?? 0,
+    breachCount24h: agentStats[keyId]?.breachCount24h ?? 0,
     lastActive: agentStats[keyId]?.lastActive,
+    isKilled: !!data.data.config?.kill_switch?.keys?.[keyId],
     ...agent,
   }));
 

@@ -860,7 +860,7 @@ func TestHealthz(t *testing.T) {
 }
 
 func TestMetrics(t *testing.T) {
-	t.Parallel()
+	// Not parallel: asserts global Prometheus counters which other tests' OnSwap callbacks reset.
 	h := newHarness(t)
 	h.do(t, http.MethodPost, "/v1/decide", "application/json", decideAllowBody, false)
 

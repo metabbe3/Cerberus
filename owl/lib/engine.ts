@@ -1,7 +1,15 @@
 import "server-only";
 import { NextResponse } from "next/server";
 import { ZodError, z } from "zod";
-import { AuditEventSchema, type AuditEvent } from "./schema";
+import {
+  AuditEventSchema,
+  type AuditEvent,
+  type BreachResult,
+  type AgentSummary,
+  type RotateKeyResult,
+  type PolicyModuleItem,
+  type TestRunResponse,
+} from "./schema";
 
 // Server-side client for the Cerberus engine's admin API. All state lives in
 // the engine — Owl is a stateless proxy. CERBERUS_ADMIN_TOKEN never leaves
@@ -272,6 +280,40 @@ export async function replayAudit(limit = 500, data?: unknown): Promise<ReplayRe
     body: JSON.stringify(body),
   });
   return (await res.json()) as ReplayReport;
+}
+
+export async function getBreaches(params: URLSearchParams): Promise<BreachResult> {
+  const res = await engineFetch(`/v1/audit/breaches?${params.toString()}`);
+  return (await res.json()) as BreachResult;
+}
+
+export async function getAgentsSummary(since?: string): Promise<AgentSummary[]> {
+  const query = since ? `?since=${encodeURIComponent(since)}` : "";
+  const res = await engineFetch(`/v1/audit/agents-summary${query}`);
+  return (await res.json()) as AgentSummary[];
+}
+
+export async function rotateKey(
+  keyId: string,
+  options?: { revoke_old?: boolean; suffix?: string; new_key_id?: string },
+): Promise<RotateKeyResult> {
+  const res = await engineFetch(`/v1/admin/keys/${encodeURIComponent(keyId)}/rotate`, {
+    method: "POST",
+    body: JSON.stringify(options ?? {}),
+  });
+  return (await res.json()) as RotateKeyResult;
+}
+
+export async function getPolicyModules(): Promise<PolicyModuleItem[]> {
+  const res = await engineFetch("/v1/policy/modules");
+  return (await res.json()) as PolicyModuleItem[];
+}
+
+export async function runPolicyTests(): Promise<TestRunResponse> {
+  const res = await engineFetch("/v1/policy/test-run", {
+    method: "POST",
+  });
+  return (await res.json()) as TestRunResponse;
 }
 
 // One error mapper for every /api route: EngineError carries its status and

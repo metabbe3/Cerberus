@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, Bot, LayoutDashboard, LogOut, Radio, ScrollText, Settings, ShieldAlert, SlidersHorizontal } from "lucide-react";
+import { Activity, AlertTriangle, Bot, FileCode2, LayoutDashboard, LogOut, Radio, ScrollText, Settings, ShieldAlert, SlidersHorizontal } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -11,10 +11,12 @@ const links = [
   { href: "/overview", label: "Overview", icon: LayoutDashboard },
   { href: "/monitoring", label: "Monitoring", icon: Activity },
   { href: "/agents", label: "Agents", icon: Bot },
+  { href: "/breaches", label: "Breaches", icon: AlertTriangle },
   { href: "/decisions", label: "Decisions", icon: Radio },
   { href: "/shield", label: "Shield", icon: ShieldAlert },
   { href: "/rules", label: "Rules", icon: SlidersHorizontal },
   { href: "/policies", label: "Policies", icon: ScrollText },
+  { href: "/policy", label: "Explorer", icon: FileCode2 },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

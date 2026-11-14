@@ -49,6 +49,7 @@ type Server struct {
 	handler       http.Handler
 	streamsCtx    context.Context    // cancelled by ShutdownStreams
 	streamsCancel context.CancelFunc // registered on http.Server via main
+	testRunMu     sync.Mutex
 }
 
 type rateLimiter struct {
@@ -132,6 +133,11 @@ func New(d Deps) *Server {
 	mux.HandleFunc("GET /v1/admin/coverage", s.admin(s.getCoverage))
 	mux.HandleFunc("GET /v1/audit", s.admin(s.queryAudit))
 	mux.HandleFunc("GET /v1/audit/timeseries", s.admin(s.timeseriesHandler))
+	mux.HandleFunc("GET /v1/audit/breaches", s.admin(s.breachesHandler))
+	mux.HandleFunc("GET /v1/audit/agents-summary", s.admin(s.agentsSummaryHandler))
+	mux.HandleFunc("POST /v1/admin/keys/{keyId}/rotate", s.admin(s.rotateKey))
+	mux.HandleFunc("GET /v1/policy/modules", s.admin(s.getPolicyModules))
+	mux.HandleFunc("POST /v1/policy/test-run", s.admin(s.runPolicyTests))
 	mux.HandleFunc("GET /v1/events", s.admin(s.events))
 	mux.HandleFunc("GET /v1/status", s.admin(s.getStatus))
 	mux.HandleFunc("GET /v1/admin/status", s.admin(s.getStatus))

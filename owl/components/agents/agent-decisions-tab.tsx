@@ -67,6 +67,11 @@ export function AgentDecisionsTab({ keyId }: { keyId: string }) {
               <SelectItem value="all">Semua Stage</SelectItem>
               <SelectItem value="llm">llm</SelectItem>
               <SelectItem value="tool">tool</SelectItem>
+              <SelectItem value="http">http</SelectItem>
+              <SelectItem value="docker">docker</SelectItem>
+              <SelectItem value="ssh">ssh</SelectItem>
+              <SelectItem value="db">db</SelectItem>
+              <SelectItem value="k8s">k8s</SelectItem>
             </SelectContent>
           </Select>
 

@@ -26,6 +26,7 @@ import (
 	"github.com/open-policy-agent/opa/v1/loader"
 	"github.com/open-policy-agent/opa/v1/rego"
 	"github.com/open-policy-agent/opa/v1/storage/inmem"
+	"github.com/open-policy-agent/opa/v1/tester"
 )
 
 type epochResponse struct {
@@ -547,6 +548,419 @@ func (s *Server) timeseriesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, ts)
+}
+
+func (s *Server) breachesHandler(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Audit == nil {
+		writeJSON(w, http.StatusOK, audit.BreachResult{
+			Buckets:      []audit.BreachBucket{},
+			TopOffenders: []audit.TopOffender{},
+			Events:       []audit.Event{},
+		})
+		return
+	}
+	q := r.URL.Query()
+	f := audit.BreachFilter{
+		Severity:   q.Get("severity"),
+		Stage:      q.Get("stage"),
+		RulePrefix: q.Get("rule_prefix"),
+		KeyID:      q.Get("key_id"),
+	}
+	if v := q.Get("since"); v != "" {
+		if dur, err := time.ParseDuration(v); err == nil {
+			f.Since = time.Now().Add(-dur)
+		} else if t, err := time.Parse(time.RFC3339, v); err == nil {
+			f.Since = t
+		} else {
+			writeErr(w, http.StatusBadRequest, "invalid since (want duration or RFC3339)")
+			return
+		}
+	}
+	if v := q.Get("until"); v != "" {
+		if dur, err := time.ParseDuration(v); err == nil {
+			f.Until = time.Now().Add(-dur)
+		} else if t, err := time.Parse(time.RFC3339, v); err == nil {
+			f.Until = t
+		} else {
+			writeErr(w, http.StatusBadRequest, "invalid until (want duration or RFC3339)")
+			return
+		}
+	}
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 1000 {
+			writeErr(w, http.StatusBadRequest, "invalid limit (must be 1..1000)")
+			return
+		}
+		f.Limit = n
+	}
+	buckets := 24
+	if v := q.Get("buckets"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err == nil && n >= 1 && n <= 500 {
+			buckets = n
+		}
+	}
+
+	res, err := s.deps.Audit.Breaches(r.Context(), f, buckets)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) agentsSummaryHandler(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Audit == nil {
+		writeJSON(w, http.StatusOK, []audit.AgentSummary{})
+		return
+	}
+	q := r.URL.Query()
+	since := time.Now().Add(-24 * time.Hour)
+	if v := q.Get("since"); v != "" {
+		if dur, err := time.ParseDuration(v); err == nil {
+			since = time.Now().Add(-dur)
+		} else if t, err := time.Parse(time.RFC3339, v); err == nil {
+			since = t
+		} else {
+			writeErr(w, http.StatusBadRequest, "invalid since (want duration or RFC3339)")
+			return
+		}
+	}
+	res, err := s.deps.Audit.AgentsSummary(r.Context(), since)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if res == nil {
+		res = []audit.AgentSummary{}
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+type rotateKeyRequest struct {
+	NewKeyID  string `json:"new_key_id"`
+	Suffix    string `json:"suffix"`
+	RevokeOld bool   `json:"revoke_old"`
+}
+
+type rotateKeyResponse struct {
+	OK         bool   `json:"ok"`
+	OldKeyID   string `json:"old_key_id"`
+	NewKeyID   string `json:"new_key_id"`
+	RevokedOld bool   `json:"revoked_old"`
+	Epoch      uint64 `json:"epoch"`
+}
+
+func (s *Server) rotateKey(w http.ResponseWriter, r *http.Request) {
+	keyID := r.PathValue("keyId")
+	if keyID == "" {
+		writeErr(w, http.StatusBadRequest, "keyId required")
+		return
+	}
+	snap := s.deps.Store.Current()
+	if snap == nil || snap.Data == nil {
+		writeErr(w, http.StatusNotFound, "no data document loaded")
+		return
+	}
+
+	dataBytes, err := json.Marshal(snap.Data)
+	if err != nil {
+		writeInternalErr(w, err)
+		return
+	}
+	var dataMap map[string]any
+	if err := json.Unmarshal(dataBytes, &dataMap); err != nil {
+		writeInternalErr(w, err)
+		return
+	}
+
+	agents, ok := dataMap["agents"].(map[string]any)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "agents map not found")
+		return
+	}
+	agentVal, exists := agents[keyID]
+	if !exists {
+		writeErr(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", keyID))
+		return
+	}
+
+	var req rotateKeyRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+
+	newKeyID := req.NewKeyID
+	if newKeyID == "" {
+		suffix := req.Suffix
+		if suffix == "" {
+			for i := 2; ; i++ {
+				cand := fmt.Sprintf("%s-v%d", strings.TrimRight(keyID, "0123456789-v"), i)
+				if _, exists := agents[cand]; !exists {
+					newKeyID = cand
+					break
+				}
+			}
+		} else {
+			newKeyID = keyID + suffix
+		}
+	}
+
+	agents[newKeyID] = agentVal
+	if req.RevokeOld {
+		delete(agents, keyID)
+	}
+
+	nextData, err := json.Marshal(dataMap)
+	if err != nil {
+		writeInternalErr(w, err)
+		return
+	}
+
+	newSnap, err := s.deps.Store.ReplaceData(r.Context(), nextData)
+	if err != nil {
+		writeStoreErr(w, "rotate key", err)
+		return
+	}
+	s.mirrorSaveData(newSnap.Data)
+
+	author := r.Header.Get("X-Admin-User")
+	if author == "" {
+		author = "admin"
+	}
+	if s.deps.Audit != nil {
+		actionSummary := fmt.Sprintf("rotated key %s -> %s (revoke_old=%t)", keyID, newKeyID, req.RevokeOld)
+		_, _ = s.deps.Audit.RecordRevision(r.Context(), author, actionSummary, dataBytes)
+		s.deps.Audit.Emit(audit.Event{
+			Time:     time.Now().UTC(),
+			Stage:    "admin",
+			KeyID:    author,
+			Subject:  "key.rotate",
+			Decision: "allow",
+			RuleID:   "admin.key.rotate",
+			Reason:   actionSummary,
+			Epoch:    newSnap.Epoch,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, rotateKeyResponse{
+		OK:         true,
+		OldKeyID:   keyID,
+		NewKeyID:   newKeyID,
+		RevokedOld: req.RevokeOld,
+		Epoch:      newSnap.Epoch,
+	})
+}
+
+// PolicyModuleItem describes one Rego module loaded by the engine.
+type PolicyModuleItem struct {
+	File    string `json:"file"`
+	Package string `json:"package"`
+	SHA256  string `json:"sha256"`
+	Size    int64  `json:"size"`
+	MTime   string `json:"mtime"`
+}
+
+func (s *Server) getPolicyModules(w http.ResponseWriter, _ *http.Request) {
+	if s.deps.Store == nil {
+		writeJSON(w, http.StatusOK, []PolicyModuleItem{})
+		return
+	}
+	policyDir := s.deps.Store.PolicyDir()
+	if policyDir == "" {
+		writeJSON(w, http.StatusOK, []PolicyModuleItem{})
+		return
+	}
+
+	var modules []PolicyModuleItem
+	err := filepath.Walk(policyDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(info.Name(), ".rego") {
+			return nil
+		}
+		rel, err := filepath.Rel(policyDir, path)
+		if err != nil {
+			rel = info.Name()
+		}
+		content, err := os.ReadFile(filepath.Clean(path)) //nolint:gosec // G304 reading rego policy files within policyDir
+		if err != nil {
+			return nil
+		}
+		h := sha256.Sum256(content)
+		pkgName := ""
+		mod, err := ast.ParseModule(rel, string(content))
+		if err == nil && mod != nil && mod.Package != nil {
+			pkgName = strings.TrimPrefix(mod.Package.Path.String(), "data.")
+		}
+		if pkgName == "" {
+			// fallback parse from first line starting with package
+			for _, line := range strings.Split(string(content), "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "package ") {
+					pkgName = strings.TrimSpace(strings.TrimPrefix(line, "package "))
+					break
+				}
+			}
+		}
+
+		modules = append(modules, PolicyModuleItem{
+			File:    rel,
+			Package: pkgName,
+			SHA256:  hex.EncodeToString(h[:]),
+			Size:    info.Size(),
+			MTime:   info.ModTime().UTC().Format(time.RFC3339),
+		})
+		return nil
+	})
+	if err != nil {
+		writeInternalErr(w, err)
+		return
+	}
+	if modules == nil {
+		modules = []PolicyModuleItem{}
+	}
+	sort.Slice(modules, func(i, j int) bool {
+		return modules[i].File < modules[j].File
+	})
+	writeJSON(w, http.StatusOK, modules)
+}
+
+// TestCaseResult captures the outcome of a single Rego test case.
+type TestCaseResult struct {
+	Name       string  `json:"name"`
+	Package    string  `json:"package"`
+	Pass       bool    `json:"pass"`
+	DurationMS float64 `json:"duration_ms"`
+	Msg        string  `json:"msg,omitempty"`
+}
+
+// TestRunResponse is the summary and per-test payload returned by POST /v1/policy/test-run.
+type TestRunResponse struct {
+	Passed     int              `json:"passed"`
+	Failed     int              `json:"failed"`
+	Total      int              `json:"total"`
+	DurationMS float64          `json:"duration_ms"`
+	Tests      []TestCaseResult `json:"tests"`
+}
+
+func (s *Server) runPolicyTests(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Store == nil {
+		writeErr(w, http.StatusBadRequest, "policy store unavailable")
+		return
+	}
+	if !s.testRunMu.TryLock() {
+		writeErr(w, http.StatusLocked, "policy test run already active")
+		return
+	}
+	defer s.testRunMu.Unlock()
+
+	policyDir := s.deps.Store.PolicyDir()
+	if policyDir == "" {
+		writeErr(w, http.StatusBadRequest, "policyDir not configured")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	defer cancel()
+
+	modules, store, err := tester.Load([]string{policyDir}, nil)
+	if err != nil {
+		writeInternalErr(w, fmt.Errorf("load policies for testing: %w", err))
+		return
+	}
+	if len(modules) == 0 {
+		writeJSON(w, http.StatusOK, TestRunResponse{Tests: []TestCaseResult{}})
+		return
+	}
+
+	runner := tester.NewRunner().
+		SetModules(modules).
+		SetStore(store).
+		SetTimeout(120 * time.Second)
+
+	start := time.Now()
+	ch, err := runner.RunTests(ctx, nil)
+	if err != nil {
+		writeInternalErr(w, fmt.Errorf("run tests: %w", err))
+		return
+	}
+
+	var results []TestCaseResult
+	var passed, failed, total int
+
+	for tr := range ch {
+		total++
+		pass := tr.Pass()
+		msg := ""
+		if tr.Error != nil {
+			msg = tr.Error.Error()
+		} else if tr.Fail {
+			msg = "assertion failed"
+		}
+		if pass {
+			passed++
+		} else {
+			failed++
+		}
+		results = append(results, TestCaseResult{
+			Name:       tr.Name,
+			Package:    tr.Package,
+			Pass:       pass,
+			DurationMS: float64(tr.Duration.Microseconds()) / 1000.0,
+			Msg:        msg,
+		})
+	}
+
+	durationMS := float64(time.Since(start).Microseconds()) / 1000.0
+	if results == nil {
+		results = []TestCaseResult{}
+	}
+
+	// Sort results by package, then test name
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Package != results[j].Package {
+			return results[i].Package < results[j].Package
+		}
+		return results[i].Name < results[j].Name
+	})
+
+	author := r.Header.Get("X-Admin-User")
+	if author == "" {
+		author = "admin"
+	}
+	if s.deps.Audit != nil {
+		decision := "allow"
+		if failed > 0 {
+			decision = "deny"
+		}
+		s.deps.Audit.Emit(audit.Event{
+			Time:     time.Now().UTC(),
+			Stage:    "admin",
+			KeyID:    author,
+			Subject:  "policy.test_run",
+			Decision: decision,
+			RuleID:   "policy.test_run",
+			Reason:   fmt.Sprintf("%d/%d passed (%.2fms)", passed, total, durationMS),
+			Epoch:    s.deps.Store.Current().Epoch,
+			Args: map[string]any{
+				"passed":      passed,
+				"failed":      failed,
+				"total":       total,
+				"duration_ms": durationMS,
+			},
+		})
+	}
+
+	writeJSON(w, http.StatusOK, TestRunResponse{
+		Passed:     passed,
+		Failed:     failed,
+		Total:      total,
+		DurationMS: durationMS,
+		Tests:      results,
+	})
 }
 
 type eraseRequest struct {

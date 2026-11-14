@@ -17,9 +17,9 @@ func TestRegression_MC_P1_Fix1_ShellGuardArgShape(t *testing.T) {
 	h := newHarness(t)
 
 	variants := []struct {
-		name    string
-		argKey  string
-		argVal  any
+		name   string
+		argKey string
+		argVal any
 	}{
 		{"exec_key", "exec", "cat ~/.ssh/id_rsa"},
 		{"argv_key", "argv", "cat ~/.ssh/id_rsa"},
@@ -311,7 +311,7 @@ func TestRegression_MC_P1_Fix5_IPNormalizerAndUnicodeHomoglyph(t *testing.T) {
 		{"soft_hyphen", "pr\u00adod-db"},
 		{"bom", "\ufeffprod-db"},
 		{"zero_width_space", "pr\u200bod-db"},
-		{"cyrillic_homoglyph_g", "p\u0433od-db"}, // Cyrillic г (U+0433) -> r
+		{"cyrillic_homoglyph_g", "p\u0433od-db"},        // Cyrillic г (U+0433) -> r
 		{"cyrillic_homoglyph_p_o", "\u0440r\u043ed-db"}, // Cyrillic р (U+0440) -> p, Cyrillic о (U+043E) -> o
 	}
 
@@ -342,4 +342,3 @@ func TestRegression_MC_P1_Fix5_IPNormalizerAndUnicodeHomoglyph(t *testing.T) {
 		})
 	}
 }
-

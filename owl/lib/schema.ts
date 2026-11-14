@@ -177,3 +177,74 @@ export type CerberusData = z.infer<typeof CerberusDataSchema>;
 export function parseData(data: unknown): CerberusData {
   return CerberusDataSchema.parse(data);
 }
+
+export interface BreachSummary {
+  critical: number;
+  high: number;
+  medium: number;
+  total: number;
+}
+
+export interface BreachBucket {
+  bucket_ns: number;
+  critical: number;
+  high: number;
+  medium: number;
+}
+
+export interface TopOffender {
+  key_id: string;
+  count: number;
+  critical_count: number;
+  last_time: string;
+  top_rule_id: string;
+}
+
+export interface BreachResult {
+  summary: BreachSummary;
+  buckets: BreachBucket[];
+  top_offenders: TopOffender[];
+  events: AuditEvent[];
+}
+
+export interface AgentSummary {
+  key_id: string;
+  total: number;
+  deny: number;
+  breach_count: number;
+  last_active: string;
+  daily_tool_calls: number;
+}
+
+export interface RotateKeyResult {
+  ok: boolean;
+  old_key_id: string;
+  new_key_id: string;
+  revoked_old: boolean;
+  epoch: number;
+}
+
+export interface PolicyModuleItem {
+  file: string;
+  package: string;
+  sha256: string;
+  size: number;
+  mtime: string;
+}
+
+export interface TestCaseResult {
+  name: string;
+  package: string;
+  pass: boolean;
+  duration_ms: number;
+  msg?: string;
+}
+
+export interface TestRunResponse {
+  passed: number;
+  failed: number;
+  total: number;
+  duration_ms: number;
+  tests: TestCaseResult[];
+}
+

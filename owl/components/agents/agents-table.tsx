@@ -8,7 +8,9 @@ import type { Agent } from "@/lib/schema";
 export type AgentRow = {
   keyId: string;
   count24h?: number;
+  breachCount24h?: number;
   lastActive?: string;
+  isKilled?: boolean;
 } & Agent;
 
 function ToolCountCell({ agent }: { agent: Agent }) {
@@ -58,7 +60,14 @@ export const agentColumns: ColumnDef<AgentRow, unknown>[] = [
     accessorKey: "name",
     header: "Name",
     cell: ({ row }) => (
-      <span className="font-medium">{row.original.name ?? row.original.keyId}</span>
+      <div className="flex items-center gap-1.5 font-medium">
+        <span>{row.original.name ?? row.original.keyId}</span>
+        {row.original.isKilled && (
+          <Badge variant="destructive" className="text-[10px] py-0 px-1 font-mono font-semibold">
+            KILL
+          </Badge>
+        )}
+      </div>
     ),
   },
   {
@@ -83,6 +92,25 @@ export const agentColumns: ColumnDef<AgentRow, unknown>[] = [
     accessorKey: "count24h",
     header: "Decisions 24h",
     cell: ({ row }) => <Decisions24hCell count={row.original.count24h ?? 0} />,
+  },
+  {
+    accessorKey: "breachCount24h",
+    header: "Breaches 24h",
+    cell: ({ row }) => {
+      const breaches = row.original.breachCount24h ?? 0;
+      if (breaches === 0) {
+        return (
+          <Badge variant="outline" className="text-muted-foreground font-mono text-xs">
+            0
+          </Badge>
+        );
+      }
+      return (
+        <Badge variant="destructive" className="font-mono text-xs font-semibold">
+          {breaches}
+        </Badge>
+      );
+    },
   },
   {
     accessorKey: "risk_tier",

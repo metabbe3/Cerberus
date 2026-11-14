@@ -67,4 +67,3 @@ func NormalizeCommandURLs(cmd string) string {
 		return proto + normHost
 	})
 }
-

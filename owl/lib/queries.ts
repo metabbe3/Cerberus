@@ -1,7 +1,18 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AuditEventSchema, parseData, type Agent, type AuditEvent, type CerberusData } from "./schema";
+import {
+  AuditEventSchema,
+  parseData,
+  type Agent,
+  type AuditEvent,
+  type CerberusData,
+  type BreachResult,
+  type AgentSummary,
+  type RotateKeyResult,
+  type PolicyModuleItem,
+  type TestRunResponse,
+} from "./schema";
 
 // The one server-state hook for the data document: every page reads the
 // engine's data through this same ["data"] cache entry, so a PUT elsewhere
@@ -176,4 +187,96 @@ export function mergeEvents(
     out.push(e);
   }
   return out.slice(0, cap);
+}
+
+export function useBreaches(params: URLSearchParams) {
+  return useQuery({
+    queryKey: ["breaches", params.toString()],
+    queryFn: async (): Promise<BreachResult> => {
+      const res = await fetch(`/api/audit/breaches?${params.toString()}`);
+      const body = await res.json();
+      if (!res.ok) {
+        throw new Error((body as { error?: string }).error ?? "breaches query failed");
+      }
+      return body as BreachResult;
+    },
+  });
+}
+
+export function useAgentsSummary(since = "24h") {
+  return useQuery({
+    queryKey: ["agents-summary", since],
+    queryFn: async (): Promise<AgentSummary[]> => {
+      const res = await fetch(`/api/audit/agents-summary?since=${encodeURIComponent(since)}`);
+      const body = await res.json();
+      if (!res.ok) {
+        throw new Error((body as { error?: string }).error ?? "agents summary query failed");
+      }
+      return body as AgentSummary[];
+    },
+  });
+}
+
+export function useRotateKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      keyId,
+      revoke_old = false,
+      suffix,
+      new_key_id,
+    }: {
+      keyId: string;
+      revoke_old?: boolean;
+      suffix?: string;
+      new_key_id?: string;
+    }): Promise<RotateKeyResult> => {
+      const res = await fetch(`/api/admin/keys/${encodeURIComponent(keyId)}/rotate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ revoke_old, suffix, new_key_id }),
+      });
+      const data = (await res.json()) as RotateKeyResult & { error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Failed to rotate key");
+      return data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["data"] });
+      qc.invalidateQueries({ queryKey: ["agents-summary"] });
+    },
+  });
+}
+
+export function usePolicyModules() {
+  return useQuery({
+    queryKey: ["policy-modules"],
+    queryFn: async (): Promise<PolicyModuleItem[]> => {
+      const res = await fetch("/api/policy/modules");
+      const body = await res.json();
+      if (!res.ok) {
+        throw new Error((body as { error?: string }).error ?? "failed to fetch policy modules");
+      }
+      return body as PolicyModuleItem[];
+    },
+  });
+}
+
+export function useRunPolicyTests() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (): Promise<TestRunResponse> => {
+      const res = await fetch("/api/policy/test-run", {
+        method: "POST",
+      });
+      const body = (await res.json()) as TestRunResponse & { error?: string };
+      if (!res.ok) {
+        throw new Error(body.error ?? "failed to run policy tests");
+      }
+      return body;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["audit"] });
+      qc.invalidateQueries({ queryKey: ["breaches"] });
+    },
+  });
 }

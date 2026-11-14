@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_time ON events (time);
 CREATE INDEX IF NOT EXISTS idx_events_key_id_time ON events (key_id, time);
 CREATE INDEX IF NOT EXISTS idx_events_decision_time ON events (decision, time);
+CREATE INDEX IF NOT EXISTS idx_events_decision_rule_time ON events (decision, rule_id, time);
 
 CREATE TABLE IF NOT EXISTS revisions (
 	id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1055,4 +1056,398 @@ func (m *dbManager) queryAggregate(ctx context.Context, since, until time.Time, 
 	}
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].BucketNS < sorted[j].BucketNS })
 	return sorted, nil
+}
+
+// BreachFilter specifies query criteria for security breaches.
+type BreachFilter struct {
+	Since      time.Time
+	Until      time.Time
+	Severity   string // optional: "critical", "high", "medium"
+	Stage      string
+	RulePrefix string
+	KeyID      string
+	Limit      int
+}
+
+// BreachSummary aggregates counts across breach severity levels.
+type BreachSummary struct {
+	Critical int64 `json:"critical"`
+	High     int64 `json:"high"`
+	Medium   int64 `json:"medium"`
+	Total    int64 `json:"total"`
+}
+
+// BreachBucket represents counts in one time bucket.
+type BreachBucket struct {
+	BucketNS int64 `json:"bucket_ns"`
+	Critical int64 `json:"critical"`
+	High     int64 `json:"high"`
+	Medium   int64 `json:"medium"`
+}
+
+// TopOffender represents an agent with high breach frequency.
+type TopOffender struct {
+	KeyID         string `json:"key_id"`
+	Count         int64  `json:"count"`
+	CriticalCount int64  `json:"critical_count"`
+	LastTime      string `json:"last_time"`
+	TopRuleID     string `json:"top_rule_id"`
+}
+
+// BreachResult is the response payload for GET /v1/audit/breaches.
+type BreachResult struct {
+	Summary      BreachSummary  `json:"summary"`
+	Buckets      []BreachBucket `json:"buckets"`
+	TopOffenders []TopOffender  `json:"top_offenders"`
+	Events       []Event        `json:"events"`
+}
+
+// AgentSummary represents aggregated metrics for an agent in a time window.
+type AgentSummary struct {
+	KeyID          string `json:"key_id"`
+	Total          int64  `json:"total"`
+	Deny           int64  `json:"deny"`
+	BreachCount    int64  `json:"breach_count"`
+	LastActive     string `json:"last_active"`
+	DailyToolCalls int64  `json:"daily_tool_calls"`
+}
+
+// Breaches returns aggregated breach statistics, buckets, top offenders, and breach events.
+func (l *Logger) Breaches(ctx context.Context, f BreachFilter, buckets int) (*BreachResult, error) {
+	return l.mgr.queryBreaches(ctx, f, buckets)
+}
+
+// AgentsSummary returns aggregated statistics grouped by key_id since the given time.
+func (l *Logger) AgentsSummary(ctx context.Context, since time.Time) ([]AgentSummary, error) {
+	return l.mgr.queryAgentsSummary(ctx, since)
+}
+
+func (m *dbManager) getDayFiles(since time.Time) ([]string, error) {
+	entries, err := os.ReadDir(m.baseDir)
+	if err != nil {
+		return nil, err
+	}
+	var dailyFiles []string
+	var hasLegacy bool
+	legacyName := filepath.Base(m.origPath)
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, "audit-") && strings.HasSuffix(name, ".db") {
+			dailyFiles = append(dailyFiles, name)
+		} else if name == legacyName && !strings.HasPrefix(name, "audit-") {
+			hasLegacy = true
+		}
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(dailyFiles)))
+	files := dailyFiles
+	if hasLegacy {
+		files = append(files, legacyName)
+	}
+	var res []string
+	for _, fn := range files {
+		if strings.HasPrefix(fn, "audit-") && !since.IsZero() {
+			dayStr := strings.TrimPrefix(fn, "audit-")
+			dayStr = strings.TrimSuffix(dayStr, ".db")
+			if t, err := time.Parse("20060102", dayStr); err == nil {
+				if t.Add(24 * time.Hour).Before(since) {
+					break
+				}
+			}
+		}
+		res = append(res, fn)
+	}
+	return res, nil
+}
+
+func (m *dbManager) queryBreaches(ctx context.Context, f BreachFilter, buckets int) (*BreachResult, error) {
+	since := f.Since
+	if since.IsZero() {
+		since = time.Now().Add(-24 * time.Hour)
+	}
+	until := f.Until
+	if until.IsZero() {
+		until = time.Now()
+	}
+	if !until.After(since) {
+		return nil, fmt.Errorf("audit: until must be after since")
+	}
+	if buckets <= 0 || buckets > 500 {
+		buckets = 24
+	}
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	widthNS := until.Sub(since).Nanoseconds() / int64(buckets)
+	if widthNS < 1 {
+		widthNS = 1
+	}
+
+	bucketList := make([]BreachBucket, buckets)
+	for i := 0; i < buckets; i++ {
+		bucketList[i] = BreachBucket{
+			BucketNS: since.UnixNano() + int64(i)*widthNS,
+		}
+	}
+
+	type offenderTracker struct {
+		keyID         string
+		count         int64
+		criticalCount int64
+		lastTime      time.Time
+		ruleCounts    map[string]int64
+	}
+	offenders := make(map[string]*offenderTracker)
+
+	var summary BreachSummary
+	allEvents := []Event{}
+
+	where := []string{"decision = 'deny'", "time >= ?", "time < ?"}
+	qargs := []any{since.UnixNano(), until.UnixNano()}
+	if f.KeyID != "" {
+		where = append(where, "key_id = ?")
+		qargs = append(qargs, f.KeyID)
+	}
+	if f.Stage != "" {
+		where = append(where, "stage = ?")
+		qargs = append(qargs, f.Stage)
+	}
+
+	runOne := func(db *sql.DB) error {
+		if db == nil {
+			return nil
+		}
+		q := "SELECT " + eventCols + " FROM events WHERE " + strings.Join(where, " AND ") + " ORDER BY time DESC" //nolint:gosec // G202 whitelisted breach query cols
+		rows, err := db.QueryContext(ctx, q, qargs...)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+
+		for rows.Next() {
+			ev, err := scanEvent(rows.Scan)
+			if err != nil {
+				return err
+			}
+			if !IsSecurityRule(ev.RuleID) {
+				continue
+			}
+			if f.RulePrefix != "" && !strings.HasPrefix(ev.RuleID, f.RulePrefix) {
+				continue
+			}
+
+			sev := GetSeverity(ev.RuleID)
+			summary.Total++
+			switch sev {
+			case SeverityCritical:
+				summary.Critical++
+			case SeverityHigh:
+				summary.High++
+			case SeverityMedium:
+				summary.Medium++
+			}
+
+			bIdx := (ev.Time.UnixNano() - since.UnixNano()) / widthNS
+			if bIdx >= 0 && bIdx < int64(buckets) {
+				switch sev {
+				case SeverityCritical:
+					bucketList[bIdx].Critical++
+				case SeverityHigh:
+					bucketList[bIdx].High++
+				case SeverityMedium:
+					bucketList[bIdx].Medium++
+				}
+			}
+
+			off, ok := offenders[ev.KeyID]
+			if !ok {
+				off = &offenderTracker{
+					keyID:      ev.KeyID,
+					ruleCounts: make(map[string]int64),
+				}
+				offenders[ev.KeyID] = off
+			}
+			off.count++
+			if sev == SeverityCritical {
+				off.criticalCount++
+			}
+			if ev.Time.After(off.lastTime) {
+				off.lastTime = ev.Time
+			}
+			off.ruleCounts[ev.RuleID]++
+
+			if f.Severity == "" || strings.EqualFold(string(sev), f.Severity) {
+				allEvents = append(allEvents, ev)
+			}
+		}
+		return rows.Err()
+	}
+
+	if m.isMemory {
+		if err := runOne(m.dbs["memory"]); err != nil {
+			return nil, fmt.Errorf("audit: breaches: %w", err)
+		}
+	} else {
+		files, err := m.getDayFiles(since)
+		if err != nil {
+			return nil, fmt.Errorf("audit: read dir: %w", err)
+		}
+		for _, fn := range files {
+			db, err := m.getDBForFileRead(fn)
+			if err != nil {
+				continue
+			}
+			_ = runOne(db)
+		}
+	}
+
+	sort.Slice(allEvents, func(i, j int) bool {
+		return allEvents[i].Time.After(allEvents[j].Time)
+	})
+	if len(allEvents) > limit {
+		allEvents = allEvents[:limit]
+	}
+	if allEvents == nil {
+		allEvents = []Event{}
+	}
+
+	topList := make([]TopOffender, 0, len(offenders))
+	for _, off := range offenders {
+		topRule := ""
+		var maxRuleCount int64
+		for r, c := range off.ruleCounts {
+			if c > maxRuleCount {
+				maxRuleCount = c
+				topRule = r
+			}
+		}
+		topList = append(topList, TopOffender{
+			KeyID:         off.keyID,
+			Count:         off.count,
+			CriticalCount: off.criticalCount,
+			LastTime:      off.lastTime.UTC().Format(time.RFC3339),
+			TopRuleID:     topRule,
+		})
+	}
+	sort.Slice(topList, func(i, j int) bool {
+		if topList[i].Count != topList[j].Count {
+			return topList[i].Count > topList[j].Count
+		}
+		return topList[i].CriticalCount > topList[j].CriticalCount
+	})
+	if len(topList) > 10 {
+		topList = topList[:10]
+	}
+
+	return &BreachResult{
+		Summary:      summary,
+		Buckets:      bucketList,
+		TopOffenders: topList,
+		Events:       allEvents,
+	}, nil
+}
+
+func (m *dbManager) queryAgentsSummary(ctx context.Context, since time.Time) ([]AgentSummary, error) {
+	if since.IsZero() {
+		since = time.Now().Add(-24 * time.Hour)
+	}
+
+	type agentAccumulator struct {
+		keyID          string
+		total          int64
+		deny           int64
+		breachCount    int64
+		lastTime       time.Time
+		dailyToolCalls int64
+	}
+	agents := make(map[string]*agentAccumulator)
+
+	runOne := func(db *sql.DB) error {
+		if db == nil {
+			return nil
+		}
+		rows, err := db.QueryContext(ctx, "SELECT key_id, decision, rule_id, stage, time FROM events WHERE time >= ?", since.UnixNano())
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+
+		for rows.Next() {
+			var keyID, decision, ruleID, stage string
+			var ts int64
+			if err := rows.Scan(&keyID, &decision, &ruleID, &stage, &ts); err != nil {
+				return err
+			}
+			acc, ok := agents[keyID]
+			if !ok {
+				acc = &agentAccumulator{keyID: keyID}
+				agents[keyID] = acc
+			}
+			acc.total++
+			if decision == "deny" {
+				acc.deny++
+				if IsBreach(decision, ruleID) {
+					acc.breachCount++
+				}
+			}
+			if stage == "tool" {
+				acc.dailyToolCalls++
+			}
+			t := time.Unix(0, ts)
+			if t.After(acc.lastTime) {
+				acc.lastTime = t
+			}
+		}
+		return rows.Err()
+	}
+
+	if m.isMemory {
+		if err := runOne(m.dbs["memory"]); err != nil {
+			return nil, fmt.Errorf("audit: agents-summary: %w", err)
+		}
+	} else {
+		files, err := m.getDayFiles(since)
+		if err != nil {
+			return nil, fmt.Errorf("audit: read dir: %w", err)
+		}
+		for _, fn := range files {
+			db, err := m.getDBForFileRead(fn)
+			if err != nil {
+				continue
+			}
+			_ = runOne(db)
+		}
+	}
+
+	out := make([]AgentSummary, 0, len(agents))
+	for _, acc := range agents {
+		lastActive := ""
+		if !acc.lastTime.IsZero() {
+			lastActive = acc.lastTime.UTC().Format(time.RFC3339)
+		}
+		out = append(out, AgentSummary{
+			KeyID:          acc.keyID,
+			Total:          acc.total,
+			Deny:           acc.deny,
+			BreachCount:    acc.breachCount,
+			LastActive:     lastActive,
+			DailyToolCalls: acc.dailyToolCalls,
+		})
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].BreachCount != out[j].BreachCount {
+			return out[i].BreachCount > out[j].BreachCount
+		}
+		if out[i].Total != out[j].Total {
+			return out[i].Total > out[j].Total
+		}
+		return out[i].KeyID < out[j].KeyID
+	})
+
+	return out, nil
 }
