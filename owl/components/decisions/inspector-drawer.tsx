@@ -59,7 +59,7 @@ export function InspectorDrawer({ open, onOpenChange, event }: InspectorDrawerPr
       router.push(`/agents/${encodeURIComponent(event.key_id)}?prefill=allow:${encodeURIComponent(event.subject)}`);
     } else {
       // Restrict suspicious allow
-      router.push(`/agents/${encodeURIComponent(event.key_id)}?prefill=restricted:${encodeURIComponent(event.subject)}`);
+      router.push(`/agents/${encodeURIComponent(event.key_id)}/edit?prefill=restricted:${encodeURIComponent(event.subject)}`);
     }
   };
 
@@ -67,8 +67,8 @@ export function InspectorDrawer({ open, onOpenChange, event }: InspectorDrawerPr
     event.latency_us !== undefined && event.latency_us > 0
       ? event.latency_us < 1000
         ? `${event.latency_us} µs`
-        : `${(event.latency_us / 1000).toFixed(2)} ms`
-      : "< 1 ms";
+        : `${(event.latency_us / 1000).toFixed(1)} ms`
+      : "0 µs";
 
   return (
     <>

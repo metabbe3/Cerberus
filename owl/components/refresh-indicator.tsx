@@ -33,16 +33,17 @@ export function RefreshIndicator({
     if (isNaN(d.getTime())) return "baru saja";
     const diffSec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
     if (diffSec < 5) return "baru saja";
-    if (diffSec < 60) return `${diffSec}d lalu`;
-    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m lalu`;
-    return `${Math.floor(diffSec / 3600)}j lalu`;
+    if (diffSec < 60) return `${diffSec} dtk lalu`;
+    if (diffSec < 3600) return `${Math.floor(diffSec / 60)} mnt lalu`;
+    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} jam lalu`;
+    return `${Math.floor(diffSec / 86400)} hari lalu`;
   };
 
   return (
     <div className={`flex items-center gap-2 ${className}`}>
       <span className="text-[11px] font-mono text-muted-foreground whitespace-nowrap">
         Diperbarui {getRelativeText()}
-        {autoIntervalSec ? ` • auto ${autoIntervalSec}d` : ""}
+        {autoIntervalSec ? ` • auto ${autoIntervalSec} dtk` : ""}
       </span>
       {onRefresh && (
         <Button

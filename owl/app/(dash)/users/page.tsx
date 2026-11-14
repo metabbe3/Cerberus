@@ -14,6 +14,16 @@ import {
   Users,
 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -76,6 +86,7 @@ export default function UsersPage() {
 
   // Reset Password dialog state
   const [resetTargetUser, setResetTargetUser] = useState<UserItem | null>(null);
+  const [disableTargetUser, setDisableTargetUser] = useState<UserItem | null>(null);
   const [resetPassword, setResetPassword] = useState("");
   const [resetSubmitting, setResetSubmitting] = useState(false);
 
@@ -331,7 +342,7 @@ export default function UsersPage() {
                                 className={`h-8 gap-1 text-xs ${
                                   u.disabled ? "text-emerald-600" : "text-destructive"
                                 }`}
-                                onClick={() => handleToggleDisabled(u)}
+                                onClick={() => setDisableTargetUser(u)}
                               >
                                 {u.disabled ? (
                                   <>
@@ -479,6 +490,38 @@ export default function UsersPage() {
           </form>
         </DialogContent>
       </Dialog>
-    </div>
+    
+      {/* Konfirmasi Nonaktifkan user — aksi destruktif (cabut akses + sesi) */}
+      <AlertDialog
+        open={!!disableTargetUser && !disableTargetUser.disabled}
+        onOpenChange={(o) => {
+          if (!o) setDisableTargetUser(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Nonaktifkan {disableTargetUser?.username ?? ""}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Akses dan semua sesi aktif pengguna ini dicabut segera. Bisa
+              diaktifkan kembali nanti dari tabel user.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (disableTargetUser) void handleToggleDisabled(disableTargetUser);
+                setDisableTargetUser(null);
+              }}
+            >
+              Ya, Nonaktifkan
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+</div>
   );
 }

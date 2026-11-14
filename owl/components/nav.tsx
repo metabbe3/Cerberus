@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
+import { Menu, X } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -94,10 +96,52 @@ async function logout() {
 
 export function Nav() {
   const pathname = usePathname();
+  const [open, setOpen] = useState(false);
+
+  // Tutup drawer setelah navigasi.
+  useEffect(() => {
+    setOpen(false);
+  }, [pathname]);
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-40 flex w-60 flex-col border-r bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+    <>
+      {/* Bar atas mobile: hamburger + logo — dashboard tetap usable di 375px */}
+      <header className="sticky top-0 z-40 flex h-12 items-center gap-2 border-b bg-background/95 px-3 backdrop-blur lg:hidden">
+        <button
+          type="button"
+          aria-label="Buka menu navigasi"
+          aria-expanded={open}
+          onClick={() => setOpen(true)}
+          className="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <Menu className="size-5" aria-hidden />
+        </button>
+        <Link href="/overview" className="flex items-center gap-2">
+          <span className="grid size-6 place-items-center rounded-md bg-primary/15 text-sm" aria-hidden>
+            🦉
+          </span>
+          <span className="text-sm font-semibold tracking-tight">Owl</span>
+        </Link>
+      </header>
+      {/* Overlay klik-untuk-tutup */}
+      {open ? (
+        <button
+          type="button"
+          aria-label="Tutup menu"
+          className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+          onClick={() => setOpen(false)}
+        />
+      ) : null}
+    <aside className={`fixed inset-y-0 left-0 z-50 flex w-60 max-w-[85vw] flex-col border-r bg-background/95 backdrop-blur transition-transform duration-200 supports-[backdrop-filter]:bg-background/80 ${open ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0`}>
       <div className="flex h-14 items-center gap-2 border-b px-4">
+        <button
+          type="button"
+          aria-label="Tutup menu"
+          onClick={() => setOpen(false)}
+          className="mr-1 inline-flex size-9 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground lg:hidden"
+        >
+          <X className="size-5" aria-hidden />
+        </button>
         <Link href="/overview" className="flex items-center gap-2">
           <span className="grid size-7 place-items-center rounded-md bg-primary/15 text-base" aria-hidden>
             🦉
@@ -143,5 +187,6 @@ export function Nav() {
         </Button>
       </div>
     </aside>
+    </>
   );
 }

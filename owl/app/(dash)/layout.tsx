@@ -6,7 +6,7 @@ export default function DashLayout({ children }: { children: React.ReactNode }) 
   return (
     <>
       <Nav />
-      <div className="pl-60">
+      <div className="lg:pl-60">
         <GlobalSafetyBanner />
         <main className="mx-auto max-w-6xl px-4 py-8">{children}</main>
       </div>

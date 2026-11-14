@@ -24,6 +24,16 @@ import { EmptyState } from "@/components/empty-state";
 import { RefreshIndicator } from "@/components/refresh-indicator";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -157,6 +167,8 @@ function BreachCenterContent() {
   const summary = breachData?.summary ?? { total: 0, critical: 0, high: 0, medium: 0 };
   const topOffenders = breachData?.top_offenders ?? [];
   const buckets = breachData?.buckets ?? [];
+
+  const [killTarget, setKillTarget] = useState<string | null>(null);
 
   const toggleExpand = (id: string) => {
     setExpandedSignals((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -404,7 +416,13 @@ function BreachCenterContent() {
                         variant={isKilled ? "outline" : "destructive"}
                         size="sm"
                         disabled={putDataMutation.isPending}
-                        onClick={() => handleKillAgent(off.key_id)}
+                        onClick={() => {
+                            if (isKilled) {
+                              handleKillAgent(off.key_id);
+                            } else {
+                              setKillTarget(off.key_id);
+                            }
+                          }}
                         className="h-6 text-[10px] px-2 font-mono shrink-0"
                       >
                         {isKilled ? (
@@ -685,13 +703,45 @@ function BreachCenterContent() {
         onOpenChange={setDrawerOpen}
         event={selectedEvent}
       />
+              {/* Konfirmasi Kill agen — memutus SEMUA trafik key ini di gerbang */}
+        <AlertDialog
+          open={!!killTarget}
+          onOpenChange={(o) => {
+            if (!o) setKillTarget(null);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                Kill agen <span className="font-mono">{killTarget ?? ""}</span>?
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                Semua request key ini ditolak gerbang seketika (fail-closed).
+                Pulihkan kapan saja dari tombol Pulihkan.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Batal</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={() => {
+                  if (killTarget) handleKillAgent(killTarget);
+                  setKillTarget(null);
+                }}
+              >
+                Ya, Kill
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
     </div>
   );
 }
 
 export default function BreachCenterPage() {
   return (
-    <Suspense fallback={<div className="p-8 text-center text-xs text-muted-foreground">Memuat data breach center…</div>}>
+    <Suspense fallback={<div className="p-8 text-center text-xs text-muted-foreground">Memuat data breach center…
+</div>}>
       <BreachCenterContent />
     </Suspense>
   );

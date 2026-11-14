@@ -51,9 +51,9 @@ export function AgentDecisionsTab({ keyId }: { keyId: string }) {
 
   const handleCreateRule = (ev: AuditEvent) => {
     if (ev.stage === "tool") {
-      router.push(`/agents/${ev.key_id}?prefill=restricted:${encodeURIComponent(ev.subject)}`);
+      router.push(`/agents/${ev.key_id}/edit?prefill=restricted:${encodeURIComponent(ev.subject)}`);
     } else {
-      router.push(`/agents/${ev.key_id}?prefill=llm:${encodeURIComponent(ev.subject)}`);
+      router.push(`/agents/${ev.key_id}/edit?prefill=llm:${encodeURIComponent(ev.subject)}`);
     }
   };
 
