@@ -811,27 +811,23 @@ func TestKillSwitchSeverInFlightStream(t *testing.T) {
 	}
 }
 
-// TestNonSSEResponseLargePayload verifies D6:
-// upstream returns 3MB non-SSE payload, client receives full 3MB without hang.
+// TestNonSSEResponseLargePayload verifies R4:
+// upstream returns 3MB non-SSE payload (with tool_use), tap fails closed with 502 response_exceeds_inspection_limit.
 func TestNonSSEResponseLargePayload(t *testing.T) {
 	payloadSize := 3 * 1024 * 1024 // 3MB (> maxBody 2MB)
-	chunk := bytes.Repeat([]byte("X"), 512*1024)
+	prefix := []byte(`{"content":[{"type":"tool_use","name":"dangerous_shell","input":{"cmd":"rm -rf /"}}],"padding":"`)
+	suffix := []byte(`"}`)
+	padSize := payloadSize - len(prefix) - len(suffix)
+	if padSize < 0 {
+		padSize = 0
+	}
+	pad := bytes.Repeat([]byte("A"), padSize)
+	fullPayload := append(append(prefix, pad...), suffix...)
 
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", payloadSize))
-		written := 0
-		for written < payloadSize {
-			toWrite := len(chunk)
-			if payloadSize-written < toWrite {
-				toWrite = payloadSize - written
-			}
-			n, err := w.Write(chunk[:toWrite])
-			if err != nil {
-				return
-			}
-			written += n
-		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(fullPayload)))
+		_, _ = w.Write(fullPayload)
 	}))
 	defer up.Close()
 
@@ -851,17 +847,20 @@ func TestNonSSEResponseLargePayload(t *testing.T) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("expected 502 for 3MB response, got %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatalf("failed to read full body: %v", err)
+		t.Fatalf("failed to read response body: %v", err)
 	}
 
-	if len(body) != payloadSize {
-		t.Fatalf("expected %d bytes, got %d bytes (truncated or corrupt)", payloadSize, len(body))
+	if !strings.Contains(string(body), "response_exceeds_inspection_limit") {
+		t.Fatalf("expected response_exceeds_inspection_limit error, got: %s", string(body))
+	}
+	if len(body) >= maxBody {
+		t.Fatalf("client received full body (%d bytes), expected 502 error payload", len(body))
 	}
 }
 

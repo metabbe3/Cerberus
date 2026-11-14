@@ -18,8 +18,17 @@ import (
 // PG is a PostgreSQL mirror of the gateway data document. Every operation is
 // logged with its duration so gateway-data changes are traceable end to end.
 type PG struct {
-	db  *sql.DB
-	log *slog.Logger
+	db         *sql.DB
+	log        *slog.Logger
+	SaveDataFn func(ctx context.Context, data map[string]any) error
+}
+
+// NewTestPG creates a PG mirror instance configured with a custom SaveData function for testing.
+func NewTestPG(saveDataFn func(ctx context.Context, data map[string]any) error) *PG {
+	return &PG{
+		log:        slog.Default().With("component", "test_pg_store"),
+		SaveDataFn: saveDataFn,
+	}
 }
 
 // Open connects using a DSN (postgres://... or pgx://...). Callers must Close.
@@ -167,6 +176,9 @@ func (p *PG) loadData(ctx context.Context) (map[string]any, error) {
 // (delete+insert tables it owns; upsert singletons). Agents absent from the
 // document are disabled, not deleted — audit history keeps key_ids stable.
 func (p *PG) SaveData(ctx context.Context, data map[string]any) error {
+	if p.SaveDataFn != nil {
+		return p.SaveDataFn(ctx, data)
+	}
 	start := time.Now()
 	err := p.saveData(ctx, data)
 	if err != nil {

@@ -131,7 +131,7 @@ host_allowed if {
 	host_matches(pattern, req_host)
 }
 
-host_matches(pattern, h) if authz.pattern_matches(pattern, h)
+host_matches(pattern, h) if authz.host_matches(pattern, h)
 
 # Method allowlist: when defined on agent or team, method must be listed
 method_not_allowed if {

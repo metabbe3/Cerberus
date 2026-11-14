@@ -200,6 +200,40 @@ test_http_punycode_homoglyph_denied if {
 	out.rule_id == "http.host_not_allowed"
 }
 
+# R2: Host allowlist exact & wildcard matching — evil.com suffix / substring attacks denied
+test_http_evil_com_suffix_denied if {
+	out := decide({
+		"stage": "http",
+		"key_id": "k-http",
+		"resource": "https://api.github.com.evil.com/leak",
+		"args": {"method": "GET"},
+	})
+	out.decision == "deny"
+	out.rule_id == "http.host_not_allowed"
+}
+
+test_http_wildcard_suffix_evil_denied if {
+	out := decide({
+		"stage": "http",
+		"key_id": "k-http",
+		"resource": "https://service.internal.corp.evil.com/leak",
+		"args": {"method": "GET"},
+	})
+	out.decision == "deny"
+	out.rule_id == "http.host_not_allowed"
+}
+
+test_http_userinfo_bypass_denied if {
+	out := decide({
+		"stage": "http",
+		"key_id": "k-http",
+		"resource": "https://api.github.com@evil.com/leak",
+		"args": {"method": "GET"},
+	})
+	out.decision == "deny"
+	out.rule_id == "http.host_not_allowed"
+}
+
 # Layer 3: Bypass
 test_http_stranger_bypass_allowed if {
 	out := decide({

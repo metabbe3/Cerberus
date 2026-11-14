@@ -186,3 +186,69 @@ test_ssh_prod_shield_blocked if {
 	out.decision == "deny"
 	out.rule_id == "shield.prod.ip_blocked"
 }
+
+# R2: Host allowlist exact & wildcard matching verification
+test_ssh_exact_match_allowed if {
+	out := decide({
+		"stage": "ssh",
+		"key_id": "k-open",
+		"action": "connect",
+		"host": "bastion.corp",
+		"user": "ubuntu",
+		"port": 22,
+	})
+	out.decision == "allow"
+	out.rule_id == "ssh.allow"
+}
+
+test_ssh_wildcard_api_teknikal_allowed if {
+	out := decide({
+		"stage": "ssh",
+		"key_id": "k-open",
+		"action": "connect",
+		"host": "api.teknikal.id",
+		"user": "ubuntu",
+		"port": 22,
+	})
+	out.decision == "allow"
+	out.rule_id == "ssh.allow"
+}
+
+test_ssh_evil_subdomain_suffix_denied if {
+	out := decide({
+		"stage": "ssh",
+		"key_id": "k-open",
+		"action": "connect",
+		"host": "evil.teknikal.id.evil.com",
+		"user": "ubuntu",
+		"port": 22,
+	})
+	out.decision == "deny"
+	out.rule_id == "ssh.host_not_allowed"
+}
+
+test_ssh_teknikal_id_evil_com_denied if {
+	out := decide({
+		"stage": "ssh",
+		"key_id": "k-open",
+		"action": "connect",
+		"host": "teknikal.id.evil.com",
+		"user": "ubuntu",
+		"port": 22,
+	})
+	out.decision == "deny"
+	out.rule_id == "ssh.host_not_allowed"
+}
+
+test_ssh_userinfo_spoof_denied if {
+	out := decide({
+		"stage": "ssh",
+		"key_id": "k-open",
+		"action": "connect",
+		"host": "api.teknikal.id@evil.com",
+		"user": "ubuntu",
+		"port": 22,
+	})
+	out.decision == "deny"
+	out.rule_id == "ssh.host_not_allowed"
+}

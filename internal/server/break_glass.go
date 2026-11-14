@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -95,9 +96,11 @@ func (bg *breakGlassManager) Status(keyID string) map[string]any {
 }
 
 func (s *Server) isPrivilegedAdmin(r *http.Request) bool {
-	// 1. Unix domain socket caller
-	if r.RemoteAddr == "@" || strings.HasPrefix(r.RemoteAddr, "/") || r.RemoteAddr == "" {
-		return true
+	// 1. Unix domain socket caller (only if explicitly trusted via CERBERUS_TRUST_UNIX_SOCKET=true)
+	if os.Getenv("CERBERUS_TRUST_UNIX_SOCKET") == "true" || os.Getenv("CERBERUS_TRUST_UNIX_SOCKET") == "1" {
+		if r.RemoteAddr == "@" || strings.HasPrefix(r.RemoteAddr, "/") {
+			return true
+		}
 	}
 	// 2. Admin bearer token
 	tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")

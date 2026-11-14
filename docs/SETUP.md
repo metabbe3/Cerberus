@@ -61,6 +61,42 @@ Every service supports declarative configuration via environment variables and C
 | `CERBERUS_LOG_LEVEL` | `-log-level` | `info` | No | Structured log level (`debug`, `info`, `warn`, `error`). |
 | `CERBERUS_CACHE_SIZE` | `-cache-size` | `10000` | No | Maximum entries in the LRU decision cache. |
 | `CERBERUS_EVAL_TIMEOUT` | `-eval-timeout` | `10ms` | No | Execution timeout budget per policy evaluation (e.g. `10ms`, `5s`). |
+| `CERBERUS_REQUIRE_AGENT_KEYS` | *(env only)* | `false` | No | When `true`, enforces that all decide requests must provide `X-Agent-Key` matching `data.agents.<id>.api_key_sha256`. |
+| `CERBERUS_TRUST_UNIX_SOCKET` | *(env only)* | `false` | No | When `true`, callers connecting via Unix domain socket (`@` or `/`) are treated as privileged admin. Default `false`. |
+
+#### 2.1.1 Agent Authentication (`X-Agent-Key`)
+
+To prevent agent impersonation in multi-tenant environments, Cerberus supports binding agent identities (`key_id`) to secrets:
+
+1. **Configure Agent Secret Hash**: In `data/prod.json` (or dynamic data updates), define `api_key_sha256` (hex-encoded SHA-256 hash of the agent secret):
+   ```json
+   {
+     "agents": {
+       "k-prod-worker": {
+         "name": "Production Worker Agent",
+         "api_key_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+         "allowed_tools": ["kubernetes_get_pods", "search"]
+       }
+     }
+   }
+   ```
+2. **Client Requests**: The client includes the raw secret in the `X-Agent-Key` HTTP header:
+   ```bash
+   curl -X POST http://127.0.0.1:8089/v1/decide/tool \
+     -H "Content-Type: application/json" \
+     -H "X-Agent-Key: my-secret-agent-token" \
+     -d '{"key_id":"k-prod-worker","tool_call":"kubernetes_get_pods","args":{}}'
+   ```
+3. **Go SDK Configuration**:
+   ```go
+   client := cerberus.NewClient("http://127.0.0.1:8089", cerberus.ClientOptions{
+       AgentKey: "my-secret-agent-token",
+   })
+   ```
+4. **Enforcement Behavior**:
+   - If `api_key_sha256` is configured for the agent: missing `X-Agent-Key` returns `401 agent_key_required`; incorrect secret returns `401 agent_key_invalid`.
+   - If `CERBERUS_REQUIRE_AGENT_KEYS=true`: all non-admin decide requests must provide a valid secret for a configured agent, rejecting unkeyed agents with `401 agent_key_required`.
+   - Admin bearer requests (`Authorization: Bearer <CERBERUS_ADMIN_TOKEN>`) bypass agent key checks.
 
 ---
 

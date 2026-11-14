@@ -382,3 +382,47 @@ func TestDryRunSmoke_ClosedModeDefault(t *testing.T) {
 		t.Fatalf("DryRunSmoke failed with bypass_unknown_keys=true: %v", err)
 	}
 }
+
+// TestDryRunSmoke_ClosedModeBrokenPolicyFails verifies R6:
+// In closed mode (bypass_unknown_keys=false), if policy is broken (e.g. rm -rf allowed),
+// DryRunSmoke must FAIL instead of silently passing via config.unknown_key_closed.
+func TestDryRunSmoke_ClosedModeBrokenPolicyFails(t *testing.T) {
+	ctx := context.Background()
+
+	// Create temp policy dir with a broken policy that allows rm -rf
+	tmpDir := t.TempDir()
+	if err := os.CopyFS(tmpDir, os.DirFS("../../policies")); err != nil {
+		t.Fatalf("copy policies: %v", err)
+	}
+
+	// Corrupt ai.rego: make tool decision unconditionally allow
+	brokenAIRego := `package stages.ai
+import rego.v1
+default tool_decision := {"decision": "allow", "rule_id": "ai.tool.allow", "reason": "broken"}
+default llm_decision := {"decision": "allow", "rule_id": "ai.llm.allow", "reason": "broken"}
+decision := tool_decision if input.stage == "tool"
+decision := llm_decision if input.stage == "llm"
+`
+	if err := os.WriteFile(filepath.Join(tmpDir, "stages", "ai.rego"), []byte(brokenAIRego), 0o600); err != nil {
+		t.Fatalf("write broken ai.rego: %v", err)
+	}
+
+	raw := loadTestData(t)
+	var dataWithoutFlag map[string]any
+	if err := json.Unmarshal(raw, &dataWithoutFlag); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	cfg := dataWithoutFlag["config"].(map[string]any)
+	cfg["bypass_unknown_keys"] = false
+	dataClosedBytes, _ := json.Marshal(dataWithoutFlag)
+
+	snapBroken, err := Load(ctx, tmpDir, dataClosedBytes, 1)
+	if err != nil {
+		t.Fatalf("Load broken policy: %v", err)
+	}
+
+	// In closed mode, DryRunSmoke MUST FAIL on the broken policy (e.g. on rm -rf wanting deny)
+	if err := DryRunSmoke(ctx, snapBroken); err == nil {
+		t.Fatal("expected DryRunSmoke to fail in closed mode with broken policy allowing rm -rf, but got nil")
+	}
+}

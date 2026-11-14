@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/metabbe3/cerberus/internal/util"
+	"github.com/open-policy-agent/opa/v1/ast"
 )
 
 // ErrNoRollback is returned when rollback is requested but no previous snapshot is available.
@@ -53,7 +54,7 @@ const (
 
 // safeRel validates that name does not escape its target directory via path traversal.
 // It rejects if strings.Contains(name, "..") in any path segment or if !filepath.IsLocal(rel)
-// after Clean and TrimPrefix.
+// after Clean and repeated TrimPrefix of "policies/".
 func safeRel(name string) (string, error) {
 	slashName := filepath.ToSlash(name)
 	for _, seg := range strings.Split(slashName, "/") {
@@ -62,9 +63,15 @@ func safeRel(name string) (string, error) {
 		}
 	}
 	rel := filepath.Clean(name)
-	rel = strings.TrimPrefix(rel, "policies/")
-	rel = strings.TrimPrefix(rel, "policies\\")
-	rel = filepath.Clean(rel)
+	for {
+		trimmed := strings.TrimPrefix(rel, "policies/")
+		trimmed = strings.TrimPrefix(trimmed, "policies\\")
+		trimmed = filepath.Clean(trimmed)
+		if trimmed == rel {
+			break
+		}
+		rel = trimmed
+	}
 	if !filepath.IsLocal(rel) || rel == "." || rel == "" {
 		return "", fmt.Errorf("bundle: %w: path is not local: %q", ErrData, name)
 	}
@@ -175,8 +182,8 @@ func ReadBundle(r io.Reader) (*Bundle, error) {
 		}
 	}
 
-	// Also verify that no rego file attempts to overwrite local core modules
-	for name := range b.RegoFiles {
+	// Also verify that no rego file attempts to overwrite local core modules or declare core packages
+	for name, content := range b.RegoFiles {
 		rel, err := safeRel(name)
 		if err != nil {
 			return nil, err
@@ -184,6 +191,19 @@ func ReadBundle(r io.Reader) (*Bundle, error) {
 		if strings.HasPrefix(rel, "gateway/") || strings.HasPrefix(rel, "shield/") || rel == "gateway.rego" || rel == "shield.rego" {
 			slog.Warn("bundle refused: rego file overlaps with local core", "file", name)
 			return nil, fmt.Errorf("bundle: %w: file %s overwrites local core module (gateway/shield)", ErrData, name)
+		}
+
+		parsed, err := ast.ParseModule(rel, string(content))
+		if err != nil {
+			return nil, fmt.Errorf("bundle: %w: parse rego file %s: %v", ErrCompile, name, err)
+		}
+		if parsed != nil && parsed.Package != nil {
+			pkg := parsed.Package.Path.String()
+			pkg = strings.TrimPrefix(pkg, "data.")
+			if strings.HasPrefix(pkg, "gateway.") || pkg == "gateway" || strings.HasPrefix(pkg, "shield.") || pkg == "shield" {
+				slog.Warn("bundle refused: rego file declares core package", "file", name, "package", pkg)
+				return nil, fmt.Errorf("bundle: %w: file %s declares forbidden core package %q (gateway/shield)", ErrData, name, pkg)
+			}
 		}
 	}
 

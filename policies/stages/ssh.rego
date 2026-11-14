@@ -111,26 +111,8 @@ action_invalid if {
 	action != "exec"
 }
 
-# Host pattern matching: supports wildcard subdomain (*.teknikal.id), glob, prefix, exact
-host_matches(pattern, h) if {
-	startswith(pattern, "*.")
-	suffix := substring(pattern, 1, -1)
-	endswith(lower(h), lower(suffix))
-}
-
-host_matches("*", _) if true
-
-host_matches(pattern, h) if {
-	pattern != "*"
-	not startswith(pattern, "*.")
-	authz.pattern_matches(pattern, h)
-}
-
-host_matches(pattern, h) if {
-	pattern != "*"
-	not startswith(pattern, "*.")
-	lower(pattern) == lower(h)
-}
+# Host pattern matching: delegates to secure host_matches in authz
+host_matches(pattern, h) if authz.host_matches(pattern, h)
 
 # Host deny rule (checked first)
 host_denied if {

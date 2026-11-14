@@ -2,9 +2,14 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/metabbe3/cerberus/internal/audit"
@@ -46,6 +51,45 @@ func (s *Server) decide(stage string) http.HandlerFunc {
 			}
 			if callerKey != "" && in.KeyID != "" && callerKey != in.KeyID {
 				writeErr(w, http.StatusUnauthorized, "unauthorized: key_id mismatch with credential")
+				return
+			}
+
+			// R1: Agent secret verification via X-Agent-Key header.
+			// If agent has api_key_sha256 configured, X-Agent-Key is mandatory and must match.
+			// If CERBERUS_REQUIRE_AGENT_KEYS=true, all non-admin requests must provide a valid agent key.
+			requireKeys := os.Getenv("CERBERUS_REQUIRE_AGENT_KEYS") == "true" || os.Getenv("CERBERUS_REQUIRE_AGENT_KEYS") == "1"
+			agentKeyHeader := r.Header.Get("X-Agent-Key")
+
+			var expectedHash string
+			if s.deps.Store != nil {
+				if snap := s.deps.Store.Current(); snap != nil && snap.Data != nil {
+					if agents, ok := snap.Data["agents"].(map[string]any); ok {
+						if ag, ok := agents[in.KeyID].(map[string]any); ok {
+							if h, ok := ag["api_key_sha256"].(string); ok {
+								expectedHash = strings.ToLower(strings.TrimSpace(h))
+							}
+						}
+					}
+				}
+			}
+
+			if expectedHash != "" {
+				if agentKeyHeader == "" {
+					writeErrCode(w, http.StatusUnauthorized, "agent_key_required", "agent_key_required")
+					return
+				}
+				hdrHashBytes := sha256.Sum256([]byte(agentKeyHeader))
+				hdrHash := hex.EncodeToString(hdrHashBytes[:])
+				if subtle.ConstantTimeCompare([]byte(hdrHash), []byte(expectedHash)) != 1 {
+					writeErrCode(w, http.StatusUnauthorized, "agent_key_invalid", "agent_key_invalid")
+					return
+				}
+			} else if requireKeys {
+				if agentKeyHeader == "" {
+					writeErrCode(w, http.StatusUnauthorized, "agent_key_required", "agent_key_required")
+					return
+				}
+				writeErrCode(w, http.StatusUnauthorized, "agent_key_invalid", "agent_key_invalid")
 				return
 			}
 		}

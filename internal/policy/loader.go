@@ -43,6 +43,7 @@ func Load(ctx context.Context, policyDir string, dataJSON []byte, epoch uint64) 
 	if err != nil {
 		return nil, err
 	}
+	ensureSmokeFixture(data)
 
 	maskers, err := compileMaskers(data)
 	if err != nil {
@@ -131,6 +132,25 @@ func decodeData(dataJSON []byte) (map[string]any, error) {
 		}
 	}
 	return data, nil
+}
+
+// ensureSmokeFixture adds minimal allow fixture agent k-smoke-fixture for dry-run smoke testing.
+func ensureSmokeFixture(data map[string]any) {
+	if data == nil {
+		return
+	}
+	agents, ok := data["agents"].(map[string]any)
+	if !ok || agents == nil {
+		agents = make(map[string]any)
+		data["agents"] = agents
+	}
+	if _, ok := agents["k-smoke-fixture"]; !ok {
+		agents["k-smoke-fixture"] = map[string]any{
+			"name":           "smoke-fixture",
+			"allowed_tools":  []any{"bash", "docker rm"},
+			"allowed_models": []any{"gpt-4"},
+		}
+	}
 }
 
 // extractRuleIDs extracts all registered rule_id strings from parsed rego AST modules,

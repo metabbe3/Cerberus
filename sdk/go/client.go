@@ -47,6 +47,7 @@ func (d Decision) Allowed() bool {
 type ClientOptions struct {
 	BaseURL      string
 	KeyID        string
+	AgentKey     string // optional secret key verified via X-Agent-Key header
 	HTTPClient   *http.Client
 	MaxRetries   int
 	RetryDelay   time.Duration
@@ -218,6 +219,9 @@ func (c *Client) doWithRetry(ctx context.Context, body []byte) (Decision, error)
 		req.Header.Set("Content-Type", "application/json")
 		if c.opts.KeyID != "" {
 			req.Header.Set("X-Cerberus-Key", c.opts.KeyID)
+		}
+		if c.opts.AgentKey != "" {
+			req.Header.Set("X-Agent-Key", c.opts.AgentKey)
 		}
 
 		resp, err := c.httpClient.Do(req)

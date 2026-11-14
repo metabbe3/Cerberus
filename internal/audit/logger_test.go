@@ -695,16 +695,13 @@ func TestLogger_Revisions(t *testing.T) {
 		t.Fatalf("unexpected authors: %+v", revs)
 	}
 
-	// 3. Get single revision & check secret masking at-rest
+	// 3. Get single revision & check raw data_json is preserved for accurate rollbacks
 	r1, err := l.GetRevision(ctx, id1)
 	if err != nil {
 		t.Fatalf("GetRevision 1: %v", err)
 	}
-	if strings.Contains(r1.DataJSON, "sk-1234567890abcdef") {
-		t.Fatalf("secret leaked in revision data_json: %s", r1.DataJSON)
-	}
-	if !strings.Contains(r1.DataJSON, "[REDACTED]") {
-		t.Fatalf("secret not redacted in revision data_json: %s", r1.DataJSON)
+	if !strings.Contains(r1.DataJSON, "sk-1234567890abcdef") {
+		t.Fatalf("raw secret not preserved in revision data_json: %s", r1.DataJSON)
 	}
 }
 

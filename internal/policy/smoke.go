@@ -36,10 +36,9 @@ func DryRunSmoke(ctx context.Context, snap *Snapshot) error {
 			name: "rm -rf",
 			input: map[string]any{
 				"stage":     "tool",
-				"key_id":    "k-stranger-smoke",
+				"key_id":    "k-smoke-fixture",
 				"tool_call": "bash",
 				"args":      map[string]any{"cmd": "rm -rf /"},
-				"bypass":    true,
 			},
 			wantDec:    "deny",
 			wantRuleID: "shield.cmd.dangerous",
@@ -48,10 +47,9 @@ func DryRunSmoke(ctx context.Context, snap *Snapshot) error {
 			name: "grep /etc/passwd",
 			input: map[string]any{
 				"stage":     "tool",
-				"key_id":    "k-stranger-smoke",
+				"key_id":    "k-smoke-fixture",
 				"tool_call": "bash",
 				"args":      map[string]any{"cmd": "grep * /etc/passwd"},
-				"bypass":    true,
 			},
 			wantDec:    "deny",
 			wantRuleID: "shield.cmd.dangerous",
@@ -60,10 +58,9 @@ func DryRunSmoke(ctx context.Context, snap *Snapshot) error {
 			name: "ls allow",
 			input: map[string]any{
 				"stage":     "tool",
-				"key_id":    "k-stranger-smoke",
+				"key_id":    "k-smoke-fixture",
 				"tool_call": "bash",
 				"args":      map[string]any{"cmd": "ls -la /tmp"},
-				"bypass":    true,
 			},
 			wantDec:    "allow",
 			wantRuleID: "",
@@ -72,10 +69,9 @@ func DryRunSmoke(ctx context.Context, snap *Snapshot) error {
 			name: "protected container",
 			input: map[string]any{
 				"stage":     "tool",
-				"key_id":    "k-stranger-smoke",
+				"key_id":    "k-smoke-fixture",
 				"tool_call": "docker rm",
 				"args":      map[string]any{"container": targetContainer},
-				"bypass":    true,
 			},
 			wantDec:    "deny",
 			wantRuleID: "shield.container.protected",
@@ -84,10 +80,9 @@ func DryRunSmoke(ctx context.Context, snap *Snapshot) error {
 			name: "happy llm/tool allow",
 			input: map[string]any{
 				"stage":    "llm",
-				"key_id":   "k-stranger-smoke",
+				"key_id":   "k-smoke-fixture",
 				"model":    "gpt-4",
 				"messages": []any{map[string]any{"role": "user", "content": "ping"}},
-				"bypass":   true,
 			},
 			wantDec:    "allow",
 			wantRuleID: "",
@@ -121,20 +116,7 @@ func DryRunSmoke(ctx context.Context, snap *Snapshot) error {
 		}
 	}
 
-	// Fail-closed deployments (bypass_unknown_keys != true) deny unknown keys
-	// outright, so stranger-key "expect allow" cases do not apply — skip them
-	// instead of forcing the data back to onboarding mode.
-	closedMode := true
-	if cfg, ok := snap.Data["config"].(map[string]any); ok {
-		if v, ok := cfg["bypass_unknown_keys"].(bool); ok && v {
-			closedMode = false
-		}
-	}
-
 	for _, sc := range cases {
-		if closedMode && sc.wantDec == "allow" && !registeredKey(snap.Data, sc.input) {
-			continue
-		}
 		rs, err := snap.Query.Eval(ctx, rego.EvalInput(sc.input))
 		if err != nil {
 			return fmt.Errorf("smoke eval '%s' error: %w", sc.name, err)
@@ -148,31 +130,18 @@ func DryRunSmoke(ctx context.Context, snap *Snapshot) error {
 		}
 		gotDec := strVal(val["decision"])
 		gotRule := strVal(val["rule_id"])
+
+		// R6: Deny-expectation is ONLY valid for real stage/shield rules.
+		// If got rule is config.unknown_key_closed on smoke fixture, fail immediately.
+		if gotRule == "config.unknown_key_closed" {
+			return fmt.Errorf("smoke test failed on '%s': got rule config.unknown_key_closed (smoke fixture k-smoke-fixture must be registered in closed mode)", sc.name)
+		}
 		if gotDec != sc.wantDec {
 			return fmt.Errorf("smoke test failed on '%s': got %s/%s, want %s", sc.name, gotDec, gotRule, sc.wantDec)
 		}
 		if sc.wantRuleID != "" && gotRule != sc.wantRuleID {
-			// A stranger-key deny under bypass_unknown_keys=false is equally
-			// fail-closed: accept config.unknown_key_closed wherever the case
-			// expected a deny from a stage rule.
-			if sc.wantDec != "deny" || gotRule != "config.unknown_key_closed" {
-				return fmt.Errorf("smoke test failed on '%s': got rule %s, want %s", sc.name, gotRule, sc.wantRuleID)
-			}
+			return fmt.Errorf("smoke test failed on '%s': got rule %s, want %s", sc.name, gotRule, sc.wantRuleID)
 		}
 	}
 	return nil
-}
-
-// registeredKey reports whether the case's key_id exists in data.agents.
-func registeredKey(data map[string]any, input map[string]any) bool {
-	k, _ := input["key_id"].(string)
-	if k == "" {
-		return false
-	}
-	agents, ok := data["agents"].(map[string]any)
-	if !ok {
-		return false
-	}
-	_, ok = agents[k].(map[string]any)
-	return ok
 }

@@ -2,11 +2,17 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/metabbe3/cerberus/internal/store"
 )
 
 func TestRegex_TestEndpoint(t *testing.T) {
@@ -168,4 +174,129 @@ func jsonString(t *testing.T, v any) string {
 		t.Fatalf("json marshal: %v", err)
 	}
 	return string(b)
+}
+
+func TestRules_RollbackRestoresRawSecretAndMirrorsPG(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+
+	var pgSaveCalls atomic.Int32
+	var lastSavedData atomic.Value
+	h.api.deps.PGMirror = store.NewTestPG(func(_ context.Context, data map[string]any) error {
+		pgSaveCalls.Add(1)
+		lastSavedData.Store(data)
+		return nil
+	})
+
+	// Step 1: PUT initial data with secret api_key
+	initialSnap := h.store.Current()
+	data1 := make(map[string]any)
+	for k, v := range initialSnap.Data {
+		data1[k] = v
+	}
+	agents1 := make(map[string]any)
+	if ag, ok := data1["agents"].(map[string]any); ok {
+		for ak, av := range ag {
+			agents1[ak] = av
+		}
+	}
+	secretVal := "mock-token-xyz-12345" // #nosec G101 -- test fixture token
+	agents1["k-secret-agent"] = map[string]any{
+		"name":    "secret-agent",
+		"api_key": secretVal,
+	}
+	data1["agents"] = agents1
+	bytes1, _ := json.Marshal(data1)
+
+	resp1 := h.do(t, http.MethodPut, "/v1/admin/data", "application/json", string(bytes1), true)
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("PUT /v1/admin/data status = %d, want 200", resp1.StatusCode)
+	}
+
+	// Verify revision recorded and PGMirror called
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && pgSaveCalls.Load() == 0 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if pgSaveCalls.Load() == 0 {
+		t.Fatal("expected PGMirror.SaveData call on initial PUT, got 0")
+	}
+
+	// Step 2: PUT second data modification
+	data2 := make(map[string]any)
+	for k, v := range data1 {
+		data2[k] = v
+	}
+	agents2 := make(map[string]any)
+	for ak, av := range agents1 {
+		agents2[ak] = av
+	}
+	agents2["k-secret-agent"] = map[string]any{
+		"name":    "secret-agent-v2",
+		"api_key": "changed-val",
+	}
+	data2["agents"] = agents2
+	bytes2, _ := json.Marshal(data2)
+
+	resp2 := h.do(t, http.MethodPut, "/v1/admin/data", "application/json", string(bytes2), true)
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("PUT /v1/admin/data v2 status = %d, want 200", resp2.StatusCode)
+	}
+
+	// Step 3: GET /v1/admin/revisions
+	// Verify that revision list masks secretVal into "[REDACTED]"
+	revResp := h.do(t, http.MethodGet, "/v1/admin/revisions", "", "", true)
+	if revResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /v1/admin/revisions status = %d, want 200", revResp.StatusCode)
+	}
+	revBody, _ := io.ReadAll(revResp.Body)
+	if strings.Contains(string(revBody), secretVal) {
+		t.Fatalf("GET /v1/admin/revisions leaked raw secret: %s", string(revBody))
+	}
+	if !strings.Contains(string(revBody), "[REDACTED]") {
+		t.Fatalf("GET /v1/admin/revisions missing [REDACTED] masking: %s", string(revBody))
+	}
+
+	type revItem struct {
+		ID int64 `json:"id"`
+	}
+	var revs []revItem
+	if err := json.Unmarshal(revBody, &revs); err != nil {
+		t.Fatalf("unmarshal revs: %v", err)
+	}
+	if len(revs) < 2 {
+		t.Fatalf("expected at least 2 revisions, got %d", len(revs))
+	}
+
+	// Step 4: Rollback to the revision containing data1 (revs[0].ID)
+	pgSaveCalls.Store(0)
+	targetRevID := revs[0].ID
+	rollbackReq := fmt.Sprintf(`{"revision_id": %d}`, targetRevID)
+	rbResp := h.do(t, http.MethodPost, "/v1/admin/rollback", "application/json", rollbackReq, true)
+	if rbResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /v1/admin/rollback status = %d, want 200", rbResp.StatusCode)
+	}
+
+	// Wait for goroutine PGMirror.SaveData
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && pgSaveCalls.Load() == 0 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if pgSaveCalls.Load() == 0 {
+		t.Fatal("PGMirror.SaveData was NOT called after rollback")
+	}
+
+	// Step 5: Verify current active store data has the raw secret, NOT [REDACTED]
+	curSnap := h.store.Current()
+	curAgents, _ := curSnap.Data["agents"].(map[string]any)
+	targetAgent, ok := curAgents["k-secret-agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("agent k-secret-agent missing after rollback")
+	}
+	if targetAgent["api_key"] != secretVal {
+		t.Fatalf("agent api_key = %v, want raw secret %q", targetAgent["api_key"], secretVal)
+	}
+	if targetAgent["api_key"] == "[REDACTED]" {
+		t.Fatal("agent api_key in active store was restored as [REDACTED]!")
+	}
 }

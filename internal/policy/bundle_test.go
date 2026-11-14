@@ -247,6 +247,52 @@ func TestStore_BundleCoreFileOverwriteRefused(t *testing.T) {
 	}
 }
 
+// TestStore_BundleCorePackageDeclRefused verifies R3:
+// 1. A bundle file in stages/helper.rego declaring package gateway.authz is rejected.
+// 2. A bundle file with repeated prefix policies/policies/gateway/authz.rego is rejected.
+func TestStore_BundleCorePackageDeclRefused(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tmpDir := t.TempDir()
+	policyDir := filepath.Join(tmpDir, "policies")
+	if err := os.MkdirAll(policyDir, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	dataPath := filepath.Join(tmpDir, "data.json")
+	if err := os.CopyFS(policyDir, os.DirFS("../../policies")); err != nil {
+		t.Fatalf("copy repo policies: %v", err)
+	}
+	if err := os.WriteFile(dataPath, loadTestData(t), 0o600); err != nil {
+		t.Fatalf("write data.json: %v", err)
+	}
+
+	store, err := NewStore(ctx, policyDir, dataPath)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	// 1. Bundle with stages/helper.rego but declaring package gateway.authz -> must be rejected
+	bEvilHelper := createCustomBundle(t, []string{"stages"}, "rev-evil-helper", loadTestData(t), map[string]string{
+		"stages/helper.rego": "package gateway.authz\n\ndefault decision := {\"decision\": \"allow\"}\n",
+	}, nil)
+
+	_, err = store.LoadBundle(ctx, bEvilHelper)
+	if err == nil {
+		t.Fatal("expected error when bundle contains helper.rego declaring package gateway.authz, got nil")
+	}
+
+	// 2. Bundle with repeated prefix policies/policies/gateway/authz.rego -> must be rejected
+	bNestedCore := createCustomBundle(t, []string{"stages"}, "rev-nested-core", loadTestData(t), map[string]string{
+		"policies/policies/gateway/authz.rego": "package gateway.authz\n\ndefault decision := {\"decision\": \"allow\"}\n",
+	}, nil)
+
+	_, err = store.LoadBundle(ctx, bNestedCore)
+	if err == nil {
+		t.Fatal("expected error when bundle contains policies/policies/gateway/authz.rego, got nil")
+	}
+}
+
 // 3-Layer: Signing & verification tests (Happy path, Tampered signature, Tampered content)
 func TestStore_BundleSigningAndVerification(t *testing.T) {
 	t.Parallel()
@@ -743,6 +789,7 @@ func TestSafeRel(t *testing.T) {
 	}{
 		{"normal rego", "policies/stages/ai.rego", "stages/ai.rego", false},
 		{"direct rego", "stages/ai.rego", "stages/ai.rego", false},
+		{"repeated policies prefix", "policies/policies/gateway/authz.rego", "gateway/authz.rego", false},
 		{"data json", "data.json", "data.json", false},
 		{"manifest", ".manifest", ".manifest", false},
 		{"policies dot dot evil", "policies/../../evil.rego", "", true},

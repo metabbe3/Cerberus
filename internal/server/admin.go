@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -71,14 +72,7 @@ func (s *Server) putData(w http.ResponseWriter, r *http.Request) {
 		writeStoreErr(w, "put data", err)
 		return
 	}
-	if s.deps.PGMirror != nil {
-		var doc map[string]any
-		if jerr := json.Unmarshal(body, &doc); jerr == nil {
-			if perr := s.deps.PGMirror.SaveData(r.Context(), doc); perr != nil {
-				slog.Error("pg mirror persist failed", "err", perr)
-			}
-		}
-	}
+	s.mirrorSaveData(snap.Data)
 
 	author := r.Header.Get("X-Admin-User")
 	if author == "" {
@@ -235,7 +229,48 @@ func (s *Server) listRevisions(w http.ResponseWriter, r *http.Request) {
 	if revs == nil {
 		revs = []audit.Revision{}
 	}
-	writeJSON(w, http.StatusOK, revs)
+	maskedRevs := make([]audit.Revision, len(revs))
+	for i, r := range revs {
+		maskedRevs[i] = r
+		if r.DataJSON != "" {
+			var d any
+			if err := json.Unmarshal([]byte(r.DataJSON), &d); err == nil {
+				redactSecretKeys(d)
+				masked, _ := masking.Apply(apiDataMaskRules, "", d)
+				if b, err := json.Marshal(masked); err == nil {
+					maskedRevs[i].DataJSON = string(b)
+				}
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, maskedRevs)
+}
+
+// secretKeyNames are agent/data field names whose VALUES must never be echoed
+// back by list endpoints regardless of pattern rules (defense in depth).
+var secretKeyNames = map[string]bool{
+	"api_key": true, "api_key_sha256": true, "secret": true, "password": true,
+	"token": true, "private_key": true, "client_secret": true, "ssh_pubkey_fingerprint": false,
+}
+
+// redactSecretKeys recursively replaces values of secret-named keys with a
+// redaction marker (map/slice walk, in place where possible).
+func redactSecretKeys(v any) {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			if secretKeyNames[k] {
+				if s, ok := val.(string); ok && s != "" {
+					t[k] = "[REDACTED]"
+				}
+			}
+			redactSecretKeys(val)
+		}
+	case []any:
+		for _, val := range t {
+			redactSecretKeys(val)
+		}
+	}
 }
 
 type rollbackRequest struct {
@@ -290,6 +325,7 @@ func (s *Server) rollbackData(w http.ResponseWriter, r *http.Request) {
 		writeStoreErr(w, "rollback data", err)
 		return
 	}
+	s.mirrorSaveData(snap.Data)
 
 	author := r.Header.Get("X-Admin-User")
 	if author == "" {
@@ -613,6 +649,7 @@ func (s *Server) uploadBundle(w http.ResponseWriter, r *http.Request) {
 		writeStoreErr(w, "load bundle", err)
 		return
 	}
+	s.mirrorSaveData(snap.Data)
 	writeJSON(w, http.StatusOK, epochResponse{Epoch: snap.Epoch})
 }
 
@@ -650,6 +687,7 @@ func (s *Server) rollbackBundle(w http.ResponseWriter, r *http.Request) {
 		writeStoreErr(w, "rollback bundle", err)
 		return
 	}
+	s.mirrorSaveData(snap.Data)
 
 	if s.deps.Audit != nil {
 		author := r.Header.Get("X-Admin-User")
@@ -815,6 +853,7 @@ func (s *Server) listPolicies(w http.ResponseWriter, _ *http.Request) {
 var apiDataMaskRules, _ = masking.Compile([]masking.Spec{
 	{Pattern: `sk-[A-Za-z0-9_\-]+`, Transform: "redact", Scope: ""},
 	{Pattern: `[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`, Transform: "mask", Scope: ""},
+	{Pattern: `(?i)"?(api_key|api_key_sha256|secret|password|token|private_key)"?\s*[:=]\s*"?[A-Za-z0-9_\-\.+/=~]{8,}`, Transform: "redact", Scope: ""},
 })
 
 // getV1Data handles GET /v1/data (and ?path=...) reading data document read-only with secrets/emails masked.
@@ -1135,4 +1174,18 @@ func (s *Server) getCoverage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rep)
+}
+
+// mirrorSaveData persists the updated snapshot data to PostgreSQL mirror (fire-and-forget, non-blocking).
+func (s *Server) mirrorSaveData(data map[string]any) {
+	if s.deps.PGMirror == nil || data == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if perr := s.deps.PGMirror.SaveData(ctx, data); perr != nil {
+			slog.Error("pg mirror persist failed", "err", perr)
+		}
+	}()
 }

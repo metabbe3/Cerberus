@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -123,5 +124,46 @@ func TestBreakGlassKeyIDValidation(t *testing.T) {
 	activeAny, _ := h.api.breakGlass.IsActive("any-other-key")
 	if !activeAny {
 		t.Fatal("expected global break-glass to be active for all keys when key_id='*'")
+	}
+}
+
+// TestPrivilegedAdmin_UnixSocketTrust verifies R5:
+// 1. Caller with RemoteAddr="" without admin token is NOT admin (returns 401 when claiming privileged key).
+// 2. Caller with RemoteAddr="@" without CERBERUS_TRUST_UNIX_SOCKET is NOT admin (returns 401).
+// 3. Caller with RemoteAddr="@" with CERBERUS_TRUST_UNIX_SOCKET=true IS privileged admin (allowed).
+func TestPrivilegedAdmin_UnixSocketTrust(t *testing.T) {
+	h := newHarness(t)
+
+	// 1. RemoteAddr="" without token claiming k-owner -> 401 Unauthorized
+	body := `{"key_id":"k-owner","stage":"tool","tool_call":"bash","args":{"cmd":"ls"}}`
+	req1 := httptest.NewRequest(http.MethodPost, "/v1/decide", strings.NewReader(body))
+	req1.Header.Set("Content-Type", "application/json")
+	req1.RemoteAddr = ""
+	w1 := httptest.NewRecorder()
+	h.api.ServeHTTP(w1, req1)
+	if w1.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for RemoteAddr='' claiming k-owner, got %d: %s", w1.Code, w1.Body.String())
+	}
+
+	// 2. RemoteAddr="@" without env CERBERUS_TRUST_UNIX_SOCKET -> 401 Unauthorized
+	t.Setenv("CERBERUS_TRUST_UNIX_SOCKET", "")
+	req2 := httptest.NewRequest(http.MethodPost, "/v1/decide", strings.NewReader(body))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.RemoteAddr = "@"
+	w2 := httptest.NewRecorder()
+	h.api.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for RemoteAddr='@' without trust env, got %d: %s", w2.Code, w2.Body.String())
+	}
+
+	// 3. RemoteAddr="@" with CERBERUS_TRUST_UNIX_SOCKET=true -> 200 OK (treated as privileged admin)
+	t.Setenv("CERBERUS_TRUST_UNIX_SOCKET", "true")
+	req3 := httptest.NewRequest(http.MethodPost, "/v1/decide", strings.NewReader(body))
+	req3.Header.Set("Content-Type", "application/json")
+	req3.RemoteAddr = "@"
+	w3 := httptest.NewRecorder()
+	h.api.ServeHTTP(w3, req3)
+	if w3.Code != http.StatusOK {
+		t.Fatalf("expected 200 for RemoteAddr='@' with CERBERUS_TRUST_UNIX_SOCKET=true, got %d: %s", w3.Code, w3.Body.String())
 	}
 }

@@ -15,25 +15,56 @@ agent := data.agents[input.key_id]
 
 team := data.teams[agent.team_id]
 
-# Glob semantics: trailing "*" = case-insensitive prefix; otherwise
-# case-insensitive substring.
+# Tool matching: exact == OR glob.match(pattern, [], tool) ONLY if pattern contains "*".
 call_matches_pattern(pattern, name) if {
+	contains(pattern, "*")
+	glob.match(lower(pattern), [], lower(name))
+}
+
+call_matches_pattern(pattern, name) if {
+	not contains(pattern, "*")
+	lower(name) == lower(pattern)
+}
+
+# Host matching: exact match OR wildcard suffix (*.domain) without userinfo and host != suffix.
+host_matches("*", _) if true
+
+host_matches(pattern, h) if {
+	pattern != "*"
+	not startswith(pattern, "*.")
+	not contains(h, "@")
+	lower(h) == lower(pattern)
+}
+
+host_matches(pattern, h) if {
+	startswith(pattern, "*.")
+	not contains(h, "@")
+	suffix := substring(pattern, 1, -1)
+	lower(h) != lower(suffix)
+	endswith(lower(h), lower(suffix))
+}
+
+# Common pattern matcher: glob with ":" separator, glob with empty delimiter, or case-insensitive exact.
+pattern_matches(pattern, target) if {
+	contains(pattern, "*")
+	glob.match(lower(pattern), [":"], lower(target))
+}
+
+pattern_matches(pattern, target) if {
+	contains(pattern, "*")
+	glob.match(lower(pattern), [], lower(target))
+}
+
+pattern_matches(pattern, target) if {
 	endswith(pattern, "*")
 	prefix := trim_suffix(pattern, "*")
-	startswith(lower(name), lower(prefix))
+	startswith(lower(target), lower(prefix))
 }
 
-call_matches_pattern(pattern, name) if {
-	not endswith(pattern, "*")
-	contains(lower(name), lower(pattern))
+pattern_matches(pattern, target) if {
+	not contains(pattern, "*")
+	lower(pattern) == lower(target)
 }
-
-# Common pattern matcher: glob with ":" separator, wildcard prefix/contains, or case-insensitive exact.
-pattern_matches(pattern, target) if glob.match(pattern, [":"], target)
-
-pattern_matches(pattern, target) if call_matches_pattern(pattern, target)
-
-pattern_matches(pattern, target) if lower(pattern) == lower(target)
 
 # Prod access flag for the resolved agent
 agent_has_prod_access if agent.prod_access == true

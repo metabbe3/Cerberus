@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -255,6 +257,146 @@ func TestDecide_KeySpoof401(t *testing.T) {
 	defer func() { _ = resp3.Body.Close() }()
 	if resp3.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("mismatched key decide status = %d, want 401", resp3.StatusCode)
+	}
+}
+
+// TestDecide_AgentKeyAuthentication verifies R1:
+// 1. Agent with hash: without header -> 401 agent_key_required
+// 2. Agent with hash: wrong header -> 401 agent_key_invalid
+// 3. Agent with hash: correct header -> 200 OK
+// 4. Agent without hash: env false -> 200 OK (legacy mode)
+// 5. Agent without hash: env true -> 401 agent_key_required (unless admin bearer)
+func TestDecide_AgentKeyAuthentication(t *testing.T) {
+	h := newHarness(t)
+
+	// Setup: configure k-hashed with api_key_sha256 and k-legacy without it.
+	agentSecret := "correct-agent-secret-xyz"
+	sum := sha256.Sum256([]byte(agentSecret))
+	hashHex := hex.EncodeToString(sum[:])
+
+	snap := h.store.Current()
+	dataCopy := make(map[string]any)
+	for k, v := range snap.Data {
+		dataCopy[k] = v
+	}
+	agents, _ := dataCopy["agents"].(map[string]any)
+	agentsCopy := make(map[string]any)
+	for ak, av := range agents {
+		agentsCopy[ak] = av
+	}
+	agentsCopy["k-hashed"] = map[string]any{
+		"name":           "hashed-agent",
+		"api_key_sha256": hashHex,
+		"allowed_tools":  []any{"bash"},
+	}
+	agentsCopy["k-legacy"] = map[string]any{
+		"name":          "legacy-agent",
+		"allowed_tools": []any{"bash"},
+	}
+	dataCopy["agents"] = agentsCopy
+	dataBytes, _ := json.Marshal(dataCopy)
+
+	putReq, _ := http.NewRequest(http.MethodPut, h.ts.URL+"/v1/admin/data", bytes.NewReader(dataBytes))
+	putReq.Header.Set("Authorization", "Bearer "+adminToken)
+	putReq.Header.Set("Content-Type", "application/json")
+	putResp, err := h.ts.Client().Do(putReq)
+	if err != nil {
+		t.Fatalf("PUT /v1/admin/data: %v", err)
+	}
+	_ = putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT /v1/admin/data failed: %d", putResp.StatusCode)
+	}
+
+	bodyHashed := `{"stage":"tool","key_id":"k-hashed","tool_call":"bash","args":{"cmd":"ls"}}`
+	bodyLegacy := `{"stage":"tool","key_id":"k-legacy","tool_call":"bash","args":{"cmd":"ls"}}`
+
+	// 1. Agent with hash: without header -> 401 agent_key_required
+	req1, _ := http.NewRequest(http.MethodPost, h.ts.URL+"/v1/decide", strings.NewReader(bodyHashed))
+	req1.Header.Set("Content-Type", "application/json")
+	resp1, err := h.ts.Client().Do(req1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp1.Body.Close() }()
+	if resp1.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("agent with hash without header got %d, want 401", resp1.StatusCode)
+	}
+	bodyBytes1, _ := io.ReadAll(resp1.Body)
+	if !strings.Contains(string(bodyBytes1), "agent_key_required") {
+		t.Fatalf("expected agent_key_required error, got: %s", string(bodyBytes1))
+	}
+
+	// 2. Agent with hash: wrong header -> 401 agent_key_invalid
+	req2, _ := http.NewRequest(http.MethodPost, h.ts.URL+"/v1/decide", strings.NewReader(bodyHashed))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("X-Agent-Key", "wrong-secret-abc")
+	resp2, err := h.ts.Client().Do(req2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp2.Body.Close() }()
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("agent with hash with wrong header got %d, want 401", resp2.StatusCode)
+	}
+	bodyBytes2, _ := io.ReadAll(resp2.Body)
+	if !strings.Contains(string(bodyBytes2), "agent_key_invalid") {
+		t.Fatalf("expected agent_key_invalid error, got: %s", string(bodyBytes2))
+	}
+
+	// 3. Agent with hash: correct header -> 200 OK
+	req3, _ := http.NewRequest(http.MethodPost, h.ts.URL+"/v1/decide", strings.NewReader(bodyHashed))
+	req3.Header.Set("Content-Type", "application/json")
+	req3.Header.Set("X-Agent-Key", agentSecret)
+	resp3, err := h.ts.Client().Do(req3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp3.Body.Close() }()
+	if resp3.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp3.Body)
+		t.Fatalf("agent with hash with correct header got %d, want 200: %s", resp3.StatusCode, string(b))
+	}
+
+	// 4. Agent without hash: env false -> 200 OK (legacy mode)
+	t.Setenv("CERBERUS_REQUIRE_AGENT_KEYS", "false")
+	req4, _ := http.NewRequest(http.MethodPost, h.ts.URL+"/v1/decide", strings.NewReader(bodyLegacy))
+	req4.Header.Set("Content-Type", "application/json")
+	resp4, err := h.ts.Client().Do(req4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp4.Body.Close() }()
+	if resp4.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp4.Body)
+		t.Fatalf("legacy agent with env false got %d, want 200: %s", resp4.StatusCode, string(b))
+	}
+
+	// 5. Agent without hash: env true -> 401 agent_key_required
+	t.Setenv("CERBERUS_REQUIRE_AGENT_KEYS", "true")
+	req5, _ := http.NewRequest(http.MethodPost, h.ts.URL+"/v1/decide", strings.NewReader(bodyLegacy))
+	req5.Header.Set("Content-Type", "application/json")
+	resp5, err := h.ts.Client().Do(req5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp5.Body.Close() }()
+	if resp5.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("legacy agent with env true got %d, want 401", resp5.StatusCode)
+	}
+
+	// 6. Agent without hash with env true + admin bearer token -> 200 OK
+	req6, _ := http.NewRequest(http.MethodPost, h.ts.URL+"/v1/decide", strings.NewReader(bodyLegacy))
+	req6.Header.Set("Content-Type", "application/json")
+	req6.Header.Set("Authorization", "Bearer "+adminToken)
+	resp6, err := h.ts.Client().Do(req6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp6.Body.Close() }()
+	if resp6.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp6.Body)
+		t.Fatalf("legacy agent with env true + admin bearer got %d, want 200: %s", resp6.StatusCode, string(b))
 	}
 }
 

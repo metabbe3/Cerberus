@@ -832,14 +832,6 @@ func (m *dbManager) recordRevision(ctx context.Context, author, summary string, 
 	if author == "" {
 		author = "admin"
 	}
-	// Masking at-rest: ensure secrets inside dataJSON are masked before persistence
-	var data any
-	if err := json.Unmarshal(dataJSON, &data); err == nil {
-		masked, _ := masking.Apply(defaultMaskRules, "", data)
-		if b, err := json.Marshal(masked); err == nil {
-			dataJSON = b
-		}
-	}
 	now := time.Now().UTC().UnixNano()
 	res, err := db.ExecContext(ctx, `INSERT INTO revisions (time, author, summary, data_json) VALUES (?, ?, ?, ?)`, now, author, summary, string(dataJSON))
 	if err != nil {

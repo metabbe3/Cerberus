@@ -476,6 +476,23 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	lat := time.Since(start).Milliseconds()
 
+	// R4: Non-SSE response >maxBody must NOT be forwarded without inspection (fail-closed)
+	if len(respBody) > maxBody {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error":   "response_exceeds_inspection_limit",
+			"message": "upstream response exceeds inspection limit",
+		})
+		s.st.save(turnRow{
+			KeyID:   keyID,
+			Model:   modelOf(raw),
+			Kind:    "response_rejected",
+			Payload: mustJSON(map[string]any{"error": "response_exceeds_inspection_limit"}),
+		}, lat, http.StatusBadGateway)
+		return
+	}
+
 	// In non-SSE path, inspect Anthropic responses containing tool_use blocks.
 	if strings.Contains(resp.Header.Get("Content-Type"), "application/json") {
 		type anthropicBlock struct {
@@ -486,7 +503,22 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var msg struct {
 			Content []anthropicBlock `json:"content"`
 		}
-		if err := json.Unmarshal(respBody, &msg); err == nil && len(msg.Content) > 0 {
+		if err := json.Unmarshal(respBody, &msg); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error":   "response_exceeds_inspection_limit",
+				"message": "failed to parse response for inspection: " + err.Error(),
+			})
+			s.st.save(turnRow{
+				KeyID:   keyID,
+				Model:   modelOf(raw),
+				Kind:    "response_rejected",
+				Payload: mustJSON(map[string]any{"error": "response_exceeds_inspection_limit"}),
+			}, lat, http.StatusBadGateway)
+			return
+		}
+		if len(msg.Content) > 0 {
 			for _, b := range msg.Content {
 				if b.Type == "tool_use" {
 					rawInput := strings.TrimSpace(string(b.Input))
@@ -517,24 +549,14 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// copy response headers
 	for k, vv := range resp.Header {
-		if len(respBody) > maxBody && strings.EqualFold(k, "Content-Length") {
-			continue
-		}
 		for _, v := range vv {
 			w.Header().Add(k, v)
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(respBody)
-	if len(respBody) > maxBody {
-		_, _ = io.Copy(w, resp.Body)
-	}
 
-	savedPayload := respBody
-	if len(savedPayload) > maxBody {
-		savedPayload = savedPayload[:maxBody]
-	}
-	s.st.save(turnRow{KeyID: keyID, Model: modelOf(raw), Kind: "response", Payload: savedPayload}, lat, resp.StatusCode)
+	s.st.save(turnRow{KeyID: keyID, Model: modelOf(raw), Kind: "response", Payload: respBody}, lat, resp.StatusCode)
 }
 
 // proxySSE tees the stream to the client while reassembling thinking/text/tool_use.
