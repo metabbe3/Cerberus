@@ -10,6 +10,12 @@
 
 ## Ledger
 
+### 2026-11-14 (DEPLOY cerberus.hivepos.id LIVE + CI flake campaign closed)
+- DEPLOY [DONE] cerberus.hivepos.id live: engine binary baru (pid 76516, :8089, PG 5433 + audit-db + prod.json kontinu) + Owl U2 di :3006 (standalone, OWL_POLICY_DIR absolut). Smoke: /login / / /overview /breaches /agents /settings = 200 publik; auth-login 401 JSON benar; /v1/audit/breaches 200; /v1/policy/modules 200; /v1/admin/users 200 (user admin DB seed); upstream PUT→GET round-trip key_hint-only (key tak pernah dikembalikan, verifikasi grep=0), test koneksi 186ms, dummy key dibersihkan.
+- CI [FIXED] 3 lapis flake berurutan pada 43579569539→43580561064→43581899998: (1) lint 15 temuan fase E/F/G (switch/G115/G301/G124/G101/G704/revive docs) commit 66e1031; (2) TestBreachesAndAgentsSummary + TestLatencyStatsAndFailClosed sleep-vs-async → poll-retry deadline 5s commit 0ce2637+6db9c99; (3) TestAuth_UserManagementAndRoleViewer akar PRODUK: SQLite :memory: = DB per-koneksi, pool koneksi ke-2 = "no such table: events" → openSQLite SetMaxOpenConns(1) khusus :memory: commit 66c58d6. CI 43582978737 FULL SUCCESS.
+- README [DONE] sync post-U2 (70c5fef): db/k8s Live (bukan Coming Soon), kuota COUNT bukan USD (#396), +6 endpoint auth/users/breaches/policy/upstream, seksi Bukti Pengujian (MC 0-escape, redteam, 282/282).
+
+
 ### 2026-11-14 (U2 Production-Grade Dashboard — 7 fase, riset Argon+Opus+LiteLLM)
 - U2 [DONE] A 58e196f Command Center (safety banner, deny-rate+delta, fail-closed tile, nav 5 pilar) · B 4e854ef Inspector drawer+trace+fingerprint dedup+URL filter · C 98e3eb5 Agents server-side+quota burn+bundle trust trail · D 4b4b175 polish ID formal+empty-states · E 4fd5908 user DB auth (Argon2id, sessions, lockout, RBAC viewer 403, ADR-0005) · F 6026fb3 block-key 1-klik+CSV RFC4180 · G upstream LLM fleksibel (AES-256-GCM store, PUT/test endpoint, tap hot-reload atomic, Owl UpstreamCard) — budget USD dicetak tebal OUT per keputusan positioning #396. Gate: make test hijau (semua pkg), vitest 57/57, build 21+ pages. Item 24 (downstream capture toggle + halaman Turns) → U3. (AGY Flash A-F + Hermes G sendiri)
 
