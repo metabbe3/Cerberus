@@ -231,3 +231,73 @@ export function dedupIncidents<T extends { key_id: string; rule_id: string; time
     (a, b) => new Date(b.last_seen).getTime() - new Date(a.last_seen).getTime(),
   );
 }
+
+export interface SecuritySignal<T = unknown> {
+  id: string; // fingerprint hash
+  key_id: string;
+  rule_id: string;
+  normalized_reason: string;
+  severity: Severity;
+  count: number;
+  first_seen: string;
+  last_seen: string;
+  is_new: boolean;
+  sample_event: T;
+  events: T[];
+  stages: string[];
+}
+
+/**
+ * Group events into security signals using fingerprint hash(rule_id+key_id+normalized_reason) in a 15m window.
+ */
+export function groupSecuritySignals<T extends { key_id: string; rule_id: string; reason?: string; time: string; stage?: string; first_seen?: boolean }>(
+  events: T[],
+  windowMinutes = 15,
+): SecuritySignal<T>[] {
+  const windowMs = windowMinutes * 60 * 1000;
+  const groups = new Map<string, SecuritySignal<T>>();
+
+  for (const ev of events) {
+    const timeMs = new Date(ev.time).getTime();
+    const windowStart = Math.floor(timeMs / windowMs) * windowMs;
+    const normReason = (ev.reason ?? "").toLowerCase().trim().replace(/\s+/g, " ");
+    const fingerprint = `${ev.rule_id}::${ev.key_id}::${normReason}::${windowStart}`;
+    const sev = getSeverity(ev.rule_id);
+
+    const existing = groups.get(fingerprint);
+    if (!existing) {
+      groups.set(fingerprint, {
+        id: fingerprint,
+        key_id: ev.key_id,
+        rule_id: ev.rule_id,
+        normalized_reason: normReason,
+        severity: sev,
+        count: 1,
+        first_seen: ev.time,
+        last_seen: ev.time,
+        is_new: Boolean(ev.first_seen),
+        sample_event: ev,
+        events: [ev],
+        stages: ev.stage ? [ev.stage] : [],
+      });
+    } else {
+      existing.count += 1;
+      existing.events.push(ev);
+      if (ev.first_seen) existing.is_new = true;
+      if (new Date(ev.time) > new Date(existing.last_seen)) {
+        existing.last_seen = ev.time;
+        existing.sample_event = ev;
+      }
+      if (new Date(ev.time) < new Date(existing.first_seen)) {
+        existing.first_seen = ev.time;
+      }
+      if (ev.stage && !existing.stages.includes(ev.stage)) {
+        existing.stages.push(ev.stage);
+      }
+    }
+  }
+
+  return Array.from(groups.values()).sort(
+    (a, b) => new Date(b.last_seen).getTime() - new Date(a.last_seen).getTime(),
+  );
+}

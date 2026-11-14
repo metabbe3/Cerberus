@@ -26,6 +26,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { InspectorDrawer } from "@/components/decisions/inspector-drawer";
 import { TraceDialog } from "@/components/decisions/trace-dialog";
 import { EmptyState } from "@/components/empty-state";
 import {
@@ -62,6 +63,7 @@ export default function AgentObservabilityPage() {
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
   const [traceEvent, setTraceEvent] = useState<AuditEvent | null>(null);
   const [traceOpen, setTraceOpen] = useState(false);
+  const [inspectEvent, setInspectEvent] = useState<AuditEvent | null>(null);
   const [rotateDialogOpen, setRotateDialogOpen] = useState(false);
   const [rotateSuffix, setRotateSuffix] = useState("-v2");
   const [revokeOld, setRevokeOld] = useState(false);
@@ -641,6 +643,14 @@ export default function AgentObservabilityPage() {
                               variant="ghost"
                               size="sm"
                               className="h-6 text-[10px] px-1.5"
+                              onClick={() => setInspectEvent(b)}
+                            >
+                              Detail
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 text-[10px] px-1.5"
                               onClick={() => {
                                 setTraceEvent(b);
                                 setTraceOpen(true);
@@ -801,7 +811,15 @@ export default function AgentObservabilityPage() {
                             </span>
                           )}
                         </TableCell>
-                        <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                        <TableCell className="text-right space-x-1" onClick={(e) => e.stopPropagation()}>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 text-[10px] px-1.5"
+                            onClick={() => setInspectEvent(ev)}
+                          >
+                            Detail
+                          </Button>
                           <Button
                             variant="ghost"
                             size="sm"
@@ -940,6 +958,11 @@ export default function AgentObservabilityPage() {
           )}
         </DialogContent>
       </Dialog>
+      <InspectorDrawer
+        open={!!inspectEvent}
+        onOpenChange={(open) => !open && setInspectEvent(null)}
+        event={inspectEvent}
+      />
     </div>
   );
 }

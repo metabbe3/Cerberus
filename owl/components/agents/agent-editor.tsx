@@ -68,6 +68,12 @@ export function AgentEditor({
       if (!d.restricted_tool_calls.includes(subject)) {
         d.restricted_tool_calls.push(subject);
       }
+    } else if (prefill?.startsWith("allow:")) {
+      const subject = decodeURIComponent(prefill.slice("allow:".length));
+      d.allowed_tools = d.allowed_tools ?? [];
+      if (!d.allowed_tools.includes(subject)) {
+        d.allowed_tools.push(subject);
+      }
     }
     return d;
   });

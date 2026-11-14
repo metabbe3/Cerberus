@@ -127,6 +127,7 @@ export const AuditEventSchema = z.object({
   cached: z.boolean(),
   latency_us: z.number(),
   args: z.record(z.string(), z.unknown()).optional(),
+  first_seen: z.boolean().optional(),
 });
 
 export type AuditEvent = z.infer<typeof AuditEventSchema>;

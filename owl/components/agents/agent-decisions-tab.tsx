@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { AuditTable } from "@/components/decisions/audit-table";
+import { InspectorDrawer } from "@/components/decisions/inspector-drawer";
 import { useDecisionStream } from "@/components/decisions/stream";
 import { EmptyState } from "@/components/empty-state";
 import { mergeEvents, useAudit } from "@/lib/queries";
@@ -23,6 +24,7 @@ export function AgentDecisionsTab({ keyId }: { keyId: string }) {
   const router = useRouter();
   const [stage, setStage] = useState("all");
   const [decision, setDecision] = useState("all");
+  const [selectedEvent, setSelectedEvent] = useState<AuditEvent | null>(null);
 
   const historyParams = useMemo(() => {
     const p = new URLSearchParams({ limit: "200", key_id: keyId });
@@ -126,8 +128,18 @@ export function AgentDecisionsTab({ keyId }: { keyId: string }) {
           hint={`Kirim permintaan POST /v1/decide/* dengan key "${keyId}" untuk melihat riwayat evaluasi gateway.`}
         />
       ) : (
-        <AuditTable events={events} onCreateRule={handleCreateRule} />
+        <AuditTable
+          events={events}
+          onCreateRule={handleCreateRule}
+          onSelectEvent={setSelectedEvent}
+        />
       )}
+
+      <InspectorDrawer
+        open={!!selectedEvent}
+        onOpenChange={(open) => !open && setSelectedEvent(null)}
+        event={selectedEvent}
+      />
     </div>
   );
 }

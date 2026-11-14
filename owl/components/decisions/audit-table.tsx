@@ -1,68 +1,143 @@
 "use client";
 
 import type { ColumnDef } from "@tanstack/react-table";
-import { Plus } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { DataTable } from "@/components/data-table";
 import { KeyCell } from "@/components/key-cell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { AuditEvent } from "@/lib/schema";
 
-function timeCell(ev: AuditEvent) {
-  return new Date(ev.time).toLocaleTimeString();
+function TimeCell({ time }: { time: string }) {
+  const d = new Date(time);
+  const timeStr = d.toLocaleTimeString("id-ID", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const dateStr = d.toLocaleDateString("id-ID", { day: "2-digit", month: "short" });
+  return (
+    <div
+      className="font-mono text-xs tabular-nums text-foreground flex items-center gap-1.5"
+      title={`${d.toISOString()} (UTC)`}
+    >
+      <span className="text-muted-foreground text-[11px]">{dateStr}</span>
+      <span>{timeStr}</span>
+    </div>
+  );
 }
 
-const columns = (onCreateRule: (ev: AuditEvent) => void): ColumnDef<AuditEvent, unknown>[] => [
-  { id: "time", header: "Time", cell: ({ row }) => timeCell(row.original) },
-  { accessorKey: "stage", header: "Stage" },
-  { accessorKey: "key_id", header: "Key", cell: ({ row }) => <KeyCell id={row.original.key_id} /> },
+function LatencyCell({ latencyUs, cached }: { latencyUs?: number; cached?: boolean }) {
+  const latStr =
+    latencyUs !== undefined && latencyUs > 0
+      ? latencyUs < 1000
+        ? `${latencyUs} µs`
+        : `${(latencyUs / 1000).toFixed(1)} ms`
+      : "—";
+
+  return (
+    <div className="flex items-center gap-1.5 font-mono text-xs tabular-nums">
+      <span>{latStr}</span>
+      {cached ? (
+        <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 text-emerald-500 border-emerald-500/30 font-mono">
+          CACHED
+        </Badge>
+      ) : (
+        <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 text-muted-foreground font-mono">
+          EVAL
+        </Badge>
+      )}
+    </div>
+  );
+}
+
+const columns = (onSelectEvent?: (ev: AuditEvent) => void): ColumnDef<AuditEvent, unknown>[] => [
   {
-    accessorKey: "subject",
-    header: "Subject",
-    cell: ({ row }) => <span className="font-mono text-xs">{row.original.subject}</span>,
+    id: "time",
+    header: "Waktu (WIB)",
+    cell: ({ row }) => <TimeCell time={row.original.time} />,
   },
   {
-    accessorKey: "decision",
-    header: "Decision",
+    accessorKey: "stage",
+    header: "Stage",
     cell: ({ row }) => (
-      <Badge
-        variant={row.original.decision === "allow" ? "secondary" : "destructive"}
-        className={row.original.decision === "allow" ? "bg-success/15 text-success" : undefined}
-      >
-        {row.original.decision}
+      <Badge variant="outline" className="font-mono text-[11px] uppercase">
+        {row.original.stage}
       </Badge>
     ),
   },
   {
-    accessorKey: "rule_id",
-    header: "Rule",
-    cell: ({ row }) => <span className="font-mono text-xs">{row.original.rule_id}</span>,
+    accessorKey: "key_id",
+    header: "Agen",
+    cell: ({ row }) => <KeyCell id={row.original.key_id} />,
   },
   {
-    id: "rule-action",
-    header: "",
-    cell: ({ row }) =>
-      row.original.decision === "deny" && row.original.stage === "tool" ? (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={(e) => {
-            e.stopPropagation();
-            onCreateRule(row.original);
-          }}
+    accessorKey: "subject",
+    header: "Subjek",
+    cell: ({ row }) => <span className="font-mono text-xs font-medium">{row.original.subject}</span>,
+  },
+  {
+    accessorKey: "decision",
+    header: "Keputusan",
+    cell: ({ row }) => {
+      const isAllow = row.original.decision === "allow";
+      return (
+        <Badge
+          variant={isAllow ? "secondary" : "destructive"}
+          className={
+            isAllow
+              ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30 font-semibold text-[11px] uppercase"
+              : "uppercase font-semibold text-[11px]"
+          }
         >
-          <Plus aria-hidden /> Create rule
-        </Button>
-      ) : null,
+          {row.original.decision}
+        </Badge>
+      );
+    },
+  },
+  {
+    accessorKey: "rule_id",
+    header: "Aturan (Rule)",
+    cell: ({ row }) => <span className="font-mono text-xs text-muted-foreground">{row.original.rule_id}</span>,
+  },
+  {
+    id: "latency",
+    header: "Latensi",
+    cell: ({ row }) => <LatencyCell latencyUs={row.original.latency_us} cached={row.original.cached} />,
+  },
+  {
+    id: "action",
+    header: "",
+    cell: ({ row }) => (
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+        onClick={(e) => {
+          e.stopPropagation();
+          onSelectEvent?.(row.original);
+        }}
+      >
+        Detail
+        <ChevronRight className="size-3.5 ml-1" />
+      </Button>
+    ),
   },
 ];
 
 export function AuditTable({
   events,
-  onCreateRule,
+  onSelectEvent,
 }: {
   events: AuditEvent[];
-  onCreateRule: (ev: AuditEvent) => void;
+  onSelectEvent?: (ev: AuditEvent) => void;
+  onCreateRule?: (ev: AuditEvent) => void;
 }) {
-  return <DataTable columns={columns(onCreateRule)} data={events} />;
+  return (
+    <DataTable
+      columns={columns(onSelectEvent)}
+      data={events}
+      onRowClick={onSelectEvent}
+    />
+  );
 }

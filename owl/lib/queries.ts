@@ -284,6 +284,28 @@ export function mergeEvents(
   return out.slice(0, cap);
 }
 
+export function useEraseDecision() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const res = await fetch("/api/admin/decisions/erase", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? "Gagal menghapus payload");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["audit"] });
+      qc.invalidateQueries({ queryKey: ["breaches"] });
+    },
+  });
+}
+
 export function useBreaches(params: URLSearchParams) {
   return useQuery({
     queryKey: ["breaches", params.toString()],

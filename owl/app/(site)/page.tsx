@@ -7,14 +7,10 @@ import {
   Activity,
   ArrowRight,
   Check,
-  ChevronRight,
-  Code2,
   Copy,
   ExternalLink,
   FileCode,
-  Layers,
   ShieldAlert,
-  ShieldCheck,
   Terminal,
 } from "lucide-react";
 

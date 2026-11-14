@@ -20,4 +20,5 @@ type Event struct {
 	Cached    bool           `json:"cached"`
 	LatencyUS int64          `json:"latency_us"`
 	Args      map[string]any `json:"args,omitempty"`
+	FirstSeen bool           `json:"first_seen,omitempty"`
 }

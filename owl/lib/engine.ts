@@ -253,6 +253,14 @@ export async function explainDecision(input: unknown): Promise<ExplainResult> {
   return (await res.json()) as ExplainResult;
 }
 
+export async function eraseDecision(id: number): Promise<{ ok: boolean; erased: number }> {
+  const res = await engineFetch("/v1/admin/decisions/erase", {
+    method: "POST",
+    body: JSON.stringify({ id }),
+  });
+  return (await res.json()) as { ok: boolean; erased: number };
+}
+
 export interface FileCoverage {
   coverage: number;
   covered_lines: number;

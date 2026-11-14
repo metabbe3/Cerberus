@@ -1287,12 +1287,14 @@ func (m *dbManager) queryBreaches(ctx context.Context, f BreachFilter, buckets i
 		return rows.Err()
 	}
 
+	var files []string
 	if m.isMemory {
 		if err := runOne(m.dbs["memory"]); err != nil {
 			return nil, fmt.Errorf("audit: breaches: %w", err)
 		}
 	} else {
-		files, err := m.getDayFiles(since)
+		var err error
+		files, err = m.getDayFiles(since)
 		if err != nil {
 			return nil, fmt.Errorf("audit: read dir: %w", err)
 		}
@@ -1313,6 +1315,48 @@ func (m *dbManager) queryBreaches(ctx context.Context, f BreachFilter, buckets i
 	}
 	if allEvents == nil {
 		allEvents = []Event{}
+	}
+
+	// First-seen: pair rule_id + key_id has not occurred in the 7 days prior to the event
+	files7d := files
+	if !m.isMemory {
+		if f7, err := m.getDayFiles(time.Now().Add(-7 * 24 * time.Hour)); err == nil {
+			files7d = f7
+		}
+	}
+
+	checkPrior7d := func(db *sql.DB, ruleID, keyID string, beforeNano int64) bool {
+		if db == nil {
+			return false
+		}
+		startNano := beforeNano - (7 * 24 * int64(time.Hour))
+		var exists int
+		err := db.QueryRowContext(ctx, "SELECT 1 FROM events WHERE rule_id = ? AND key_id = ? AND time >= ? AND time < ? LIMIT 1", ruleID, keyID, startNano, beforeNano).Scan(&exists)
+		return err == nil && exists == 1
+	}
+
+	pairSeenPrior := make(map[string]bool)
+	for i := range allEvents {
+		pair := allEvents[i].RuleID + "::" + allEvents[i].KeyID
+		seen, checked := pairSeenPrior[pair]
+		if !checked {
+			if m.isMemory {
+				seen = checkPrior7d(m.dbs["memory"], allEvents[i].RuleID, allEvents[i].KeyID, allEvents[i].Time.UnixNano())
+			} else {
+				for _, fn := range files7d {
+					db, err := m.getDBForFileRead(fn)
+					if err != nil {
+						continue
+					}
+					if checkPrior7d(db, allEvents[i].RuleID, allEvents[i].KeyID, allEvents[i].Time.UnixNano()) {
+						seen = true
+						break
+					}
+				}
+			}
+			pairSeenPrior[pair] = seen
+		}
+		allEvents[i].FirstSeen = !seen
 	}
 
 	topList := make([]TopOffender, 0, len(offenders))
