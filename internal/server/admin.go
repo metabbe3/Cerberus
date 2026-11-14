@@ -1140,6 +1140,12 @@ type statusResponse struct {
 	AuditQueueDepth    int                   `json:"audit_queue_depth"`
 	TopDenies24h       []audit.RuleDenyCount `json:"top_denies_24h"`
 	Deny24hTop10       []audit.RuleDenyCount `json:"deny_24h_top10,omitempty"`
+	LatencyP50US       float64               `json:"latency_p50_us"`
+	LatencyP95US       float64               `json:"latency_p95_us"`
+	LatencyP99US       float64               `json:"latency_p99_us"`
+	LatencySparkline   []float64             `json:"latency_sparkline"`
+	FailClosedCount    int64                 `json:"fail_closed_count"`
+	FailClosedRate     float64               `json:"fail_closed_rate"`
 }
 
 // getStatus returns runtime status metrics (bundle epoch, evals, cache hit rate, audit queue).
@@ -1160,12 +1166,17 @@ func (s *Server) getStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	queueDepth := 0
 	var topDenies []audit.RuleDenyCount
+	var latStats *audit.LatencyStats
 	if s.deps.Audit != nil {
 		queueDepth = s.deps.Audit.QueueDepth()
 		var err error
 		topDenies, err = s.deps.Audit.TopDenies24h(r.Context(), 10)
 		if err != nil {
 			slog.Warn("admin: top denies 24h", "error", err)
+		}
+		latStats, err = s.deps.Audit.LatencyStats(r.Context(), time.Now().Add(-24*time.Hour))
+		if err != nil {
+			slog.Warn("admin: latency stats 24h", "error", err)
 		}
 	}
 	if topDenies == nil {
@@ -1186,6 +1197,17 @@ func (s *Server) getStatus(w http.ResponseWriter, r *http.Request) {
 		AuditQueueDepth:    queueDepth,
 		TopDenies24h:       topDenies,
 		Deny24hTop10:       topDenies,
+	}
+	if latStats != nil {
+		resp.LatencyP50US = latStats.P50US
+		resp.LatencyP95US = latStats.P95US
+		resp.LatencyP99US = latStats.P99US
+		resp.LatencySparkline = latStats.Sparkline
+		resp.FailClosedCount = latStats.FailClosedCount
+		resp.FailClosedRate = latStats.FailClosedRate
+	}
+	if resp.LatencySparkline == nil {
+		resp.LatencySparkline = []float64{}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

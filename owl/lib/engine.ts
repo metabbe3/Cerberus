@@ -119,11 +119,38 @@ export interface EngineStatus {
   last_reload: string;
   cache_hit_rate?: number;
   audit_queue_depth?: number;
+  top_denies_24h?: Array<{ rule_id: string; count: number }>;
+  deny_24h_top10?: Array<{ rule_id: string; count: number }>;
+  latency_p50_us?: number;
+  latency_p95_us?: number;
+  latency_p99_us?: number;
+  latency_sparkline?: number[];
+  fail_closed_count?: number;
+  fail_closed_rate?: number;
 }
 
 export async function getStatus(): Promise<EngineStatus> {
   const res = await engineFetch("/v1/admin/status");
   return (await res.json()) as EngineStatus;
+}
+
+export interface BreakGlassStatus {
+  active: boolean;
+  reason: string;
+  global_expires_at?: string;
+  key_expires_at?: string;
+}
+
+export async function getBreakGlass(keyId?: string): Promise<BreakGlassStatus> {
+  const q = keyId ? `?key_id=${encodeURIComponent(keyId)}` : "";
+  const res = await engineFetch(`/v1/admin/break-glass${q}`);
+  return (await res.json()) as BreakGlassStatus;
+}
+
+export async function deleteBreakGlass(keyId?: string): Promise<{ status: string; key_id?: string }> {
+  const q = keyId ? `?key_id=${encodeURIComponent(keyId)}` : "";
+  const res = await engineFetch(`/v1/admin/break-glass${q}`, { method: "DELETE" });
+  return (await res.json()) as { status: string; key_id?: string };
 }
 
 export async function postBreakGlass(data: {

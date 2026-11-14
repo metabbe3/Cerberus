@@ -1451,3 +1451,103 @@ func (m *dbManager) queryAgentsSummary(ctx context.Context, since time.Time) ([]
 
 	return out, nil
 }
+
+func (m *dbManager) queryLatencyStats(ctx context.Context, since time.Time) (*LatencyStats, error) {
+	if since.IsZero() {
+		since = time.Now().Add(-24 * time.Hour)
+	}
+	now := time.Now()
+	var latencies []float64
+	var failClosedCount int64
+	var totalCount int64
+
+	const buckets = 20
+	bucketWidth := now.Sub(since) / buckets
+	if bucketWidth <= 0 {
+		bucketWidth = time.Minute
+	}
+	type bAcc struct {
+		sum   float64
+		count int64
+	}
+	bucketData := make([]bAcc, buckets)
+
+	runOne := func(db *sql.DB) error {
+		if db == nil {
+			return nil
+		}
+		rows, err := db.QueryContext(ctx, "SELECT latency_us, rule_id, time FROM events WHERE time >= ?", since.UnixNano())
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+
+		for rows.Next() {
+			var lat int64
+			var ruleID string
+			var ts int64
+			if err := rows.Scan(&lat, &ruleID, &ts); err != nil {
+				return err
+			}
+			totalCount++
+			latF := float64(lat)
+			latencies = append(latencies, latF)
+
+			if ruleID == "internal.timeout" || ruleID == "internal.eval_error" || strings.HasPrefix(ruleID, "internal.fail_closed") {
+				failClosedCount++
+			}
+
+			t := time.Unix(0, ts)
+			idx := int(t.Sub(since) / bucketWidth)
+			if idx >= 0 && idx < buckets {
+				bucketData[idx].sum += latF
+				bucketData[idx].count++
+			}
+		}
+		return rows.Err()
+	}
+
+	if m.isMemory {
+		if err := runOne(m.dbs["memory"]); err != nil {
+			return nil, fmt.Errorf("audit: latency-stats: %w", err)
+		}
+	} else {
+		files, err := m.getDayFiles(since)
+		if err != nil {
+			return nil, fmt.Errorf("audit: read dir: %w", err)
+		}
+		for _, fn := range files {
+			db, err := m.getDBForFileRead(fn)
+			if err != nil {
+				continue
+			}
+			_ = runOne(db)
+		}
+	}
+
+	spark := make([]float64, buckets)
+	for i := 0; i < buckets; i++ {
+		if bucketData[i].count > 0 {
+			spark[i] = bucketData[i].sum / float64(bucketData[i].count)
+		}
+	}
+
+	var p50, p95, p99, failClosedRate float64
+	if len(latencies) > 0 {
+		sort.Float64s(latencies)
+		n := len(latencies)
+		p50 = latencies[int(float64(n-1)*0.50)]
+		p95 = latencies[int(float64(n-1)*0.95)]
+		p99 = latencies[int(float64(n-1)*0.99)]
+		failClosedRate = float64(failClosedCount) / float64(totalCount)
+	}
+
+	return &LatencyStats{
+		P50US:           p50,
+		P95US:           p95,
+		P99US:           p99,
+		Sparkline:       spark,
+		FailClosedCount: failClosedCount,
+		FailClosedRate:  failClosedRate,
+	}, nil
+}

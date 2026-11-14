@@ -307,6 +307,24 @@ func (l *Logger) TopDenies24h(ctx context.Context, limit int) ([]RuleDenyCount, 
 	return l.TopDenies(ctx, time.Now().Add(-24*time.Hour), limit)
 }
 
+// LatencyStats holds percentile latencies, sparkline points, and fail-closed rate over a window.
+type LatencyStats struct {
+	P50US           float64   `json:"latency_p50_us"`
+	P95US           float64   `json:"latency_p95_us"`
+	P99US           float64   `json:"latency_p99_us"`
+	Sparkline       []float64 `json:"latency_sparkline"`
+	FailClosedCount int64     `json:"fail_closed_count"`
+	FailClosedRate  float64   `json:"fail_closed_rate"`
+}
+
+// LatencyStats computes latency percentiles, sparkline, and fail-closed counts since the given time.
+func (l *Logger) LatencyStats(ctx context.Context, since time.Time) (*LatencyStats, error) {
+	if l == nil || l.mgr == nil {
+		return &LatencyStats{Sparkline: []float64{}}, nil
+	}
+	return l.mgr.queryLatencyStats(ctx, since)
+}
+
 // DailyToolCallsCount returns the number of tool stage events logged today for keyID.
 func (l *Logger) DailyToolCallsCount(ctx context.Context, keyID string, today time.Time) (int64, error) {
 	if l == nil || l.mgr == nil {

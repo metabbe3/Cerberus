@@ -116,6 +116,7 @@ export function useToggleKillSwitch() {
 }
 
 export function useBreakGlass() {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ keyId, reason, durationMinutes }: { keyId: string; reason: string; durationMinutes?: number }) => {
       const res = await fetch("/api/admin/break-glass", {
@@ -129,6 +130,100 @@ export function useBreakGlass() {
       }
       return res.json();
     },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["break-glass"] });
+      qc.invalidateQueries({ queryKey: ["data"] });
+      qc.invalidateQueries({ queryKey: ["components"] });
+    },
+  });
+}
+
+export interface BreakGlassData {
+  active: boolean;
+  reason: string;
+  global_expires_at?: string;
+  key_expires_at?: string;
+}
+
+export function useBreakGlassStatus(keyId?: string) {
+  return useQuery({
+    queryKey: ["break-glass", keyId ?? ""],
+    queryFn: async (): Promise<BreakGlassData> => {
+      const q = keyId ? `?key_id=${encodeURIComponent(keyId)}` : "";
+      const res = await fetch(`/api/admin/break-glass${q}`);
+      if (!res.ok) return { active: false, reason: "" };
+      return res.json();
+    },
+    refetchInterval: 5_000,
+  });
+}
+
+export function useRevokeBreakGlass() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (keyId?: string) => {
+      const q = keyId ? `?key_id=${encodeURIComponent(keyId)}` : "";
+      const res = await fetch(`/api/admin/break-glass${q}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Gagal mencabut break-glass");
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["break-glass"] });
+      qc.invalidateQueries({ queryKey: ["data"] });
+      qc.invalidateQueries({ queryKey: ["components"] });
+    },
+  });
+}
+
+export interface ComponentHealth {
+  component: string;
+  status: "ok" | "degraded" | "down";
+  detail: string;
+  meta?: Record<string, unknown>;
+}
+
+export function useComponents() {
+  return useQuery({
+    queryKey: ["components"],
+    queryFn: async (): Promise<ComponentHealth[]> => {
+      const res = await fetch("/api/components");
+      if (!res.ok) throw new Error("Gagal memuat status komponen");
+      const body = await res.json();
+      return (body as { components: ComponentHealth[] }).components;
+    },
+    refetchInterval: 15_000,
+  });
+}
+
+export interface EngineStatusData {
+  bundle_epoch: number;
+  revision: string;
+  active_revision: string;
+  policies_loaded_at: string;
+  snapshot_age: string;
+  last_reload: string;
+  cache_hit_rate?: number;
+  audit_queue_depth?: number;
+  top_denies_24h?: Array<{ rule_id: string; count: number }>;
+  deny_24h_top10?: Array<{ rule_id: string; count: number }>;
+  latency_p50_us?: number;
+  latency_p95_us?: number;
+  latency_p99_us?: number;
+  latency_sparkline?: number[];
+  fail_closed_count?: number;
+  fail_closed_rate?: number;
+}
+
+export function useStatus() {
+  return useQuery({
+    queryKey: ["status"],
+    queryFn: async (): Promise<EngineStatusData> => {
+      const res = await fetch("/api/status");
+      const body = await res.json();
+      if (!res.ok) throw new Error((body as { error?: string }).error ?? "status failed");
+      return body as EngineStatusData;
+    },
+    refetchInterval: 15_000,
   });
 }
 
