@@ -2,7 +2,10 @@
 
 import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { AlertCircle, Radio, X } from "lucide-react";
+import { AlertCircle, Download, Radio, X } from "lucide-react";
+import { toast } from "sonner";
+import { downloadCSV } from "@/lib/csv";
+import { formatWibDateTime } from "@/components/timestamp";
 import { AuditTable } from "@/components/decisions/audit-table";
 import { InspectorDrawer } from "@/components/decisions/inspector-drawer";
 import { useDecisionStream } from "@/components/decisions/stream";
@@ -84,6 +87,41 @@ function DecisionsContent() {
     setDrawerOpen(true);
   };
 
+  const exportToCSV = () => {
+    if (events.length === 0) return;
+    const headers = [
+      "ID",
+      "Timestamp (UTC)",
+      "Timestamp (WIB)",
+      "Stage",
+      "Key ID",
+      "Subject",
+      "Decision",
+      "Rule ID",
+      "Reason",
+      "Latency (µs)",
+      "Cached",
+      "Epoch",
+    ];
+    const rows = events.map((ev) => [
+      ev.id,
+      ev.time,
+      formatWibDateTime(ev.time),
+      ev.stage,
+      ev.key_id,
+      ev.subject,
+      ev.decision,
+      ev.rule_id,
+      ev.reason,
+      ev.latency_us ?? 0,
+      ev.cached ? "true" : "false",
+      ev.epoch,
+    ]);
+    const dateStr = new Date().toISOString().slice(0, 10);
+    downloadCSV(`cerberus-decisions-${dateStr}.csv`, headers, rows);
+    toast.success(`Berhasil mengunduh ${events.length} baris keputusan (CSV)`);
+  };
+
   return (
     <div className="space-y-4">
       <ActivitySubNav />
@@ -104,6 +142,16 @@ function DecisionsContent() {
         description="Jejak audit seluruh evaluasi kebijakan allow/deny gateway secara waktu nyata."
       >
         <div className="flex items-center gap-3">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={exportToCSV}
+            className="h-8 gap-1.5 text-xs"
+            disabled={events.length === 0}
+          >
+            <Download className="size-3.5" />
+            Ekspor CSV ({events.length})
+          </Button>
           <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
             Aliran Live <Switch checked={live} onCheckedChange={setLive} />
           </label>

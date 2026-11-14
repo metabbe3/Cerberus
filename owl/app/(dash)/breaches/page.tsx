@@ -7,12 +7,16 @@ import {
   AlertOctagon,
   ChevronDown,
   ChevronRight,
+  Download,
   Flame,
   Radio,
   Search,
   Skull,
   X,
 } from "lucide-react";
+import { toast } from "sonner";
+import { downloadCSV } from "@/lib/csv";
+import { formatWibDateTime } from "@/components/timestamp";
 import { InspectorDrawer } from "@/components/decisions/inspector-drawer";
 import { PageHeader } from "@/components/page-header";
 import { ActivitySubNav } from "@/components/sub-nav";
@@ -33,7 +37,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useBreaches, useData, usePutData } from "@/lib/queries";
-import { getSeverityBadge, groupSecuritySignals, isBreach, type Severity } from "@/lib/severity";
+import { getSeverity, getSeverityBadge, groupSecuritySignals, isBreach, type Severity } from "@/lib/severity";
 import type { AuditEvent } from "@/lib/schema";
 
 function BreachCenterContent() {
@@ -180,6 +184,37 @@ function BreachCenterContent() {
     setDrawerOpen(true);
   };
 
+  const exportBreachesCSV = () => {
+    if (combinedEvents.length === 0) return;
+    const headers = [
+      "ID",
+      "Timestamp (UTC)",
+      "Timestamp (WIB)",
+      "Severity",
+      "Key ID",
+      "Stage",
+      "Rule ID",
+      "Reason",
+      "Subject",
+      "Latency (µs)",
+    ];
+    const rows = combinedEvents.map((ev) => [
+      ev.id,
+      ev.time,
+      formatWibDateTime(ev.time),
+      getSeverity(ev.rule_id),
+      ev.key_id,
+      ev.stage,
+      ev.rule_id,
+      ev.reason,
+      ev.subject,
+      ev.latency_us ?? 0,
+    ]);
+    const dateStr = new Date().toISOString().slice(0, 10);
+    downloadCSV(`cerberus-breaches-${dateStr}.csv`, headers, rows);
+    toast.success(`Berhasil mengunduh ${combinedEvents.length} baris pelanggaran (CSV)`);
+  };
+
   return (
     <div className="space-y-6">
       <ActivitySubNav />
@@ -201,6 +236,16 @@ function BreachCenterContent() {
         description="Pusat triase dan investigasi insiden keamanan: sinyal terdedup 15m, deteksi first-seen, dan respon cepat."
       >
         <div className="flex items-center gap-3">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={exportBreachesCSV}
+            className="h-8 gap-1.5 text-xs"
+            disabled={combinedEvents.length === 0}
+          >
+            <Download className="size-3.5" />
+            Ekspor CSV ({combinedEvents.length})
+          </Button>
           <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
             Stream Otomatis <Switch checked={live} onCheckedChange={setLive} />
           </label>

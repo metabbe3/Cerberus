@@ -114,3 +114,14 @@ justification in the PR.
 - **Smoke:** `make smoke` = start binary, curl allow/deny/masked/reload, assert exit 0.
 - **Dashboard:** see Phase 2 §6.
 - **No mocks of OPA.** Tests evaluate real Rego against fixture data; the engine is the unit.
+
+## Next (Future Scope — Post-U2)
+
+Features noted from LiteLLM patterns and enterprise feedback reserved for future iterations (explicitly outside current U2 scope):
+- **Internal-user self-service portal**: End-users view their own key usage, rate limits, and audit logs (LiteLLM `internal_user`).
+- **Organization hierarchy**: Multi-tenancy structure for Org > Team > Project isolation.
+- **Per-model budgets**: Granular quotas and call rate allocations pinned to specific model identifiers.
+- **SSO / OIDC identity providers**: Direct Google Workspace, Okta, and Azure AD integration via engine provider modules (see ADR-0005).
+- **Cost-per-call metering**: Multiplied token counts from tap metrics against dynamic model pricing tables.
+- **Custom dashboard builder**: NEVER — anti-scope. Keep opinionated, security-focused operational dashboards.
+

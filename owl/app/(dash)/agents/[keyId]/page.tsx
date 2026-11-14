@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -51,6 +53,7 @@ import {
   ShieldCheck,
   Skull,
   Terminal,
+  Zap,
 } from "lucide-react";
 
 export default function AgentObservabilityPage() {
@@ -68,6 +71,8 @@ export default function AgentObservabilityPage() {
   const [rotateSuffix, setRotateSuffix] = useState("-v2");
   const [revokeOld, setRevokeOld] = useState(false);
   const [rotateResult, setRotateResult] = useState<{ newKeyId: string } | null>(null);
+  const [killDialogOpen, setKillDialogOpen] = useState(false);
+  const [killReason, setKillReason] = useState("");
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -176,7 +181,11 @@ export default function AgentObservabilityPage() {
     );
   }, [auditEvents, filterText]);
 
-  const handleToggleKill = async () => {
+  const handleToggleKill = () => {
+    setKillDialogOpen(true);
+  };
+
+  const handleExecuteKillToggle = async () => {
     if (!configData) return;
     const next = structuredClone(configData.data);
     if (!next.config.kill_switch) {
@@ -185,11 +194,23 @@ export default function AgentObservabilityPage() {
     if (!next.config.kill_switch.keys) {
       next.config.kill_switch.keys = {};
     }
-    next.config.kill_switch.keys[keyId] = !isKilled;
+    if (isKilled) {
+      delete next.config.kill_switch.keys[keyId];
+    } else {
+      next.config.kill_switch.keys[keyId] = true;
+    }
     try {
       await putDataMutation.mutateAsync(next);
-    } catch {
-      // handled
+      setKillDialogOpen(false);
+      setKillReason("");
+      toast.success(
+        isKilled
+          ? `Kunci ${keyId} berhasil dibuka blokirnya (Unblocked)`
+          : `Kunci ${keyId} berhasil diblokir (Kill switch aktif)`,
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Gagal memperbarui status blokir kunci";
+      toast.error(msg);
     }
   };
 
@@ -343,13 +364,13 @@ export default function AgentObservabilityPage() {
           >
             {isKilled ? (
               <>
-                <ShieldCheck className="mr-1.5 size-3.5" />
-                Restore Agent
+                <Zap className="mr-1.5 size-3.5" />
+                Buka Blokir (Unblock Key)
               </>
             ) : (
               <>
                 <Skull className="mr-1.5 size-3.5" />
-                Kill Switch
+                Blokir Kunci (Block Key)
               </>
             )}
           </Button>
@@ -958,6 +979,54 @@ export default function AgentObservabilityPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Dialog Blokir / Buka Blokir Kunci (LiteLLM /key/block pattern) */}
+      <Dialog open={killDialogOpen} onOpenChange={setKillDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {isKilled
+                ? `Buka Blokir Kunci: ${keyId}`
+                : `Blokir Kunci Agen: ${keyId}`}
+            </DialogTitle>
+            <DialogDescription>
+              {isKilled
+                ? `Kunci ${keyId} akan dipulihkan. Agen akan kembali dapat melakukan evaluasi dan panggilan tool sesuai aturan kebijakan yang berlaku.`
+                : `Tindakan darurat 1-klik (Kill Switch): Seluruh panggilan dari kunci ${keyId} akan langsung DITOLAK di tingkat gateway (ops.kill_switch).`}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <Label htmlFor="kill-reason">Alasan Tindakan (Audit Log)</Label>
+            <Input
+              id="kill-reason"
+              placeholder={
+                isKilled
+                  ? "misal: Investigasi selesai, agen aman digunakan kembali"
+                  : "misal: Terdeteksi aktivitas anomali / kebocoran token"
+              }
+              value={killReason}
+              onChange={(e) => setKillReason(e.target.value)}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setKillDialogOpen(false)}
+            >
+              Batal
+            </Button>
+            <Button
+              variant={isKilled ? "default" : "destructive"}
+              onClick={handleExecuteKillToggle}
+              disabled={putDataMutation.isPending}
+            >
+              {isKilled ? "Ya, Buka Blokir" : "Ya, Blokir Kunci Ini"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <InspectorDrawer
         open={!!inspectEvent}
         onOpenChange={(open) => !open && setInspectEvent(null)}
