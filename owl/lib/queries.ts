@@ -266,6 +266,25 @@ export function useRollback() {
   });
 }
 
+export function useRollbackBundle() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/admin/bundle/rollback", {
+        method: "POST",
+      });
+      const data = (await res.json()) as { ok?: boolean; epoch?: number; revision?: string; error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Gagal rollback bundle");
+      return data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["status"] });
+      qc.invalidateQueries({ queryKey: ["coverage"] });
+      qc.invalidateQueries({ queryKey: ["revisions"] });
+    },
+  });
+}
+
 // Live + history, newest-first. The engine replays its last-50 ring on every
 // (re)connect and the history page already contains those rows, so duplicates
 // are dropped by id — first occurrence wins (live rows sit ahead of history).

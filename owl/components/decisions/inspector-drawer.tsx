@@ -14,6 +14,7 @@ import {
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Timestamp } from "@/components/timestamp";
 import {
   Sheet,
   SheetContent,
@@ -61,12 +62,6 @@ export function InspectorDrawer({ open, onOpenChange, event }: InspectorDrawerPr
       router.push(`/agents/${encodeURIComponent(event.key_id)}?prefill=restricted:${encodeURIComponent(event.subject)}`);
     }
   };
-
-  const localTime = new Date(event.time).toLocaleString("id-ID", {
-    dateStyle: "medium",
-    timeStyle: "medium",
-  });
-  const isoTime = new Date(event.time).toISOString();
 
   const latencyStr =
     event.latency_us !== undefined && event.latency_us > 0
@@ -183,9 +178,9 @@ export function InspectorDrawer({ open, onOpenChange, event }: InspectorDrawerPr
 
               <div>
                 <span className="text-[11px] text-muted-foreground font-medium block">Waktu Evaluasi</span>
-                <span className="font-mono text-[11px] text-foreground tabular-nums block mt-0.5" title={isoTime}>
-                  {localTime} WIB
-                </span>
+                <div className="mt-0.5">
+                  <Timestamp time={event.time} />
+                </div>
               </div>
 
               <div>

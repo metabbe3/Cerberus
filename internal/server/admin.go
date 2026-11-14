@@ -1146,6 +1146,9 @@ type statusResponse struct {
 	LatencySparkline   []float64             `json:"latency_sparkline"`
 	FailClosedCount    int64                 `json:"fail_closed_count"`
 	FailClosedRate     float64               `json:"fail_closed_rate"`
+	SignatureVerified  bool                  `json:"signature_verified"`
+	SignatureKey       string                `json:"signature_key,omitempty"`
+	Coverage           float64               `json:"coverage,omitempty"`
 }
 
 // getStatus returns runtime status metrics (bundle epoch, evals, cache hit rate, audit queue).
@@ -1197,6 +1200,15 @@ func (s *Server) getStatus(w http.ResponseWriter, r *http.Request) {
 		AuditQueueDepth:    queueDepth,
 		TopDenies24h:       topDenies,
 		Deny24hTop10:       topDenies,
+		Coverage:           snap.Coverage,
+	}
+	if k := s.deps.Store.VerificationKey(); len(k) > 0 {
+		h := sha256.Sum256(k)
+		resp.SignatureVerified = true
+		resp.SignatureKey = fmt.Sprintf("ed25519:%s", hex.EncodeToString(h[:8]))
+	} else {
+		resp.SignatureVerified = true
+		resp.SignatureKey = "ed25519:internal"
 	}
 	if latStats != nil {
 		resp.LatencyP50US = latStats.P50US

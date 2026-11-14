@@ -229,6 +229,17 @@ export async function rollbackData(revisionId?: number): Promise<{ ok: boolean; 
   return (await res.json()) as { ok: boolean; epoch: number; revision_id: number };
 }
 
+export async function rollbackBundle(): Promise<{ ok: boolean; epoch: number; revision: string }> {
+  const res = await engineFetch("/v1/admin/bundle/rollback", {
+    method: "POST",
+  });
+  return (await res.json()) as { ok: boolean; epoch: number; revision: string };
+}
+
+export async function getActiveBundle(): Promise<Response> {
+  return engineFetch("/v1/admin/bundle");
+}
+
 export interface TraceEntry {
   op: string;
   rule?: string;

@@ -1110,6 +1110,7 @@ type AgentSummary struct {
 	BreachCount    int64  `json:"breach_count"`
 	LastActive     string `json:"last_active"`
 	DailyToolCalls int64  `json:"daily_tool_calls"`
+	RateLimitHits  int64  `json:"rate_limit_hits"`
 }
 
 // Breaches returns aggregated breach statistics, buckets, top offenders, and breach events.
@@ -1407,6 +1408,7 @@ func (m *dbManager) queryAgentsSummary(ctx context.Context, since time.Time) ([]
 		breachCount    int64
 		lastTime       time.Time
 		dailyToolCalls int64
+		rateLimitHits  int64
 	}
 	agents := make(map[string]*agentAccumulator)
 
@@ -1436,6 +1438,9 @@ func (m *dbManager) queryAgentsSummary(ctx context.Context, since time.Time) ([]
 				acc.deny++
 				if IsBreach(decision, ruleID) {
 					acc.breachCount++
+				}
+				if ruleID == "ops.rate_limited" {
+					acc.rateLimitHits++
 				}
 			}
 			if stage == "tool" {
@@ -1480,6 +1485,7 @@ func (m *dbManager) queryAgentsSummary(ctx context.Context, since time.Time) ([]
 			BreachCount:    acc.breachCount,
 			LastActive:     lastActive,
 			DailyToolCalls: acc.dailyToolCalls,
+			RateLimitHits:  acc.rateLimitHits,
 		})
 	}
 

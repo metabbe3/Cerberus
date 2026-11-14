@@ -215,6 +215,7 @@ export interface AgentSummary {
   breach_count: number;
   last_active: string;
   daily_tool_calls: number;
+  rate_limit_hits?: number;
 }
 
 export interface RotateKeyResult {

@@ -4,28 +4,10 @@ import type { ColumnDef } from "@tanstack/react-table";
 import { ChevronRight } from "lucide-react";
 import { DataTable } from "@/components/data-table";
 import { KeyCell } from "@/components/key-cell";
+import { Timestamp } from "@/components/timestamp";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { AuditEvent } from "@/lib/schema";
-
-function TimeCell({ time }: { time: string }) {
-  const d = new Date(time);
-  const timeStr = d.toLocaleTimeString("id-ID", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-  const dateStr = d.toLocaleDateString("id-ID", { day: "2-digit", month: "short" });
-  return (
-    <div
-      className="font-mono text-xs tabular-nums text-foreground flex items-center gap-1.5"
-      title={`${d.toISOString()} (UTC)`}
-    >
-      <span className="text-muted-foreground text-[11px]">{dateStr}</span>
-      <span>{timeStr}</span>
-    </div>
-  );
-}
 
 function LatencyCell({ latencyUs, cached }: { latencyUs?: number; cached?: boolean }) {
   const latStr =
@@ -55,7 +37,7 @@ const columns = (onSelectEvent?: (ev: AuditEvent) => void): ColumnDef<AuditEvent
   {
     id: "time",
     header: "Waktu (WIB)",
-    cell: ({ row }) => <TimeCell time={row.original.time} />,
+    cell: ({ row }) => <Timestamp time={row.original.time} />,
   },
   {
     accessorKey: "stage",

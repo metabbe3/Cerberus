@@ -54,6 +54,7 @@ interface AddAgentDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   teams?: Record<string, Team>;
+  initialKeyId?: string;
 }
 
 function generateSuffix(): string {
@@ -68,7 +69,7 @@ function toSlug(text: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-export function AddAgentDialog({ open, onOpenChange, teams }: AddAgentDialogProps) {
+export function AddAgentDialog({ open, onOpenChange, teams, initialKeyId }: AddAgentDialogProps) {
   const saveAgent = useSaveAgent();
 
   const [step, setStep] = useState<1 | 2 | 3 | "success">(1);
@@ -77,6 +78,14 @@ export function AddAgentDialog({ open, onOpenChange, teams }: AddAgentDialogProp
   const [suffix, setSuffix] = useState<string>(generateSuffix);
   const [customKey, setCustomKey] = useState<string>("");
   const [isKeyManuallyEdited, setIsKeyManuallyEdited] = useState(false);
+
+  useEffect(() => {
+    if (initialKeyId && open) {
+      setName(initialKeyId);
+      setCustomKey(initialKeyId);
+      setIsKeyManuallyEdited(true);
+    }
+  }, [initialKeyId, open]);
 
   // Step 2: Policy & Templates
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("open");
