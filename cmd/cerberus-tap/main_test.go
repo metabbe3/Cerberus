@@ -1064,8 +1064,11 @@ func TestLLMDecideFullConversationDeepScan(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 Forbidden", resp.StatusCode)
 	}
-	if len(receivedMessages) != 5 {
-		t.Fatalf("engine received %d messages, want 5", len(receivedMessages))
+	// Sejak scanner injection nyata (tap-scan/v1): payload injection dalam
+	// pesan user diblokir FAIL-CLOSED di tap SEBELUM diteruskan ke engine —
+	// engine tidak menerima pesan apa pun (era passthrough: 5 pesan).
+	if len(receivedMessages) != 0 {
+		t.Fatalf("engine received %d messages, want 0 (injection blocked pre-decide)", len(receivedMessages))
 	}
 }
 

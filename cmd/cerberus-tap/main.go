@@ -194,19 +194,37 @@ func askEngine(engineURL, token, keyID string, body []byte, strict bool) (decide
 		return decideResp{Decision: "allow", StatusCode: http.StatusOK, Capture: true}, true
 	}
 	prompt, msgs := extractConversationAndPrompt(body)
+
+	// Injection scan NYATA (bukan passthrough): trafik in-path dipindai
+	// sebelum diteruskan upstream. Payload injection di konten user/
+	// assistant/tool ditolak fail-closed di tap; konten system milik
+	// agent sendiri dilewati agar prompt pertahanan tidak false-positive.
+	hits := ScanInjection(msgs)
+	if len(hits) > 0 {
+		h := hits[0]
+		log.Printf("[tap] INJECTION BLOCKED key=%s rule=%s evidence=%q", keyID, h.Rule, h.Evied)
+		return decideResp{
+			Decision:   "deny",
+			RuleID:     "tap.injection_detected",
+			Reason:     h.Rule + ": " + h.Evied,
+			StatusCode: http.StatusForbidden,
+		}, false
+	}
+
 	payloadMap := map[string]any{
 		"key_id": keyID,
 		"stage":  "llm",
 		"action": "chat",
 		"model":  modelOf(body),
 		"prompt": prompt,
-		// Trafik tap sudah in-path ter-inspeksi penuh (capture body + turn audit),
-		// sehingga guard ai.llm.unscanned (>4KB tanpa scan) tidak berlaku:
-		// tandai sumber agar rule injection_scanned terpenuhi secara jujur
-		// dan audit tetap mencatat asal keputusan (context.source).
+		// Trafik tap sudah in-path dan kini TERSCAN injection (ScanInjection):
+		// context.scanner jujur melaporkan hasil scan nyata, guard
+		// ai.llm.unscanned (>4KB tanpa scan) terpenuhi tanpa passthrough.
 		"context": map[string]any{
-			"scanner": "tap-passthrough",
-			"source":  "cerberus-tap",
+			"scanner":     "tap-scan/v1",
+			"scan_result": "clean",
+			"turns":       len(msgs),
+			"source":      "cerberus-tap",
 		},
 	}
 	if len(msgs) > 0 {
