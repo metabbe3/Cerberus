@@ -105,8 +105,8 @@ export function UpstreamCard() {
         </CardTitle>
         <CardDescription>
           Endpoint tujuan trafik LLM agent (tap). Trafik otomatis diarahkan ke
-          upstream ini — tanpa restart.
-          {hint ? ` Key aktif: sk-…${hint}` : " Belum ada key tersimpan."}
+          upstream ini — tanpa restart. Mode default: pass-through — agent
+          memakai kredensialnya sendiri, Cerberus hanya inspect/decide/mask.
           {updatedAt ? ` Diperbarui ${new Date(updatedAt).toLocaleString("id-ID")}.` : ""}
         </CardDescription>
       </CardHeader>
@@ -134,17 +134,29 @@ export function UpstreamCard() {
             spellCheck={false}
           />
         </div>
-        <div className="space-y-2">
-          <Label htmlFor="upstream-key">API key{hint ? " (kosong = pakai key lama)" : ""}</Label>
-          <Input
-            id="upstream-key"
-            type="password"
-            placeholder={hint ? "biarkan kosong untuk memakai key lama" : "sk-…"}
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            autoComplete="new-password"
-          />
-        </div>
+        <details className="group rounded-md border border-border/60 bg-muted/30 px-3 py-2">
+          <summary className="cursor-pointer select-none text-xs font-medium text-muted-foreground hover:text-foreground">
+            Opsi lanjutan: central key custody (menimpa kredensial agent)
+          </summary>
+          <div className="mt-3 space-y-2">
+            <p className="text-xs text-muted-foreground">
+              Opsional. Bila diisi, tap mengganti Authorization agent dengan key
+              ini sebelum meneruskan (agent jadi zero-key; revoke satu tempat).
+              Kosongkan untuk pass-through.
+            </p>
+            <div className="space-y-2">
+              <Label htmlFor="upstream-key">API key{hint ? " (kosong = pakai key lama)" : ""}</Label>
+              <Input
+                id="upstream-key"
+                type="password"
+                placeholder={hint ? "biarkan kosong untuk memakai key lama" : "sk-…"}
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                autoComplete="new-password"
+              />
+            </div>
+          </div>
+        </details>
         {testResult ? (
           testResult.ok ? (
             <Alert>
