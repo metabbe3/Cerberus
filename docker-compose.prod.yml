@@ -1,33 +1,39 @@
-# Cerberus Production Multi-Service Stack (5 services, 1 image)
-# Uses the unified GHCR image: ghcr.io/metabbe3/cerberus:latest
+# Cerberus Production Multi-Service Stack (6 services, 12-factor compliant)
+# Uses the unified GHCR image: ghcr.io/metabbe3/cerberus:latest and ./owl
 #
 # Usage:
 #   cp .env.example .env
-#   docker compose -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.prod.yml up -d --wait
 #
 # All gates publish exclusively to loopback (127.0.0.1) for defense-in-depth.
-# Engine is on the internal network only and reachable by gates at http://engine:8089.
+# Engine is on the internal network and loopback 8089 for local administrative access.
 
 name: cerberus-prod
 
 services:
   # 1. Policy Engine — central brain, decide API, hot reload, audit trail
   engine:
-    image: ghcr.io/metabbe3/cerberus:latest
+    image: ${CERBERUS_IMAGE:-ghcr.io/metabbe3/cerberus:latest}
     restart: unless-stopped
     command: /usr/local/bin/cerberus
     environment:
-      CERBERUS_ADDR: ":8089"
-      CERBERUS_POLICY_DIR: /policies
-      CERBERUS_DATA_FILE: /data/prod.json
-      CERBERUS_AUDIT_DB: /audit/cerberus.db
+      CERBERUS_ADDR: ${CERBERUS_ADDR:-:8089}
+      CERBERUS_POLICY_DIR: ${CERBERUS_POLICY_DIR:-/policies}
+      CERBERUS_DATA_FILE: ${CERBERUS_DATA_FILE:-/data/prod.json}
+      CERBERUS_AUDIT_DB: ${CERBERUS_AUDIT_DB:-/audit/cerberus.db}
+      CERBERUS_AUDIT_RETENTION_DAYS: ${CERBERUS_AUDIT_RETENTION_DAYS:-30}
+      CERBERUS_EVAL_TIMEOUT: ${CERBERUS_EVAL_TIMEOUT:-3s}
+      CERBERUS_LOG_LEVEL: ${CERBERUS_LOG_LEVEL:-info}
       CERBERUS_PG_DSN: ${CERBERUS_PG_DSN:-}
-      CERBERUS_ADMIN_TOKEN: ${CERBERUS_ADMIN_TOKEN:-}
+      CERBERUS_ADMIN_TOKEN: ${CERBERUS_ADMIN_TOKEN:?CERBERUS_ADMIN_TOKEN is required}
     volumes:
       - ./policies:/policies:ro
       - ./data:/data:ro
       - engineaudit:/audit
+    ports:
+      - "127.0.0.1:8089:8089"
     networks:
+      - edge
       - internal
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8089/healthz >/dev/null || exit 1"]
@@ -43,12 +49,19 @@ services:
 
   # 2. LLM Tap — in-path HTTP proxy intercepting & auditing LLM agent traffic
   tap:
-    image: ghcr.io/metabbe3/cerberus:latest
+    image: ${CERBERUS_IMAGE:-ghcr.io/metabbe3/cerberus:latest}
     restart: unless-stopped
-    command: cerberus-tap -listen 0.0.0.0:8090 -upstream https://api.z.ai/api/anthropic -engine-url http://engine:8089 -data-dir /data -retention-days 14 -strict
+    command: >-
+      cerberus-tap
+      -listen ${CERBERUS_TAP_LISTEN:-0.0.0.0:8090}
+      -upstream ${CERBERUS_TAP_UPSTREAM:-https://api.anthropic.com}
+      -engine-url ${CERBERUS_ENGINE_URL:-http://engine:8089}
+      -data-dir /data
+      -retention-days ${CERBERUS_TAP_RETENTION_DAYS:-14}
+      -strict
     environment:
       TAP_ADMIN_TOKEN: ${TAP_ADMIN_TOKEN:-}
-      CERBERUS_ADMIN_TOKEN: ${CERBERUS_ADMIN_TOKEN:-}
+      CERBERUS_ADMIN_TOKEN: ${CERBERUS_ADMIN_TOKEN:?CERBERUS_ADMIN_TOKEN is required}
     volumes:
       - tapdata:/data
     ports:
@@ -67,9 +80,21 @@ services:
 
   # 3. Docker Socket-Proxy — shield protecting the docker daemon socket
   proxy:
-    image: ghcr.io/metabbe3/cerberus:latest
+    image: ${CERBERUS_IMAGE:-ghcr.io/metabbe3/cerberus:latest}
     restart: unless-stopped
-    command: cerberus-proxy -listen 0.0.0.0:2377 -docker-host unix:///var/run/docker.sock -policy-dir /gate-policies -data-file /gate-data/data.json -audit-db /audit/proxy-audit.db -default-key k-default-agent
+    command: >-
+      cerberus-proxy
+      -listen ${CERBERUS_PROXY_LISTEN:-0.0.0.0:2377}
+      -docker-host ${CERBERUS_PROXY_DOCKER_HOST:-unix:///var/run/docker.sock}
+      -policy-dir /gate-policies
+      -data-file /gate-data/prod.json
+      -audit-db /audit/proxy-audit.db
+      -default-key ${CERBERUS_PROXY_DEFAULT_KEY:-k-default-agent}
+    environment:
+      CERBERUS_ADMIN_TOKEN: ${CERBERUS_ADMIN_TOKEN:-}
+      CERBERUS_PROXY_DEFAULT_KEY: ${CERBERUS_PROXY_DEFAULT_KEY:-k-default-agent}
+      CERBERUS_EVAL_TIMEOUT: ${CERBERUS_EVAL_TIMEOUT:-3s}
+      CERBERUS_LOG_LEVEL: ${CERBERUS_LOG_LEVEL:-info}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./policies:/gate-policies:ro
@@ -90,9 +115,21 @@ services:
 
   # 4. Egress HTTP Proxy — outbound egress shield for external agent calls
   egress:
-    image: ghcr.io/metabbe3/cerberus:latest
+    image: ${CERBERUS_IMAGE:-ghcr.io/metabbe3/cerberus:latest}
     restart: unless-stopped
-    command: cerberus-proxy -listen 127.0.0.1:8087 -egress-addr 0.0.0.0:8088 -policy-dir /gate-policies -data-file /gate-data/data.json -audit-db /audit/egress-audit.db -default-key k-default-agent
+    command: >-
+      cerberus-proxy
+      -listen 127.0.0.1:8087
+      -egress-addr ${CERBERUS_EGRESS_ADDR:-0.0.0.0:8088}
+      -policy-dir /gate-policies
+      -data-file /gate-data/prod.json
+      -audit-db /audit/egress-audit.db
+      -default-key ${CERBERUS_PROXY_DEFAULT_KEY:-k-default-agent}
+    environment:
+      CERBERUS_ADMIN_TOKEN: ${CERBERUS_ADMIN_TOKEN:-}
+      CERBERUS_PROXY_DEFAULT_KEY: ${CERBERUS_PROXY_DEFAULT_KEY:-k-default-agent}
+      CERBERUS_EVAL_TIMEOUT: ${CERBERUS_EVAL_TIMEOUT:-3s}
+      CERBERUS_LOG_LEVEL: ${CERBERUS_LOG_LEVEL:-info}
     volumes:
       - ./policies:/gate-policies:ro
       - ./data:/gate-data:ro
@@ -112,11 +149,18 @@ services:
 
   # 5. SSH Bastion Gate — decide-only audit gate inspecting commands via engine
   ssh:
-    image: ghcr.io/metabbe3/cerberus:latest
+    image: ${CERBERUS_IMAGE:-ghcr.io/metabbe3/cerberus:latest}
     restart: unless-stopped
-    command: cerberus-ssh -listen 0.0.0.0:2222 -engine-url http://engine:8089
+    command: >-
+      cerberus-ssh
+      -listen ${CERBERUS_SSH_LISTEN:-0.0.0.0:2222}
+      -engine-url ${CERBERUS_ENGINE_URL:-http://engine:8089}
     environment:
-      CERBERUS_ADMIN_TOKEN: ${CERBERUS_ADMIN_TOKEN:-}
+      CERBERUS_ADMIN_TOKEN: ${CERBERUS_ADMIN_TOKEN:?CERBERUS_ADMIN_TOKEN is required}
+      CERBERUS_SSH_UPSTREAM_HOST: ${CERBERUS_SSH_UPSTREAM_HOST:-}
+      CERBERUS_SSH_UPSTREAM_USER: ${CERBERUS_SSH_UPSTREAM_USER:-}
+      CERBERUS_SSH_UPSTREAM_KEY: ${CERBERUS_SSH_UPSTREAM_KEY:-}
+      CERBERUS_SSH_UPSTREAM_HOSTKEY: ${CERBERUS_SSH_UPSTREAM_HOSTKEY:-}
     volumes:
       - sshdata:/data
     ports:
@@ -132,6 +176,30 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+
+  # 6. Owl Dashboard — Next.js 15 administrative UI for real-time audit & agent governance
+  owl:
+    build:
+      context: ./owl
+      dockerfile: Dockerfile
+    image: ${OWL_IMAGE:-cerberus-owl:latest}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      CERBERUS_URL: ${CERBERUS_ENGINE_URL:-http://engine:8089}
+      CERBERUS_ADMIN_TOKEN: ${CERBERUS_ADMIN_TOKEN:?CERBERUS_ADMIN_TOKEN is required}
+      OWL_PASSWORD: ${OWL_ADMIN_PASSWORD:-${OWL_PASSWORD:?OWL_ADMIN_PASSWORD or OWL_PASSWORD is required}}
+      OWL_ADMIN_PASSWORD: ${OWL_ADMIN_PASSWORD:-${OWL_PASSWORD:-}}
+      OWL_SESSION_SECRET: ${OWL_SESSION_SECRET:?OWL_SESSION_SECRET is required}
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - edge
+      - internal
+    depends_on:
+      engine:
+        condition: service_started
 
 networks:
   edge: {}
