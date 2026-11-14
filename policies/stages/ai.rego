@@ -25,6 +25,18 @@ tool_call := object.get(input, "tool_call", "")
 
 llm_decision := {
 	"decision": "deny",
+	"rule_id": "ai.llm.oversized_uninspected",
+	"reason": sprintf("prompt size %d bytes exceeds 64KB uninspected limit", [total_prompt_bytes]),
+} if {
+	llm_oversized
+} else := {
+	"decision": "deny",
+	"rule_id": "ai.llm.unscanned",
+	"reason": sprintf("prompt size %d bytes exceeds 4KB without injection scan in context", [total_prompt_bytes]),
+} if {
+	llm_unscanned
+} else := {
+	"decision": "deny",
 	"rule_id": "ai.llm.budget_invalid",
 	"reason": budget_invalid_reason,
 } if {
@@ -71,6 +83,53 @@ llm_decision := {
 	"decision": "allow",
 	"rule_id": "ai.llm.allow",
 	"reason": sprintf("model %q allowed", [model]),
+}
+
+# ---------- prompt size & scanner inspection checks (MC-P0 Akar 4) ----------
+
+prompt_len := count(input.prompt) if {
+	is_string(input.prompt)
+} else := 0
+
+system_string_len := count(input.system) if {
+	is_string(input.system)
+} else := 0
+
+system_walk_lens := [count(v) |
+	input.system
+	not is_string(input.system)
+	[_, v] := walk(input.system)
+	is_string(v)
+]
+
+msg_string_lens := [count(m.content) |
+	some m in input.messages
+	is_string(m.content)
+]
+
+msg_walk_lens := [count(v) |
+	some m in input.messages
+	not is_string(m.content)
+	[_, v] := walk(m.content)
+	is_string(v)
+]
+
+total_prompt_bytes := (((prompt_len + system_string_len) + sum(system_walk_lens)) + sum(msg_string_lens)) + sum(msg_walk_lens)
+
+llm_oversized if total_prompt_bytes > 65536
+
+injection_scanned if {
+	is_object(input.context)
+	some k in ["scanner", "scan", "scan_result", "scanner_result", "injection_scan", "injection_scanned", "scanned"]
+	v := object.get(input.context, k, null)
+	v != null
+	v != false
+	v != ""
+}
+
+llm_unscanned if {
+	total_prompt_bytes > 4096
+	not injection_scanned
 }
 
 # Budget limits: agent, registered team, and optional global budget limit.
@@ -196,9 +255,33 @@ model_listed(models) if {
 	glob.match(m, null, input.model)
 }
 
-# ---------- tool (pre-exec): restricted → not allowed → blocked pattern → argument constraints ----------
+# ---------- tool (pre-exec): shellguard unparseable → restricted → not allowed → blocked pattern → argument constraints ----------
+
+non_standard_cmd_keys := ["exec", "argv", "run", "execute", "command_line"]
+
+tool_shellguard_unparseable if {
+	args := object.get(input, "args", {})
+	some k in non_standard_cmd_keys
+	v := object.get(args, k, null)
+	v != null
+	v != ""
+}
+
+tool_shellguard_unparseable if {
+	lower(tool_call) in ["runner", "shell_run", "bash", "sh", "terminal", "exec"]
+	args := object.get(input, "args", {})
+	not object.get(args, "cmd", null)
+	not object.get(args, "command", null)
+	not object.get(args, "script", null)
+}
 
 tool_decision := {
+	"decision": "deny",
+	"rule_id": "shellguard.unparseable",
+	"reason": "tool call contains non-standard command argument or missing command key",
+} if {
+	tool_shellguard_unparseable
+} else := {
 	"decision": "deny",
 	"rule_id": "ai.tool.restricted",
 	"reason": sprintf("tool call %s is restricted", [tool_call]),
@@ -229,6 +312,12 @@ tool_decision := {
 	"reason": shield_container_reason,
 } if {
 	shield_container_protected
+} else := {
+	"decision": "deny",
+	"rule_id": "shield.protected_path",
+	"reason": sprintf("tool arg path touches protected path: %s", [protected_path_hit]),
+} if {
+	tool_protected_path_hit
 } else := {
 	"decision": "deny",
 	"rule_id": "shield.cmd.dangerous",
@@ -392,6 +481,28 @@ llm_target_prod if {
 llm_target_prod if {
 	is_string(input.prompt)
 	prod.prod_ip(input.prompt)
+}
+
+# tool_protected_path_hit: any string arg value touches prod_shield.protected_paths
+protected_path_hit := hit if {
+	some v in prod.all_arg_strings(input.args)
+	prod.protected_path(v)
+	hit := v
+}
+
+tool_protected_path_hit if {
+	count([v | some v in prod.all_arg_strings(input.args); prod.protected_path(v)]) > 0
+}
+
+llm_target_prod if {
+	some m in input.messages
+	is_string(m.content)
+	prod.touches_prod(m.content)
+}
+llm_target_prod if {
+	some m in input.messages
+	is_string(m.content)
+	prod.prod_ip(m.content)
 }
 
 llm_target_reason := sprintf("target host %q is a protected production resource", [target_host]) if {

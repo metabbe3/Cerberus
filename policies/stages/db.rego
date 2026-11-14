@@ -6,6 +6,9 @@ package stages.db
 
 import rego.v1
 
+import data.gateway.authz
+import data.shield.prod
+
 decision := db_decision
 
 args := object.get(input, "args", {})
@@ -29,6 +32,25 @@ statements := [trim(s, " \t\r\n") | s := split(clean_sql, ";")[_]; trim(s, " \t\
 # ---------- db decision else-chain ----------
 
 db_decision := {
+	"decision": "allow",
+	"rule_id": "shield.exempt",
+	"reason": "shield_exempt",
+} if {
+	db_shield_target
+	prod.exempt(input.key_id)
+} else := {
+	"decision": "deny",
+	"rule_id": "shield.prod.no_access",
+	"reason": sprintf("database %q is a protected production resource", [database]),
+} if {
+	db_prod_no_access
+} else := {
+	"decision": "deny",
+	"rule_id": "db.file_drop_forbidden",
+	"reason": "COPY ... TO file drop statement is forbidden",
+} if {
+	copy_to_file_drop
+} else := {
 	"decision": "deny",
 	"rule_id": "db.destructive_statement",
 	"reason": "destructive SQL statement is forbidden",
@@ -62,6 +84,41 @@ db_decision := {
 	"decision": "allow",
 	"rule_id": "db.allow",
 	"reason": sprintf("db query on %q allowed", [database]),
+}
+
+# ---------- Shield prod checks ----------
+
+agent_has_prod_access if authz.agent_has_prod_access
+
+db_touches_prod if {
+	database != ""
+	norm_db := prod.normalize(database)
+	some kw in data.prod_shield.db_keywords
+	contains(norm_db, prod.normalize(kw))
+}
+
+db_shield_target if db_touches_prod
+
+db_prod_no_access if {
+	not agent_has_prod_access
+	db_touches_prod
+}
+
+# ---------- File-drop statement (COPY ... TO 'file') ----------
+
+copy_to_file_drop if {
+	some stmt in statements
+	statement_is_file_drop(stmt)
+}
+
+copy_to_file_drop if {
+	clean_sql != ""
+	statement_is_file_drop(clean_sql)
+}
+
+statement_is_file_drop(s) if {
+	not regex.match(`(?i)\bcopy\b.*\bto\s+(program|stdout)\b`, s)
+	regex.match(`(?i)\bcopy\b.*\bto\s+['"][^'"]+['"]`, s)
 }
 
 # ---------- Destructive statements ----------
@@ -129,7 +186,7 @@ select_requires_limit if {
 }
 
 is_select_statement(s) if {
-	regex.match(`(?i)^\s*select\b`, s)
+	regex.match(`(?i)^\s*(select|with)\b`, s)
 }
 
 has_limit_clause(s) if {

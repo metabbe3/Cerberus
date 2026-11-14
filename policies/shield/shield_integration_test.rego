@@ -337,7 +337,7 @@ test_shield_probe_stranger_bypass_false_fails_closed if {
 		"args": {"cmd": "echo hello safe"},
 	})
 	out.decision == "deny"
-	out.rule_id == "config.unknown_key_closed"
+	out.rule_id == "authz.unknown_key"
 }
 
 # =========================================================================

@@ -23,7 +23,7 @@ port := object.get(input, "port", 22)
 
 req_port := sprintf("%v", [port])
 
-command := object.get(input, "command", "")
+command := object.get(input, "command", object.get(args, "command", object.get(args, "cmd", "")))
 
 # ---------- configuration resolution ----------
 # Rules from data.ssh
@@ -105,6 +105,12 @@ ssh_decision := {
 	user_not_allowed
 } else := {
 	"decision": "deny",
+	"rule_id": "ssh.staged_script_forbidden",
+	"reason": sprintf("executing staged scripts from world-writable paths (/tmp, /var/tmp, /dev/shm) is forbidden: %q", [command]),
+} if {
+	staged_script_forbidden
+} else := {
+	"decision": "deny",
 	"rule_id": "ssh.command_denied",
 	"reason": sprintf("command matches dangerous pattern", []),
 } if {
@@ -171,6 +177,13 @@ command_denied if {
 	action == "exec"
 	some pat in deny_commands
 	regex.match(pat, command)
+}
+
+# Staged script execution guard: forbids executing scripts located in world-writable directories
+staged_script_forbidden if {
+	action == "exec"
+	command != ""
+	regex.match("(?i)(?:^|[\\s;|&`$()<>]|source|\\.)(?:\\s*(?:\\b(?:ba|z|da)?sh\\b|\\bpython[0-9.]*\\b|\\bperl\\b|\\bruby\\b))?\\s*/(?:tmp|var/tmp|dev/shm)/", command)
 }
 
 # ---------- shield prod checks ----------

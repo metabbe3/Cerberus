@@ -7,8 +7,11 @@
 > **The "OPA" for the AI agent ecosystem**: a single zero-trust policy enforcement gateway for tool/command/data permissions, at-rest & in-flight masking, egress CIDR shields, and multi-team governance — evaluated with deterministic Rego rules, hot-reloaded dynamically, zero recompilation needed.
 
 📖 **Dokumentasi Lengkap:**
+- 📊 **[docs/STATUS.md](docs/STATUS.md) — Status & progress proyek: apa yang sudah diuji, bukti, dan rantai traceability. Mulai dari sini.**
 - 🚀 [docs/QUICKSTART.md](docs/QUICKSTART.md) — Panduan instalasi cepat (< 5 menit), integrasi runtime agent (Claude Code, Cursor, Python), & FAQ.
 - ⚙️ [docs/SETUP.md](docs/SETUP.md) — Arsitektur detail, referensi variabel lingkungan (12-factor), dan flag CLI.
+- 🔒 [docs/CHANGELOG-AUDIT.md](docs/CHANGELOG-AUDIT.md) — Ledger audit append-only: semua temuan & fix dengan commit + bukti.
+- 🎲 [docs/MONTE-CARLO.md](docs/qa/MONTE-CARLO.md) — Catalog skenario attack monte carlo (yang diuji & yang tidak).
 
 ---
 

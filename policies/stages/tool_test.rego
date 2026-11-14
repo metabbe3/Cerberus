@@ -131,5 +131,61 @@ test_tool_unknown_key_bypass_false_denied if {
 		"args": {},
 	})
 	out.decision == "deny"
-	out.rule_id == "config.unknown_key_closed"
+	out.rule_id == "authz.unknown_key"
+}
+
+# 9. Non-standard command arg keys fail-closed to shellguard.unparseable (5 variants)
+test_tool_non_standard_key_exec_denied if {
+	out := decide({
+		"stage": "tool",
+		"key_id": "k-open",
+		"tool_call": "runner",
+		"args": {"exec": "cat ~/.ssh/id_rsa"},
+	})
+	out.decision == "deny"
+	out.rule_id == "shellguard.unparseable"
+}
+
+test_tool_non_standard_key_argv_denied if {
+	out := decide({
+		"stage": "tool",
+		"key_id": "k-open",
+		"tool_call": "runner",
+		"args": {"argv": "cat ~/.ssh/id_rsa"},
+	})
+	out.decision == "deny"
+	out.rule_id == "shellguard.unparseable"
+}
+
+test_tool_non_standard_key_run_denied if {
+	out := decide({
+		"stage": "tool",
+		"key_id": "k-open",
+		"tool_call": "runner",
+		"args": {"run": "cat ~/.ssh/id_rsa"},
+	})
+	out.decision == "deny"
+	out.rule_id == "shellguard.unparseable"
+}
+
+test_tool_non_standard_key_execute_denied if {
+	out := decide({
+		"stage": "tool",
+		"key_id": "k-open",
+		"tool_call": "runner",
+		"args": {"execute": "cat ~/.ssh/id_rsa"},
+	})
+	out.decision == "deny"
+	out.rule_id == "shellguard.unparseable"
+}
+
+test_tool_non_standard_key_command_line_denied if {
+	out := decide({
+		"stage": "tool",
+		"key_id": "k-open",
+		"tool_call": "runner",
+		"args": {"command_line": "cat ~/.ssh/id_rsa"},
+	})
+	out.decision == "deny"
+	out.rule_id == "shellguard.unparseable"
 }

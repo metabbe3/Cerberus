@@ -198,9 +198,13 @@ docker_write_action if {
 	not docker_write_allowed
 }
 
-# Hardened 13 Nov: a protected container is untouchable for ANY mutating
-# action — not just rm/stop/kill. exec into it, pause, update, attach,
-# archive, rename, resize, wait: all deny.
+# Hardened: a protected container is untouchable for ANY mutating action,
+# and inspect/logs/stats on protected containers are also denied (fail-closed secret leakage prevention).
+docker_container_protected if {
+	action in ["inspect", "logs", "stats"]
+	docker_protected_target
+}
+
 docker_container_protected if {
 	not docker_readonly_action
 	docker_protected_target

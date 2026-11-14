@@ -1,4 +1,4 @@
-package stages.ai_test
+package gateway.ai_test
 
 # AI stage verdict tests: tool glob/exact lists, argument constraint forms,
 # and llm model/budget/blocked-pattern checks — one test per rule_id.
@@ -311,4 +311,18 @@ test_llm_blocked_pattern_system_field_blocks if {
 		{"role": "user", "content": "hello"},
 	]})
 	out.rule_id == "ai.llm.blocked_pattern"
+}
+
+# === shield.protected_path (MC OP02 regression) ===
+test_tool_protected_path_denied if {
+	out := decide({"stage": "tool", "key_id": "k-open", "tool_call": "read_file",
+		"args": {"path": "~/.ssh/id_rsa"}})
+	out.rule_id == "shield.protected_path"
+	out.decision == "deny"
+}
+
+test_tool_protected_path_normal_log_allowed if {
+	out := decide({"stage": "tool", "key_id": "k-open", "tool_call": "read_file",
+		"args": {"path": "logs/app/2026.log"}})
+	out.decision == "allow"
 }

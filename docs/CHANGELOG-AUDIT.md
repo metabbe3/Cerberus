@@ -10,6 +10,13 @@
 
 ## Ledger
 
+### 2026-11-14 (Monte Carlo run-1 — 45.000 sampel, seed 20261114, engine terisolasi :18089)
+- MC-R1 [P0] **FIXED** (5 iterasi, 14 Nov): 12.353 → 3.534 (MC-P0 `45ec079`: SSRF link-local deny + taint-tracking chain.tainted_exfil + authz.unknown_key fail-closed + ai.llm oversized/unscanned) → 589 (MC-P1 `b32176a`: shellguard fail-closed arg-key + docker inspect protected + ssh staged-script + db COPY-TO file-drop + IP-normalize + unicode strip; oracle chain_broken semantics) → 588 palingsifalse-OP02 (MC-P2 `32cabe0`: messages[] prod-scan + runner session_id isolasi taint) → **0 ESCAPE (MC-P3 `977210a`: shield.protected_path enforcement — protected_paths data dulu dead; fixture OP02 autentik)**. Bukti final: mc-report-5.json 45.000 sampel, 0 escape, 0 flaky, p_ub99 0,0001, `[PASS] MONTE CARLO COVERAGE VERIFIED`. OPA 257→282/282 (+25 regression). Loop run→fix→test→rerun tuntas 5 putaran.
+- MC-R1 [INFO] PASS: 7 stage individual (tool/llm/http/db/k8s/docker/ssh × 5.000) = 0 escape, 0 flaky, p_ub99 0,000921 — parser/matcher/unicode/encoding tertahan. TPS 4.067, p99 13ms.
+- MC-R1 [INFO] PASS: flaky-detect 3-cara (idempotency burst, JSON permutation, cache-vs-explain) = 0 flaky verdict.
+- Harness: cmd/cerberus-montecarlo committed (branch wt/montecarlo); catalog docs/qa/MONTE-CARLO.md; guardrail isolasi diverified (loopback-only, tanpa docker.sock/upstream LLM/egress nyata).
+
+
 ### 2026-11-14 (gate pasca-merge R+H+S+M)
 - QA-FLAKE-1 FIXED: `internal/policy` race test hang (604s lokal / 15m32s CI `fe1afc8`) — akar: `ComputeCoverage` menjalankan suite rego 247-test in-process di dalam `LoadBundle` dry-run gate; test rollback memanggil 3× (≈6 full-suite) → di CI 2-core + `-race` panic timeout 25m. Fix: (1) `CERBERUS_SKIP_POLICY_SUITE=1` env guard di `ComputeCoverage` (skip Load+RunTests, smoke tetap), (2) `Makefile test:` pakai flag + target `test-full` baru, (3) 5 test gate (RedSuiteRejected, CoverageDropGate, Coverage×3) dipaksa suite-ON via `t.Setenv` (non-paralel) — kontrak gate tetap teruji. Bukti: `internal/policy` race hijau 203.9s dengan flag (dulu timeout 604s); `make opa-test` tetap penjaga suite 247/247. Fix commit: lihat commit F3-fix batch ini.
 - MERGE-REG-1: wt/hardening membawa balik substring-match + bug scope di authz.rego → ditangkap saat merge, FIXED `39bd060` (sudah dicatat di atas, redundansi disengaja utk lintas-referensi ledger-vs-commit)

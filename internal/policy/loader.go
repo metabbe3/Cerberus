@@ -131,6 +131,16 @@ func decodeData(dataJSON []byte) (map[string]any, error) {
 			return nil, fmt.Errorf("policy: %w: missing required top-level key %q", ErrData, k)
 		}
 	}
+
+	// Fail-closed default mode (MC-P0 Akar 3):
+	// Unknown key_id -> DENY authz.unknown_key.
+	// Default mode fail-closed; env CERBERUS_OPEN_KEY_MODE=1 (default 0) for dev/test that needs k-open passthrough.
+	if os.Getenv("CERBERUS_OPEN_KEY_MODE") != "1" {
+		if cfg, ok := data["config"].(map[string]any); ok && cfg != nil {
+			cfg["bypass_unknown_keys"] = false
+		}
+	}
+
 	return data, nil
 }
 
@@ -161,6 +171,7 @@ func extractRuleIDs(modules map[string]*ast.Module) map[string]bool {
 		"internal.unknown_stage": true,
 		"internal.eval_error":    true,
 		"internal.timeout":       true,
+		"chain.tainted_exfil":    true,
 	}
 	vis := ast.NewGenericVisitor(func(x any) bool {
 		obj, ok := x.(ast.Object)

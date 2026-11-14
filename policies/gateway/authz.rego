@@ -15,12 +15,21 @@ agent := data.agents[input.key_id]
 
 team := data.teams[agent.team_id]
 
-# normalize(s): strip zero-width chars (\u200b\u200c\u200d\ufeff), collapse whitespace, lower.
+# normalize(s): strip zero-width chars and word-joiners (\u200b\u200c\u200d\u2060\u00ad\ufeff),
+# map Latin-lookalike Cyrillic homoglyphs (a,e,o,p,c,x,y,г->r), collapse whitespace, lower.
 normalize(s) := out if {
 	is_string(s)
-	s1 := regex.replace(s, "[\u200b\u200c\u200d\ufeff]", "")
-	s2 := trim_space(regex.replace(s1, `\s+`, " "))
-	out := lower(s2)
+	s0 := regex.replace(s, "[\u200b\u200c\u200d\u2060\u00ad\ufeff]", "")
+	s1 := regex.replace(s0, "[аА]", "a")
+	s2 := regex.replace(s1, "[еЕ]", "e")
+	s3 := regex.replace(s2, "[оО]", "o")
+	s4 := regex.replace(s3, "[рР]", "p")
+	s5 := regex.replace(s4, "[сС]", "c")
+	s6 := regex.replace(s5, "[хХ]", "x")
+	s7 := regex.replace(s6, "[уУ]", "y")
+	s8 := regex.replace(s7, "[гГ]", "r")
+	s9 := trim_space(regex.replace(s8, `\s+`, " "))
+	out := lower(s9)
 } else := s
 call_matches_pattern(pattern, name) if {
 	contains(pattern, "*")
@@ -204,6 +213,6 @@ allow_bypass_keys := {
 
 deny_unknown_key := {
 	"decision": "deny",
-	"rule_id": "config.unknown_key_closed",
+	"rule_id": "authz.unknown_key",
 	"reason": "key not registered and bypass_unknown_keys=false (fail-closed)",
 }

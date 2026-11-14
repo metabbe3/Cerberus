@@ -132,9 +132,9 @@ func DryRunSmoke(ctx context.Context, snap *Snapshot) error {
 		gotRule := strVal(val["rule_id"])
 
 		// R6: Deny-expectation is ONLY valid for real stage/shield rules.
-		// If got rule is config.unknown_key_closed on smoke fixture, fail immediately.
-		if gotRule == "config.unknown_key_closed" {
-			return fmt.Errorf("smoke test failed on '%s': got rule config.unknown_key_closed (smoke fixture k-smoke-fixture must be registered in closed mode)", sc.name)
+		// If got rule is config.unknown_key_closed or authz.unknown_key on smoke fixture, fail immediately.
+		if gotRule == "config.unknown_key_closed" || gotRule == "authz.unknown_key" {
+			return fmt.Errorf("smoke test failed on '%s': got rule %s (smoke fixture k-smoke-fixture must be registered in closed mode)", sc.name, gotRule)
 		}
 		if gotDec != sc.wantDec {
 			return fmt.Errorf("smoke test failed on '%s': got %s/%s, want %s", sc.name, gotDec, gotRule, sc.wantDec)

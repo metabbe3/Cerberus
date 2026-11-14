@@ -122,5 +122,5 @@ test_llm_unknown_key_bypass_false_denied if {
 		"messages": [{"role": "user", "content": "Hello"}],
 	})
 	out.decision == "deny"
-	out.rule_id == "config.unknown_key_closed"
+	out.rule_id == "authz.unknown_key"
 }

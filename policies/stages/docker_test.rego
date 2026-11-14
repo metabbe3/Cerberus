@@ -152,6 +152,51 @@ test_docker_rm_protected_denied if {
 	out.rule_id == "shield.container.protected"
 }
 
+# Protected container inspect/logs/stats must be denied
+test_docker_inspect_protected_denied if {
+	out := decide({
+		"stage": "docker",
+		"key_id": "k-docker-open",
+		"action": "inspect",
+		"resource": "teknikalidnew-db-1",
+	})
+	out.decision == "deny"
+	out.rule_id == "shield.container.protected"
+}
+
+test_docker_logs_protected_denied if {
+	out := decide({
+		"stage": "docker",
+		"key_id": "k-docker-open",
+		"action": "logs",
+		"resource": "teknikalidnew-db-1",
+	})
+	out.decision == "deny"
+	out.rule_id == "shield.container.protected"
+}
+
+test_docker_stats_protected_denied if {
+	out := decide({
+		"stage": "docker",
+		"key_id": "k-docker-open",
+		"action": "stats",
+		"resource": "teknikalidnew-db-1",
+	})
+	out.decision == "deny"
+	out.rule_id == "shield.container.protected"
+}
+
+test_docker_inspect_non_protected_allowed if {
+	out := decide({
+		"stage": "docker",
+		"key_id": "k-docker-open",
+		"action": "inspect",
+		"resource": "my-worker-container",
+	})
+	out.decision == "allow"
+	out.rule_id == "docker.allow"
+}
+
 # Layer 3: Bypass — unknown keys (onboarding mode) still cannot mutate docker
 # state: default-deny writes applies to them too (Argon round 2 hardening).
 test_docker_stranger_write_denied if {
@@ -184,5 +229,5 @@ test_docker_stranger_bypass_closed if {
 		"resource": "any-image:latest",
 	})
 	out.decision == "deny"
-	out.rule_id == "config.unknown_key_closed"
+	out.rule_id == "authz.unknown_key"
 }

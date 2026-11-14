@@ -128,14 +128,14 @@ is_secret_resource if {
 secret_output_blocked if {
 	is_secret_resource
 	some f in flags
-	regex.match(`(?i)^(-o|--output)(=|\s+)?(yaml|json)$`, f)
+	regex.match(`(?i)^(-o|--output)(=|\s+)?(yaml|json|jsonpath.*|go-template.*)$`, f)
 }
 
 secret_output_blocked if {
 	is_secret_resource
 	some i, f in flags
 	f in ["-o", "--output"]
-	flags[i + 1] in ["yaml", "json"]
+	regex.match(`(?i)^(yaml|json|jsonpath|go-template)`, flags[i + 1])
 }
 
 secret_read if {

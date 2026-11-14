@@ -110,12 +110,13 @@ func DenyHostIP(ctx context.Context, eng engine.Decider, ipStr string) error {
 	ipStr = NormalizeIPString(ipStr)
 	ipIn := engine.Input{
 		Stage:    "http",
-		KeyID:    "egress-dial-guard",
+		KeyID:    "k-open",
 		Action:   "DIAL",
 		Resource: ipStr,
 		Args: map[string]any{
-			"method": "DIAL",
-			"host":   ipStr,
+			"method":         "DIAL",
+			"host":           ipStr,
+			"allow_loopback": true,
 		},
 	}
 	dec := eng.Decide(ctx, ipIn)
@@ -133,16 +134,9 @@ func IsLocalIP(ip net.IP) bool {
 }
 
 // NormalizeIPString unwraps IPv4-mapped IPv6 ("::ffff:10.0.0.1" → "10.0.0.1")
-// so CIDR checks always see the embedded v4 address.
+// and decodes alternative IP representations (octal, hex, 32-bit integer).
 func NormalizeIPString(host string) string {
-	h := strings.Trim(host, "[]")
-	if ip := net.ParseIP(h); ip != nil {
-		if v4 := ip.To4(); v4 != nil {
-			return v4.String()
-		}
-		return ip.String()
-	}
-	return h
+	return util.NormalizeIPString(host)
 }
 
 // ServeHTTP handles both forward HTTP requests and HTTPS CONNECT tunnels.
@@ -222,15 +216,17 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// 1. Evaluate stage http on destination host
+		allowLoopback := p.cfg.DenyLocalIPs != nil && !*p.cfg.DenyLocalIPs
 		in := engine.Input{
 			Stage:    "http",
 			KeyID:    keyID,
 			Action:   "CONNECT",
 			Resource: target,
 			Args: map[string]any{
-				"method": "CONNECT",
-				"host":   hostOnly,
-				"port":   port,
+				"method":         "CONNECT",
+				"host":           hostOnly,
+				"port":           port,
+				"allow_loopback": allowLoopback,
 			},
 		}
 		dec := p.engine.Decide(r.Context(), in)
@@ -379,16 +375,18 @@ func (p *EgressProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	allowLoopback := p.cfg.DenyLocalIPs != nil && !*p.cfg.DenyLocalIPs
 	in := engine.Input{
 		Stage:    "http",
 		KeyID:    keyID,
 		Action:   r.Method,
 		Resource: destURL,
 		Args: map[string]any{
-			"method": r.Method,
-			"host":   hostOnly,
-			"port":   port,
-			"path":   r.URL.Path,
+			"method":         r.Method,
+			"host":           hostOnly,
+			"port":           port,
+			"path":           r.URL.Path,
+			"allow_loopback": allowLoopback,
 		},
 	}
 	dec := p.engine.Decide(r.Context(), in)
@@ -574,10 +572,11 @@ func (p *EgressProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			Action:   currentMethod,
 			Resource: nextURL.String(),
 			Args: map[string]any{
-				"method": currentMethod,
-				"host":   nextHostOnly,
-				"port":   nextPort,
-				"path":   nextURL.Path,
+				"method":         currentMethod,
+				"host":           nextHostOnly,
+				"port":           nextPort,
+				"path":           nextURL.Path,
+				"allow_loopback": allowLoopback,
 			},
 		}
 		hopDec := p.engine.Decide(r.Context(), hopIn)

