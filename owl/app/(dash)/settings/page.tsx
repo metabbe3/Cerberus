@@ -27,7 +27,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { PageHeader } from "@/components/page-header";
 import { UpstreamCard } from "@/components/settings/upstream-card";
-import { PasswordCard } from "@/components/settings/password-card";
 import { useData, usePutData } from "@/lib/queries";
 
 type FlagKey = "teams" | "keys";
@@ -100,8 +99,8 @@ export default function SettingsPage() {
   return (
     <div className="max-w-2xl space-y-4">
       <PageHeader
-        title="Settings"
-        description="Gateway-wide switches. Changes take effect on save (epoch +1)."
+        title="Settings — Cerberus Engine"
+        description="Konfigurasi Cerberus engine: switch gateway, upstream LLM (rute). Untuk akun personal (password, profil) lihat menu Akun."
       />
 
       {savedError ? (
@@ -178,7 +177,6 @@ export default function SettingsPage() {
         </CardHeader>
       </Card>
 
-      <PasswordCard />
       <UpstreamCard />
       <p className="text-xs text-muted-foreground">Upstream LLM disimpan terenkripsi (AES-256-GCM) di engine dan tidak pernah dikirim balik ke browser.</p>
 

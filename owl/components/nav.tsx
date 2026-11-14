@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, Bot, LayoutDashboard, LogOut, Settings, SlidersHorizontal } from "lucide-react";
+import { Activity, Bot, LayoutDashboard, LogOut, Settings, SlidersHorizontal, UserRound } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -45,6 +45,12 @@ const pillars = [
     label: "Settings",
     icon: Settings,
     isActive: (pathname: string) => pathname.startsWith("/settings"),
+  },
+  {
+    href: "/account",
+    label: "Akun",
+    icon: UserRound,
+    isActive: (pathname: string) => pathname.startsWith("/account"),
   },
 ];
 
