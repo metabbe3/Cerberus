@@ -5,6 +5,7 @@ import { SESSION_COOKIE, extractSessionToken } from "./session";
 import {
   AuditEventSchema,
   type AuditEvent,
+  type UpstreamConfig,
   type BreachResult,
   type AgentSummary,
   type RotateKeyResult,
@@ -181,6 +182,33 @@ export async function postBreakGlass(data: {
     body: JSON.stringify(data),
   });
   return await res.json();
+}
+
+export async function getUpstream(): Promise<UpstreamConfig> {
+  const res = await engineFetch("/v1/admin/upstream");
+  return (await res.json()) as UpstreamConfig;
+}
+
+export async function putUpstream(payload: {
+  endpoint: string;
+  api_key?: string;
+}): Promise<UpstreamConfig> {
+  const res = await engineFetch("/v1/admin/upstream", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+  return (await res.json()) as UpstreamConfig;
+}
+
+export async function testUpstream(payload: {
+  endpoint: string;
+  api_key?: string;
+}): Promise<{ ok: boolean; latency_ms?: number; error?: string }> {
+  const res = await engineFetch("/v1/admin/upstream/test", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return (await res.json()) as { ok: boolean; latency_ms?: number; error?: string };
 }
 
 // Raw upstream response for the SSE proxy — the route streams res.body

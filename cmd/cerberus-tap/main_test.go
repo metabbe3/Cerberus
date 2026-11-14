@@ -54,24 +54,28 @@ func newTestTap(t *testing.T, upstreamURL string, engine *httptest.Server, dir s
 	if engine != nil {
 		engineURL = engine.URL
 	}
-	return &server{
-		upstream:  upstreamURL,
+	s := &server{
 		engineURL: engineURL,
 		client:    &http.Client{Timeout: 30 * time.Second},
 		st:        newStore(dir, 14),
+		fallback:  upstreamTarget{endpoint: upstreamURL},
 	}
+	s.target.Store(&upstreamTarget{endpoint: upstreamURL})
+	return s
 }
 
 // newTap builds a tap server with explicit auth/strict settings.
 func newTap(upstreamURL, engineURL, dir, adminTok string, strict bool) *server {
-	return &server{
-		upstream:  upstreamURL,
+	s := &server{
 		engineURL: engineURL,
 		client:    &http.Client{Timeout: 30 * time.Second},
 		st:        newStore(dir, 14),
 		adminTok:  adminTok,
 		strict:    strict,
+		fallback:  upstreamTarget{endpoint: upstreamURL},
 	}
+	s.target.Store(&upstreamTarget{endpoint: upstreamURL})
+	return s
 }
 
 func TestRoundtripNonStream(t *testing.T) {
@@ -682,11 +686,12 @@ func TestKillSwitchDoesNotSeverSSEByDefault(t *testing.T) {
 	defer up.Close()
 
 	srv := &server{
-		upstream: up.URL,
 		client:   &http.Client{Timeout: 10 * time.Second},
 		st:       newStore(t.TempDir(), 14),
 		kills:    newKillRegistry(),
+		fallback: upstreamTarget{endpoint: up.URL},
 	}
+	srv.target.Store(&upstreamTarget{endpoint: up.URL})
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
 
@@ -746,12 +751,13 @@ func TestKillSwitchSeverInFlightStream(t *testing.T) {
 
 	adminTok := "test-admin-token"
 	srv := &server{
-		upstream: up.URL,
 		client:   &http.Client{Timeout: 10 * time.Second},
 		st:       newStore(t.TempDir(), 14),
 		kills:    newKillRegistry(),
 		adminTok: adminTok,
+		fallback: upstreamTarget{endpoint: up.URL},
 	}
+	srv.target.Store(&upstreamTarget{endpoint: up.URL})
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
 
@@ -843,10 +849,11 @@ func TestNonSSEResponseLargePayload(t *testing.T) {
 	defer up.Close()
 
 	srv := &server{
-		upstream: up.URL,
 		client:   &http.Client{Timeout: 30 * time.Second},
 		st:       newStore(t.TempDir(), 14),
+		fallback: upstreamTarget{endpoint: up.URL},
 	}
+	srv.target.Store(&upstreamTarget{endpoint: up.URL})
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
 
@@ -1209,6 +1216,133 @@ func TestTenantQuota_MidStreamToolQuotaCut(t *testing.T) {
 	// Stream must be cut immediately: upstream's "after-tool" must NOT reach client
 	if strings.Contains(bodyStr, "after-tool") {
 		t.Errorf("stream should have been cut, but received after-tool token: %s", bodyStr)
+	}
+}
+
+// TestAtomicUpstreamSwapRace verifies Item 22:
+// Tap can swap upstream target atomically without data races during concurrent traffic.
+func TestAtomicUpstreamSwapRace(t *testing.T) {
+	srv := newTap("https://api-initial.example.com", "", t.TempDir(), "", false)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+
+	// Readers simulating concurrent requests
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					tgt := srv.target.Load()
+					if tgt == nil || tgt.endpoint == "" {
+						t.Errorf("read nil or empty endpoint")
+					}
+				}
+			}
+		}()
+	}
+
+	// Writers simulating hot-reload polling swaps
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			iter := 0
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					iter++
+					newTarget := &upstreamTarget{
+						endpoint: fmt.Sprintf("https://api-%d-%d.example.com", id, iter%10),
+						apiKey:   fmt.Sprintf("sk-key-%d", iter),
+					}
+					srv.target.Store(newTarget)
+				}
+			}
+		}(i)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+}
+
+// TestDownstreamPrivacy_NoCapture verifies Item 24(a):
+// When engine returns X-Cerberus-Capture: false, tap sanitizes prompt and response payloads.
+func TestDownstreamPrivacy_NoCapture(t *testing.T) {
+	secretPrompt := "SUPER_SECRET_FINANCIAL_RECORD_42"
+	secretResponse := "SECRET_CREDIT_CARD_NUMBER_9999"
+
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"content":[{"type":"text","text":"%s"}]}`, secretResponse)
+	}))
+	defer up.Close()
+
+	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Cerberus-Capture", "false")
+		_, _ = fmt.Fprint(w, `{"decision":"allow","rule_id":"ai.llm.allow"}`)
+	}))
+	defer engine.Close()
+
+	dir := t.TempDir()
+	srv := newTap(up.URL, engine.URL, dir, "test-admin", false)
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	reqBody := fmt.Sprintf(`{"model":"claude-3","messages":[{"role":"user","content":"%s"}]}`, secretPrompt)
+	req, _ := http.NewRequest("POST", ts.URL+"/v1/messages", strings.NewReader(reqBody))
+	req.Header.Set("X-Tap-Key", "k-sensitive-agent")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	// Fetch turns from /tap/turns
+	turnsReq, _ := http.NewRequest("GET", ts.URL+"/tap/turns?limit=10", nil)
+	turnsReq.Header.Set("Authorization", "Bearer test-admin")
+	turnsResp, err := http.DefaultClient.Do(turnsReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = turnsResp.Body.Close() }()
+
+	var turns []struct {
+		KeyID   string          `json:"key_id"`
+		Kind    string          `json:"kind"`
+		Payload json.RawMessage `json:"payload"`
+	}
+	if err := json.NewDecoder(turnsResp.Body).Decode(&turns); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(turns) == 0 {
+		t.Fatalf("expected recorded turns, got 0")
+	}
+
+	for _, turn := range turns {
+		plStr := string(turn.Payload)
+		if strings.Contains(plStr, secretPrompt) {
+			t.Fatalf("turn payload leaked prompt in no-capture mode: %s", plStr)
+		}
+		if strings.Contains(plStr, secretResponse) {
+			t.Fatalf("turn payload leaked response in no-capture mode: %s", plStr)
+		}
+		if !strings.Contains(plStr, "_privacy_mode") && !strings.Contains(plStr, "no-capture") {
+			t.Fatalf("turn payload missing privacy mode indicator: %s", plStr)
+		}
 	}
 }
 

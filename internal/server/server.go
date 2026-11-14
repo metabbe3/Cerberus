@@ -17,6 +17,7 @@ import (
 	"github.com/metabbe3/cerberus/internal/policy"
 	"github.com/metabbe3/cerberus/internal/ratelimit"
 	"github.com/metabbe3/cerberus/internal/store"
+	"github.com/metabbe3/cerberus/internal/upstream"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -27,6 +28,8 @@ type Deps struct {
 	Store  *policy.Store
 	Audit  *audit.Logger
 	Auth   *auth.Store
+	// Upstream manages secure LLM upstream configurations (AES-256-GCM).
+	Upstream *upstream.Store
 	// PGMirror, when non-nil, persists every successful data PUT to
 	// PostgreSQL (system of record) after the flat-file write.
 	PGMirror   *store.PG
@@ -39,9 +42,10 @@ type Deps struct {
 // Server is the full Cerberus HTTP handler; it also exposes ShutdownStreams
 // for http.Server.RegisterOnShutdown (graceful shutdown must end SSE streams).
 type Server struct {
-	deps Deps
-	log  *slog.Logger
-	auth *auth.Store
+	deps     Deps
+	log      *slog.Logger
+	auth     *auth.Store
+	upstream *upstream.Store
 
 	limiter      *ratelimit.Limiter
 	breakGlass   *breakGlassManager
@@ -106,10 +110,20 @@ func New(d Deps) *Server {
 			slog.Default().Warn("auth: fallback memory store failed", "err", err)
 		}
 	}
+	upStore := d.Upstream
+	if upStore == nil {
+		dummyKey := make([]byte, 32)
+		var err error
+		upStore, err = upstream.NewMemoryStore(dummyKey)
+		if err != nil {
+			slog.Default().Warn("upstream: fallback memory store failed", "err", err)
+		}
+	}
 	s := &Server{
 		deps:         d,
 		log:          slog.Default(),
 		auth:         authStore,
+		upstream:     upStore,
 		limiter:      lim,
 		breakGlass:   newBreakGlassManager(),
 		adminLimiter: newRateLimiter(1000), // generous general admin limiter
@@ -133,6 +147,14 @@ func New(d Deps) *Server {
 	mux.HandleFunc("POST /v1/admin/users", s.admin(s.handleCreateUser))
 	mux.HandleFunc("POST /v1/admin/users/{id}/disable", s.admin(s.handleSetUserDisabled))
 	mux.HandleFunc("POST /v1/admin/users/{id}/reset-password", s.admin(s.handleResetUserPassword))
+
+	// Upstream LLM & Tap Governance (Phase G)
+	mux.HandleFunc("GET /v1/admin/upstream", s.admin(s.handleGetUpstream))
+	mux.HandleFunc("PUT /v1/admin/upstream", s.admin(s.handlePutUpstream))
+	mux.HandleFunc("POST /v1/admin/upstream/test", s.admin(s.handleTestUpstream))
+	mux.HandleFunc("GET /v1/internal/upstream", s.admin(s.handleGetInternalUpstream))
+	mux.HandleFunc("GET /v1/tap/turns", s.admin(s.handleGetTapTurns))
+	mux.HandleFunc("POST /v1/admin/agents/{keyId}/capture", s.admin(s.handleToggleAgentCapture))
 
 	mux.HandleFunc("POST /v1/decide", s.decide(""))
 	mux.HandleFunc("POST /v1/decide/llm", s.decide("llm"))

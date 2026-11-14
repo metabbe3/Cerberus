@@ -74,12 +74,39 @@ export const AgentSchema = z
     risk_tier: z.string().optional(),
     log_level: z.string().optional(),
     prod_access: z.boolean().optional(),
+    capture: z.boolean().optional(),
+    hold_and_verify: z.boolean().optional(),
     masking: z.array(MaskingRuleSchema).optional(),
     rate_limit: RateLimitSchema.optional(),
   })
   .loose();
 
 export type Agent = z.infer<typeof AgentSchema>;
+
+export const UpstreamConfigSchema = z
+  .object({
+    endpoint: z.string(),
+    key_hint: z.string(),
+    updated_by: z.string().optional(),
+    updated_at: z.string().optional(),
+  })
+  .loose();
+
+export type UpstreamConfig = z.infer<typeof UpstreamConfigSchema>;
+
+export const TurnRowSchema = z
+  .object({
+    ts: z.string(),
+    key_id: z.string(),
+    model: z.string(),
+    kind: z.string(),
+    payload: z.unknown(),
+    latency_ms: z.number().optional(),
+    status: z.number().optional(),
+  })
+  .loose();
+
+export type TurnRow = z.infer<typeof TurnRowSchema>;
 
 export const TeamSchema = z
   .object({

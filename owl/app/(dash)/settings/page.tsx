@@ -26,6 +26,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { PageHeader } from "@/components/page-header";
+import { UpstreamCard } from "@/components/settings/upstream-card";
 import { useData, usePutData } from "@/lib/queries";
 
 type FlagKey = "teams" | "keys";
@@ -175,6 +176,9 @@ export default function SettingsPage() {
           </div>
         </CardHeader>
       </Card>
+
+      <UpstreamCard />
+      <p className="text-xs text-muted-foreground">Upstream LLM disimpan terenkripsi (AES-256-GCM) di engine dan tidak pernah dikirim balik ke browser.</p>
 
       {/* 9D Save flags triggers confirmation dialog */}
       <Button onClick={() => setSaveConfirmOpen(true)} disabled={put.isPending}>

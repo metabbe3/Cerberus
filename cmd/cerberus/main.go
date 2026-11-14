@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"github.com/metabbe3/cerberus/internal/policy"
 	"github.com/metabbe3/cerberus/internal/server"
 	pgstore "github.com/metabbe3/cerberus/internal/store"
+	"github.com/metabbe3/cerberus/internal/upstream"
 	"github.com/metabbe3/cerberus/internal/util"
 )
 
@@ -141,6 +143,26 @@ func run() error {
 	}
 	defer func() { _ = authStore.Close() }()
 
+	masterKey, err := upstream.ResolveMasterKey()
+	if err != nil {
+		return fmt.Errorf("cerberus: resolve upstream master key: %w", err)
+	}
+
+	upstreamDBPath := filepath.Join(filepath.Dir(cfg.AuditDB), "upstream.db")
+	if cfg.AuditDB == ":memory:" {
+		upstreamDBPath = ":memory:"
+	}
+	upstreamDB, err := sql.Open("sqlite", upstreamDBPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	if err != nil {
+		return fmt.Errorf("cerberus: open upstream db %s: %w", upstreamDBPath, err)
+	}
+	defer func() { _ = upstreamDB.Close() }()
+
+	upstreamStore, err := upstream.NewStore(upstreamDB, masterKey)
+	if err != nil {
+		return fmt.Errorf("cerberus: init upstream store: %w", err)
+	}
+
 	eng, err := engine.New(store, auditLog, engine.Options{
 		CacheSize:   cfg.CacheSize,
 		EvalTimeout: cfg.EvalTimeout,
@@ -158,6 +180,7 @@ func run() error {
 		Store:      store,
 		Audit:      auditLog,
 		Auth:       authStore,
+		Upstream:   upstreamStore,
 		PGMirror:   pgStore,
 		AdminToken: cfg.AdminToken,
 		Version:    version,

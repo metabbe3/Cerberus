@@ -153,6 +153,14 @@ func (s *Server) decide(stage string) http.HandlerFunc {
 		var teamID string
 		if s.deps.Store != nil && s.deps.Store.Current() != nil {
 			teamID = extractTeamID(s.deps.Store.Current().Data, in.KeyID)
+			// Downstream privacy control: flag per-agent capture: false (default true)
+			if agents, ok := s.deps.Store.Current().Data["agents"].(map[string]any); ok {
+				if ag, ok := agents[in.KeyID].(map[string]any); ok {
+					if capVal, ok := ag["capture"].(bool); ok && !capVal {
+						w.Header().Set("X-Cerberus-Capture", "false")
+					}
+				}
+			}
 		}
 		if teamID != "" {
 			w.Header().Set("X-Cerberus-Team", teamID)

@@ -19,12 +19,14 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -180,6 +182,7 @@ type decideResp struct {
 	RuleID     string `json:"rule_id"`
 	Reason     string `json:"reason"`
 	TeamID     string `json:"team_id,omitempty"`
+	Capture    bool   `json:"-"`
 	StatusCode int    `json:"-"`
 	RetryAfter string `json:"-"`
 }
@@ -188,7 +191,7 @@ type decideResp struct {
 // strict=true: engine unreachable => NOT allowed (fail-closed).
 func askEngine(engineURL, token, keyID string, body []byte, strict bool) (decideResp, bool) {
 	if engineURL == "" {
-		return decideResp{Decision: "allow", StatusCode: http.StatusOK}, true
+		return decideResp{Decision: "allow", StatusCode: http.StatusOK, Capture: true}, true
 	}
 	prompt, msgs := extractConversationAndPrompt(body)
 	payloadMap := map[string]any{
@@ -217,12 +220,13 @@ func askEngine(engineURL, token, keyID string, body []byte, strict bool) (decide
 		}
 		// Engine unreachable: fail-open for visibility mode, but log loudly.
 		log.Printf("[tap] engine decide unreachable (allowing): %v", err)
-		return decideResp{Decision: "allow", RuleID: "tap.engine_unreachable", StatusCode: http.StatusOK}, true
+		return decideResp{Decision: "allow", RuleID: "tap.engine_unreachable", StatusCode: http.StatusOK, Capture: true}, true
 	}
 	defer func() { _ = resp.Body.Close() }()
 	var dr decideResp
 	dr.StatusCode = resp.StatusCode
 	dr.RetryAfter = resp.Header.Get("Retry-After")
+	dr.Capture = resp.Header.Get("X-Cerberus-Capture") != "false"
 	if err := json.NewDecoder(resp.Body).Decode(&dr); err != nil || dr.Decision == "" {
 		if resp.StatusCode == http.StatusTooManyRequests {
 			return decideResp{Decision: "deny", RuleID: "ops.tenant_quota_exceeded", StatusCode: 429, RetryAfter: resp.Header.Get("Retry-After")}, false
@@ -231,10 +235,11 @@ func askEngine(engineURL, token, keyID string, body []byte, strict bool) (decide
 			return decideResp{Decision: "deny", RuleID: "tap.engine_bad_response_strict", StatusCode: resp.StatusCode}, false
 		}
 		log.Printf("[tap] engine decide decode error (allowing)")
-		return decideResp{Decision: "allow", RuleID: "tap.engine_bad_response", StatusCode: resp.StatusCode}, true
+		return decideResp{Decision: "allow", RuleID: "tap.engine_bad_response", StatusCode: resp.StatusCode, Capture: true}, true
 	}
 	dr.StatusCode = resp.StatusCode
 	dr.RetryAfter = resp.Header.Get("Retry-After")
+	dr.Capture = resp.Header.Get("X-Cerberus-Capture") != "false"
 	if dr.TeamID == "" {
 		dr.TeamID = resp.Header.Get("X-Cerberus-Team")
 	}
@@ -386,8 +391,14 @@ func contentText(raw json.RawMessage) string {
 	return ""
 }
 
+type upstreamTarget struct {
+	endpoint string
+	apiKey   string
+}
+
 type server struct {
-	upstream  string
+	target    atomic.Pointer[upstreamTarget]
+	fallback  upstreamTarget
 	engineURL string
 	engineTok string
 	strict    bool
@@ -395,6 +406,49 @@ type server struct {
 	client    *http.Client
 	st        *store
 	kills     *killRegistry
+}
+
+func fetchUpstream(engineURL, token string) (*upstreamTarget, error) {
+	if engineURL == "" {
+		return nil, errors.New("engine URL not configured")
+	}
+	u := strings.TrimSuffix(engineURL, "/") + "/v1/internal/upstream"
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+	var res struct {
+		Endpoint string `json:"endpoint"`
+		APIKey   string `json:"api_key"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, err
+	}
+	ep := strings.TrimSpace(res.Endpoint)
+	ep = strings.TrimRight(ep, "/")
+	if ep == "" {
+		return nil, nil // no active DB config
+	}
+	parsed, err := url.Parse(ep)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return nil, fmt.Errorf("invalid endpoint URL: %s", ep)
+	}
+	return &upstreamTarget{
+		endpoint: ep,
+		apiKey:   strings.TrimSpace(res.APIKey),
+	}, nil
 }
 
 func (s *server) handleTap(w http.ResponseWriter, r *http.Request) {
@@ -556,19 +610,35 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Capture request (auth headers never persisted — we only store parsed fields).
 	// Oversized bodies: store prefix + tail + hash, and NEVER forward silently past
 	// inspection — the engine already saw the full body above.
-	truncated := len(raw) > maxBody
-	capture := raw
-	if truncated {
-		half := maxBody / 2
-		capture = append(append([]byte{}, raw[:half]...), raw[len(raw)-half:]...)
+	captureEnabled := verdict.Capture
+	if !captureEnabled {
+		s.st.save(turnRow{
+			KeyID:   keyID,
+			Model:   modelOf(raw),
+			Kind:    "request",
+			Payload: mustJSON(map[string]any{"_privacy_mode": true, "_note": "[no-capture: privacy mode enabled]"}),
+		}, 0, 0)
+	} else {
+		truncated := len(raw) > maxBody
+		capture := raw
+		if truncated {
+			half := maxBody / 2
+			capture = append(append([]byte{}, raw[:half]...), raw[len(raw)-half:]...)
+		}
+		s.st.save(turnRow{KeyID: keyID, Model: modelOf(raw), Kind: "request", Payload: sanitizedBody(capture, truncated)}, 0, 0)
 	}
-	s.st.save(turnRow{KeyID: keyID, Model: modelOf(raw), Kind: "request", Payload: sanitizedBody(capture, truncated)}, 0, 0)
 
-	// Forward upstream — the FULL body, byte-identical to what was inspected.
-	fwd, _ := http.NewRequestWithContext(r.Context(), r.Method, s.upstream+r.URL.Path, bytes.NewReader(raw)) //nolint:gosec // G704 upstream set by operator env
+	// Forward upstream — atomically loaded active target.
+	curTarget := s.target.Load()
+	targetURL := curTarget.endpoint + r.URL.Path
+	fwd, _ := http.NewRequestWithContext(r.Context(), r.Method, targetURL, bytes.NewReader(raw)) //nolint:gosec
 	fwd.Header = r.Header.Clone()
 	fwd.Header.Del("X-Tap-Key")
-	resp, err := s.client.Do(fwd) //nolint:gosec // G704 operator-configured upstream
+	if curTarget.apiKey != "" {
+		fwd.Header.Set("Authorization", "Bearer "+curTarget.apiKey)
+		fwd.Header.Set("x-api-key", curTarget.apiKey)
+	}
+	resp, err := s.client.Do(fwd)
 	if err != nil {
 		http.Error(w, "upstream: "+err.Error(), http.StatusBadGateway)
 		return
@@ -577,7 +647,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	isSSE := strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")
 	if isSSE {
-		s.proxySSE(w, resp, keyID, teamID, modelOf(raw), start)
+		s.proxySSE(w, resp, keyID, teamID, modelOf(raw), start, captureEnabled)
 		return
 	}
 
@@ -683,11 +753,20 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(respBody)
 
-	s.st.save(turnRow{KeyID: keyID, Model: modelOf(raw), Kind: "response", Payload: respBody}, lat, resp.StatusCode)
+	if !captureEnabled {
+		s.st.save(turnRow{
+			KeyID:   keyID,
+			Model:   modelOf(raw),
+			Kind:    "response",
+			Payload: mustJSON(map[string]any{"_privacy_mode": true, "_note": "[no-capture: privacy mode enabled]"}),
+		}, lat, resp.StatusCode)
+	} else {
+		s.st.save(turnRow{KeyID: keyID, Model: modelOf(raw), Kind: "response", Payload: respBody}, lat, resp.StatusCode)
+	}
 }
 
 // proxySSE tees the stream to the client while reassembling thinking/text/tool_use.
-func (s *server) proxySSE(w http.ResponseWriter, resp *http.Response, keyID, teamID, model string, start time.Time) {
+func (s *server) proxySSE(w http.ResponseWriter, resp *http.Response, keyID, teamID, model string, start time.Time, captureEnabled bool) {
 	flusher, _ := w.(http.Flusher)
 	// kill-switch hook: registering lets /tap/kill sever this stream mid-flight.
 	var killID int64
@@ -855,7 +934,11 @@ func (s *server) proxySSE(w http.ResponseWriter, resp *http.Response, keyID, tea
 		assembled["tool_use"] = map[string]any{"name": toolName, "input_raw": finalAssembled}
 	}
 	if len(assembled) > 0 {
-		s.st.save(turnRow{KeyID: keyID, Model: model, Kind: "sse_assembled", Payload: mustJSON(assembled)}, lat, resp.StatusCode)
+		if !captureEnabled {
+			s.st.save(turnRow{KeyID: keyID, Model: model, Kind: "sse_assembled", Payload: mustJSON(map[string]any{"_privacy_mode": true, "_note": "[no-capture: privacy mode enabled]"})}, lat, resp.StatusCode)
+		} else {
+			s.st.save(turnRow{KeyID: keyID, Model: model, Kind: "sse_assembled", Payload: mustJSON(assembled)}, lat, resp.StatusCode)
+		}
 	}
 }
 
@@ -1175,8 +1258,29 @@ func main() {
 	if adminTok == "" {
 		adminTok = os.Getenv("TAP_ADMIN_TOKEN")
 	}
+
+	// Precedence: DB > env TAP_UPSTREAM_* > default z.ai
+	fallbackURL := os.Getenv("TAP_UPSTREAM_URL")
+	if fallbackURL == "" {
+		fallbackURL = os.Getenv("TAP_UPSTREAM_ENDPOINT")
+	}
+	if fallbackURL == "" {
+		fallbackURL = os.Getenv("CERBERUS_TAP_UPSTREAM")
+	}
+	if fallbackURL == "" {
+		fallbackURL = *upstream
+	}
+	fallbackKey := os.Getenv("TAP_UPSTREAM_KEY")
+	if fallbackKey == "" {
+		fallbackKey = os.Getenv("TAP_UPSTREAM_API_KEY")
+	}
+	fallback := upstreamTarget{
+		endpoint: strings.TrimRight(fallbackURL, "/"),
+		apiKey:   fallbackKey,
+	}
+
 	srv := &server{
-		upstream:  strings.TrimSuffix(*upstream, "/"),
+		fallback:  fallback,
 		engineURL: *engineURL,
 		engineTok: *engineTok,
 		strict:    *strict,
@@ -1185,10 +1289,49 @@ func main() {
 		client:    &http.Client{Timeout: 300 * time.Second},
 		st:        st,
 	}
+	srv.target.Store(&fallback)
+
+	// Hot-reload: fetch upstream target at startup and poll every 30s
+	if *engineURL != "" {
+		dbTarget, err := fetchUpstream(*engineURL, *engineTok)
+		if err == nil && dbTarget != nil && dbTarget.endpoint != "" {
+			srv.target.Store(dbTarget)
+			log.Printf("[tap] upstream initialized from engine DB: %s", dbTarget.endpoint)
+		} else {
+			log.Printf("[tap] upstream initialized from fallback: %s", fallback.endpoint)
+		}
+
+		go func() {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				target, err := fetchUpstream(srv.engineURL, srv.engineTok)
+				if err != nil {
+					// Network blip or invalid endpoint: retain current target
+					continue
+				}
+				cur := srv.target.Load()
+				if target == nil || target.endpoint == "" {
+					if cur.endpoint != srv.fallback.endpoint {
+						srv.target.Store(&srv.fallback)
+						log.Printf("[tap] upstream reverted to fallback: %s", srv.fallback.endpoint)
+					}
+					continue
+				}
+				if cur.endpoint != target.endpoint || cur.apiKey != target.apiKey {
+					srv.target.Store(target)
+					log.Printf("[tap] upstream swapped atomically: %s -> %s", cur.endpoint, target.endpoint)
+				}
+			}
+		}()
+	} else {
+		log.Printf("[tap] upstream initialized from fallback: %s", fallback.endpoint)
+	}
 
 	httpSrv := &http.Server{Addr: *listen, Handler: srv, ReadHeaderTimeout: 10 * time.Second} //nolint:gosec // G112
 	go func() {
-		log.Printf("[tap] listening on %s -> %s (engine: %s)", *listen, *upstream, orDefault(*engineURL, "off"))
+		cur := srv.target.Load()
+		log.Printf("[tap] listening on %s -> %s (engine: %s)", *listen, cur.endpoint, orDefault(*engineURL, "off"))
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("listen: %v", err)
 		}
