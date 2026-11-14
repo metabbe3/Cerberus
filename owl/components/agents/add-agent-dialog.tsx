@@ -69,6 +69,14 @@ function toSlug(text: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+
+// Parse input angka lokal Indonesia: "1.000" → 1000, "1,5" → 1.5, kosong → NaN.
+function parseLocalNumber(raw: string): number {
+  const t = raw.trim().replace(/\./g, "").replace(",", ".");
+  const n = Number(t);
+  return t === "" || isNaN(n) ? NaN : n;
+}
+
 export function AddAgentDialog({ open, onOpenChange, teams, initialKeyId }: AddAgentDialogProps) {
   const saveAgent = useSaveAgent();
 
@@ -213,9 +221,11 @@ export function AddAgentDialog({ open, onOpenChange, teams, initialKeyId }: AddA
     if (allowedToolCalls.length > 0) payload.allowed_tool_calls = allowedToolCalls;
     if (restrictedToolCalls.length > 0) payload.restricted_tool_calls = restrictedToolCalls;
     if (allowedModels.length > 0) payload.allowed_models = allowedModels;
-    if (budgetLimit.trim() && !isNaN(Number(budgetLimit))) payload.budget_limit = Number(budgetLimit);
-    if (requestsPerMinute.trim() && !isNaN(Number(requestsPerMinute))) {
-      payload.rate_limit = { requests_per_minute: Number(requestsPerMinute) };
+    const budgetNum = parseLocalNumber(budgetLimit);
+    if (!isNaN(budgetNum)) payload.budget_limit = budgetNum;
+    const rpmNum = parseLocalNumber(requestsPerMinute);
+    if (!isNaN(rpmNum)) {
+      payload.rate_limit = { requests_per_minute: rpmNum };
     }
     if (prodAccess !== undefined) payload.prod_access = prodAccess;
 
@@ -297,8 +307,9 @@ export function AddAgentDialog({ open, onOpenChange, teams, initialKeyId }: AddA
         newAgent.allowed_models = allowedModels;
       }
 
-      if (budgetLimit.trim() && !isNaN(Number(budgetLimit))) {
-        newAgent.budget_limit = Number(budgetLimit);
+      const budgetNum2 = parseLocalNumber(budgetLimit);
+      if (!isNaN(budgetNum2)) {
+        newAgent.budget_limit = budgetNum2;
       }
 
       if (requestsPerMinute.trim() && !isNaN(Number(requestsPerMinute))) {

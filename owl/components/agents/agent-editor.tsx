@@ -3,7 +3,7 @@
 import { Check, Copy, Flame, History, Plus, Save, ShieldAlert, Terminal, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertCircle } from "lucide-react";
@@ -120,6 +120,20 @@ export function AgentEditor({
 
   const set = (patch: Partial<Agent>) => setDraft((d) => ({ ...d, ...patch }));
   const list = (field: keyof Agent) => (draft[field] as string[] | undefined) ?? [];
+
+  // Guard perubahan belum disimpan: refresh/tutup tab → konfirmasi browser.
+  const dirty = useMemo(
+    () => JSON.stringify(draft) !== JSON.stringify(agent),
+    [draft, agent],
+  );
+  useEffect(() => {
+    if (!dirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [dirty]);
 
   const curlSnippet = useMemo(() => {
     return `curl -X POST $CERBERUS_URL/v1/decide/tool \\

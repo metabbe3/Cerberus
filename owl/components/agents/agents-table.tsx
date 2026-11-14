@@ -1,7 +1,15 @@
 "use client";
 
 import type { ColumnDef } from "@tanstack/react-table";
+import { useRouter } from "next/navigation";
+import { ExternalLink, MoreHorizontal, Pencil } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { KeyCell } from "@/components/key-cell";
 import { Timestamp } from "@/components/timestamp";
 import type { Agent } from "@/lib/schema";
@@ -140,6 +148,31 @@ function QuotaBurnCell({
   );
 }
 
+function RowActionsCell({ row }: { row: AgentRow }) {
+  const router = useRouter();
+  const stop = (e: React.MouseEvent) => e.stopPropagation();
+  return (
+    <div onClick={stop}>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          aria-label={`Aksi untuk ${row.name ?? row.keyId}`}
+          className="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <MoreHorizontal className="size-4" aria-hidden />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onClick={() => router.push(`/agents/${row.keyId}`)}>
+            <ExternalLink className="size-4" aria-hidden /> Lihat detail
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => router.push(`/agents/${row.keyId}/edit`)}>
+            <Pencil className="size-4" aria-hidden /> Edit kebijakan
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
 export const agentColumns: ColumnDef<AgentRow, unknown>[] = [
   {
     accessorKey: "name",
@@ -218,5 +251,11 @@ export const agentColumns: ColumnDef<AgentRow, unknown>[] = [
     id: "tools",
     header: "Aturan Tool",
     cell: ({ row }) => <ToolCountCell agent={row.original} />,
+  },
+  {
+    id: "actions",
+    header: "",
+    meta: { align: "right" },
+    cell: ({ row }) => <RowActionsCell row={row.original} />,
   },
 ];
