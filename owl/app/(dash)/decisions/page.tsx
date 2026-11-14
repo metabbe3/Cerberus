@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AlertCircle, Download, Radio, X } from "lucide-react";
 import { toast } from "sonner";
@@ -27,6 +27,37 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { mergeEvents, useAudit } from "@/lib/queries";
 import type { AuditEvent } from "@/lib/schema";
+
+
+// Input teks yang sinkron ke URL secara debounced (400 ms) — tidak refetch per keystroke.
+function DebouncedFilterInput({
+  placeholder,
+  value,
+  onCommit,
+  className,
+}: {
+  placeholder: string;
+  value: string;
+  onCommit: (v: string) => void;
+  className?: string;
+}) {
+  const [local, setLocal] = useState(value);
+  useEffect(() => setLocal(value), [value]);
+  useEffect(() => {
+    if (local === value) return;
+    const t = setTimeout(() => onCommit(local), 400);
+    return () => clearTimeout(t);
+  }, [local, value, onCommit]);
+  return (
+    <Input
+      className={className}
+      placeholder={placeholder}
+      value={local}
+      aria-label={placeholder}
+      onChange={(e) => setLocal(e.target.value)}
+    />
+  );
+}
 
 function DecisionsContent() {
   const router = useRouter();
@@ -190,19 +221,19 @@ function DecisionsContent() {
         </Select>
 
         {/* Key ID Filter */}
-        <Input
+        <DebouncedFilterInput
           className="w-48 h-8 text-xs font-mono"
           placeholder="Filter key_id…"
           value={keyId}
-          onChange={(e) => updateFilter("key_id", e.target.value)}
+          onCommit={(v) => updateFilter("key_id", v)}
         />
 
         {/* Rule ID Filter */}
-        <Input
+        <DebouncedFilterInput
           className="w-48 h-8 text-xs font-mono"
           placeholder="Filter rule_id…"
           value={ruleId}
-          onChange={(e) => updateFilter("rule_id", e.target.value)}
+          onCommit={(v) => updateFilter("rule_id", v)}
         />
 
         {hasActiveFilters && (

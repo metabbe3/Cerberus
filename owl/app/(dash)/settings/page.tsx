@@ -92,7 +92,11 @@ export default function SettingsPage() {
         <p className="font-medium text-sm">{title}</p>
         <p className="text-xs text-muted-foreground">{body}</p>
       </div>
-      <Switch checked={draft[key]} onCheckedChange={(v) => flip(key, v)} />
+      <Switch
+          aria-label={title}
+          checked={draft[key]}
+          onCheckedChange={(v) => flip(key, v)}
+        />
     </div>
   );
 
