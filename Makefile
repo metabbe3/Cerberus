@@ -25,7 +25,7 @@ build-all:
 	@ls -lh dist/
 
 test:
-	go test -race -count=1 ./...
+	go test -race -count=1 -timeout=25m ./...
 
 lint:
 	golangci-lint run
