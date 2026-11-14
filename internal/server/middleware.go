@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/metabbe3/cerberus/internal/auth"
 	"github.com/metabbe3/cerberus/internal/config"
 	"github.com/metabbe3/cerberus/internal/util"
 )
@@ -103,21 +105,95 @@ func isJSONContentType(h string) bool {
 // APIError represents a structured error response with code and message.
 type APIError = util.APIError
 
-// admin guards the admin routes with the bearer token, compared in constant
+type userCtxKey struct{}
+
+var userContextKey = userCtxKey{}
+
+// UserFromContext retrieves the authenticated user from the request context, if any.
+func UserFromContext(ctx context.Context) *auth.User {
+	u, _ := ctx.Value(userContextKey).(*auth.User)
+	return u
+}
+
+// isMutatingAdminRequest returns true if an admin route performs state mutations.
+func isMutatingAdminRequest(r *http.Request) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+		return false
+	}
+	path := r.URL.Path
+	if r.Method == http.MethodPost {
+		if path == "/v1/admin/policy/validate" ||
+			path == "/v1/admin/regex/test" ||
+			path == "/v1/admin/explain" ||
+			path == "/v1/admin/replay" ||
+			path == "/v1/policy/test-run" ||
+			path == "/v1/query" ||
+			path == "/v1/auth/logout" ||
+			path == "/v1/admin/upstream/test" {
+			return false
+		}
+	}
+	return true
+}
+
+// admin guards the admin routes with the bearer token or DB session token, compared in constant
 // time. An empty configured token rejects everything.
 func (s *Server) admin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if s.deps.AdminToken == "" || !ok ||
-			subtle.ConstantTimeCompare([]byte(tok), []byte(s.deps.AdminToken)) != 1 {
+		if !ok || tok == "" {
+			if cookie, err := r.Cookie("owl_session"); err == nil && cookie.Value != "" {
+				tok = cookie.Value
+				ok = true
+			}
+		}
+
+		if !ok || tok == "" {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
+
+		var authedUser *auth.User
+		isMasterAdmin := s.deps.AdminToken != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(s.deps.AdminToken)) == 1
+
+		if isMasterAdmin {
+			authedUser = &auth.User{
+				ID:       0,
+				Username: "admin",
+				Role:     auth.RoleAdmin,
+			}
+		} else if s.auth != nil {
+			u, err := s.auth.ValidateSession(r.Context(), tok)
+			if err != nil {
+				writeErr(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+			if u.Disabled {
+				writeErr(w, http.StatusUnauthorized, "pengguna dinonaktifkan")
+				return
+			}
+			authedUser = u
+		} else {
+			writeErr(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		// Role viewer = read-only:
+		// "server-side: engine tolak mutasi admin endpoint dgn 403 untuk role viewer — enforcement di engine, bukan cuma UI"
+		if authedUser.Role == auth.RoleViewer {
+			if isMutatingAdminRequest(r) {
+				writeErr(w, http.StatusForbidden, "akses ditolak: role viewer hanya memiliki izin baca")
+				return
+			}
+		}
+
 		if s.adminLimiter != nil && !s.adminLimiter.Allow() {
 			writeErr(w, http.StatusTooManyRequests, "rate limit exceeded")
 			return
 		}
-		next(w, r)
+
+		ctx := context.WithValue(r.Context(), userContextKey, authedUser)
+		next(w, r.WithContext(ctx))
 	}
 }
 

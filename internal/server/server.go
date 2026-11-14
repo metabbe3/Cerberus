@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/metabbe3/cerberus/internal/audit"
+	"github.com/metabbe3/cerberus/internal/auth"
 	"github.com/metabbe3/cerberus/internal/engine"
 	"github.com/metabbe3/cerberus/internal/policy"
 	"github.com/metabbe3/cerberus/internal/ratelimit"
@@ -25,6 +26,7 @@ type Deps struct {
 	Engine *engine.Engine
 	Store  *policy.Store
 	Audit  *audit.Logger
+	Auth   *auth.Store
 	// PGMirror, when non-nil, persists every successful data PUT to
 	// PostgreSQL (system of record) after the flat-file write.
 	PGMirror   *store.PG
@@ -39,6 +41,7 @@ type Deps struct {
 type Server struct {
 	deps Deps
 	log  *slog.Logger
+	auth *auth.Store
 
 	limiter      *ratelimit.Limiter
 	breakGlass   *breakGlassManager
@@ -95,9 +98,18 @@ func New(d Deps) *Server {
 	if lim == nil && d.Store != nil {
 		lim = ratelimit.NewLimiter(d.Store, d.Audit)
 	}
+	authStore := d.Auth
+	if authStore == nil {
+		var err error
+		authStore, err = auth.NewMemoryStore()
+		if err != nil {
+			slog.Default().Warn("auth: fallback memory store failed", "err", err)
+		}
+	}
 	s := &Server{
 		deps:         d,
 		log:          slog.Default(),
+		auth:         authStore,
 		limiter:      lim,
 		breakGlass:   newBreakGlassManager(),
 		adminLimiter: newRateLimiter(1000), // generous general admin limiter
@@ -112,6 +124,15 @@ func New(d Deps) *Server {
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("GET /metrics", promhttp.Handler().ServeHTTP)
 	mux.HandleFunc("GET /v1/metrics", promhttp.Handler().ServeHTTP)
+
+	// Auth & User Management (Phase E)
+	mux.HandleFunc("POST /v1/auth/login", s.handleAuthLogin)
+	mux.HandleFunc("POST /v1/auth/logout", s.handleAuthLogout)
+	mux.HandleFunc("GET /v1/auth/me", s.handleAuthMe)
+	mux.HandleFunc("GET /v1/admin/users", s.admin(s.handleListUsers))
+	mux.HandleFunc("POST /v1/admin/users", s.admin(s.handleCreateUser))
+	mux.HandleFunc("POST /v1/admin/users/{id}/disable", s.admin(s.handleSetUserDisabled))
+	mux.HandleFunc("POST /v1/admin/users/{id}/reset-password", s.admin(s.handleResetUserPassword))
 
 	mux.HandleFunc("POST /v1/decide", s.decide(""))
 	mux.HandleFunc("POST /v1/decide/llm", s.decide("llm"))

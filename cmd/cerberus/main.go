@@ -12,11 +12,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/metabbe3/cerberus/internal/audit"
+	"github.com/metabbe3/cerberus/internal/auth"
 	"github.com/metabbe3/cerberus/internal/config"
 	"github.com/metabbe3/cerberus/internal/engine"
 	"github.com/metabbe3/cerberus/internal/masking"
@@ -124,6 +126,21 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("cerberus: open audit db %s: %w", cfg.AuditDB, err)
 	}
+
+	authDB := os.Getenv("CERBERUS_AUTH_DB")
+	if authDB == "" {
+		if cfg.AuditDB == ":memory:" {
+			authDB = ":memory:"
+		} else {
+			authDB = filepath.Join(filepath.Dir(cfg.AuditDB), "auth.db")
+		}
+	}
+	authStore, err := auth.Open(authDB)
+	if err != nil {
+		return fmt.Errorf("cerberus: open auth db %s: %w", authDB, err)
+	}
+	defer func() { _ = authStore.Close() }()
+
 	eng, err := engine.New(store, auditLog, engine.Options{
 		CacheSize:   cfg.CacheSize,
 		EvalTimeout: cfg.EvalTimeout,
@@ -140,6 +157,7 @@ func run() error {
 		Engine:     eng,
 		Store:      store,
 		Audit:      auditLog,
+		Auth:       authStore,
 		PGMirror:   pgStore,
 		AdminToken: cfg.AdminToken,
 		Version:    version,

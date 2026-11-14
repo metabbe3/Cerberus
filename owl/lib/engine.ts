@@ -1,6 +1,7 @@
 import "server-only";
 import { NextResponse } from "next/server";
 import { ZodError, z } from "zod";
+import { SESSION_COOKIE, extractSessionToken } from "./session";
 import {
   AuditEventSchema,
   type AuditEvent,
@@ -48,15 +49,32 @@ function engineEnv(): { url: string; token: string } {
   return { url: process.env.CERBERUS_URL ?? "http://localhost:8089", token };
 }
 
+async function getActiveAuthToken(defaultToken: string): Promise<string> {
+  try {
+    const { cookies } = await import("next/headers");
+    const cookieStore = await cookies();
+    const cookieVal = cookieStore.get(SESSION_COOKIE)?.value;
+    if (cookieVal) {
+      const extracted = extractSessionToken(cookieVal);
+      if (extracted) return extracted;
+      return cookieVal;
+    }
+  } catch {
+    // Outside request context (e.g. static site generation or build time)
+  }
+  return defaultToken;
+}
+
 async function engineFetch(path: string, init?: RequestInit): Promise<Response> {
-  const { url, token } = engineEnv();
+  const { url, token: adminToken } = engineEnv();
+  const bearerToken = await getActiveAuthToken(adminToken);
   let res: Response;
   try {
     res = await fetch(`${url}${path}`, {
       ...init,
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${bearerToken}`,
         ...init?.headers,
       },
       cache: "no-store",
@@ -360,6 +378,57 @@ export async function runPolicyTests(): Promise<TestRunResponse> {
     method: "POST",
   });
   return (await res.json()) as TestRunResponse;
+}
+
+export interface UserItem {
+  id: number;
+  username: string;
+  role: "admin" | "viewer";
+  disabled: boolean;
+  created_at: string;
+  last_login_at?: string;
+}
+
+export async function getCurrentUser(): Promise<UserItem | null> {
+  try {
+    const res = await engineFetch("/v1/auth/me");
+    const body = (await res.json()) as { user?: UserItem };
+    return body.user ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getUsers(): Promise<UserItem[]> {
+  const res = await engineFetch("/v1/admin/users");
+  return (await res.json()) as UserItem[];
+}
+
+export async function createUser(data: {
+  username: string;
+  role: string;
+  password: string;
+}): Promise<UserItem> {
+  const res = await engineFetch("/v1/admin/users", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+  const body = (await res.json()) as { user: UserItem };
+  return body.user;
+}
+
+export async function setUserDisabled(id: number, disabled: boolean): Promise<void> {
+  await engineFetch(`/v1/admin/users/${id}/disable`, {
+    method: "POST",
+    body: JSON.stringify({ disabled }),
+  });
+}
+
+export async function resetUserPassword(id: number, password: string): Promise<void> {
+  await engineFetch(`/v1/admin/users/${id}/reset-password`, {
+    method: "POST",
+    body: JSON.stringify({ password }),
+  });
 }
 
 // One error mapper for every /api route: EngineError carries its status and

@@ -19,6 +19,7 @@ import { safeNext } from "@/lib/session";
 
 function LoginForm() {
   const params = useSearchParams();
+  const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -30,7 +31,7 @@ function LoginForm() {
     const res = await fetch("/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ username, password }),
     }).catch(() => null);
     if (res?.ok) {
       // Full navigation so middleware sees the fresh cookie.
@@ -38,7 +39,7 @@ function LoginForm() {
       return;
     }
     const body = (await res?.json().catch(() => null)) as { error?: string } | null;
-    setError(body?.error ?? "Owl is unreachable");
+    setError(body?.error ?? "Gagal terhubung ke engine Cerberus");
     setPassword("");
     setPending(false);
   };
@@ -52,12 +53,23 @@ function LoginForm() {
         </Alert>
       ) : null}
       <div className="space-y-2">
-        <Label htmlFor="password">Admin password</Label>
+        <Label htmlFor="username">Nama pengguna (Username)</Label>
+        <Input
+          id="username"
+          type="text"
+          autoComplete="username"
+          required
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+        />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="password">Kata sandi</Label>
         <Input
           id="password"
+          aria-label="Admin password"
           type="password"
           autoComplete="current-password"
-          autoFocus
           required
           value={password}
           onChange={(e) => setPassword(e.target.value)}
@@ -65,7 +77,7 @@ function LoginForm() {
       </div>
       <Button type="submit" className="w-full" size="lg" disabled={pending || !password}>
         {pending ? <Loader2 className="animate-spin" /> : <LogIn />}
-        Sign in
+        Masuk
       </Button>
     </form>
   );
